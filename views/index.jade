@@ -3,3 +3,8 @@ extends layout
 block content
     h1= title
     p Hi #{username}, Welcome to #{title}
+    ul
+        li
+            a(href ='/todo/init') insert random to-do
+        li
+            a(href ='/todo/list') list todos

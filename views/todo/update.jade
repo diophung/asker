@@ -1,0 +1,8 @@
+extends ../layout
+block content
+    h1 Update
+    form(id='frmUpdate', action='/todo/update',method='POST')
+        input(type='hidden', name='id', value='#{item.id}')
+        input(type='text', name='name', value='#{item.name}')
+        input(type='text', name='note', value='#{item.note}')
+        button#btnSubmit submit

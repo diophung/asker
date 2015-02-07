@@ -2,11 +2,15 @@
  * Created by Dio on 4/2/2015.
  */
 var mongoose = require( 'mongoose' );
-mongoose.connect( 'mongodb://localhost/asker' );
+var Schema = mongoose.Schema;
 
-var db = mongoose.connection;
-db.on('error', console.error.bind(console, 'connection error:'));
-db.once('open', function (callback) {
-	// yay!
-	console.log('db connection opened');
+var TodoSchema = new Schema({
+	user_id: String,
+	name: String,
+	completed: Boolean,
+	note: String,
+	updated_at: { type: Date, default: Date.now }
 });
+
+mongoose.model('Todo', TodoSchema);
+mongoose.connect( 'mongodb://localhost/asker' );

@@ -28,7 +28,7 @@ var indexRoutes = require('./routes/index');
 app.use('/', indexRoutes);
 
 var todosRoutes = require('./routes/todos');
-app.use('/todos', todosRoutes);
+app.use('/todo', todosRoutes);
 
 var userRoutes = require('./routes/users');
 app.use('/user', userRoutes);
@@ -63,5 +63,4 @@ app.use(function (err, req, res, next) {
 	});
 });
 //endregion
-
 module.exports = app;

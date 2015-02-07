@@ -1,0 +1,7 @@
+extends ../layout
+block content
+    h1 Add new
+        form(id="frmAdd", action="/todo/create", method="POST")
+            input(type="text", placeholder="Enter some note", name="name")
+            input(type="text", placeholder="Enter content", name="note")
+            button#btnSubmit submit
