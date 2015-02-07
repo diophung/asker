@@ -1,0 +1,7 @@
+extends layout
+block content
+    h1 = title
+
+    form#frmAddTodo(name="addTodo", method="post", action="/addToDo")
+        input#txtValue(type="text", placeholder="Enter to do", name="txtTodoValue")
+        button#btnSubmit(type="submit") Submit
