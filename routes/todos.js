@@ -7,20 +7,15 @@ var express = require('express');
 var router = express.Router();
 var mongoose = require('mongoose');
 var toDoSchema = mongoose.model('Todo');
-var ObjectId = mongoose.Types.ObjectId;
 //endregion
-router.get('/init', function (req, res, next) {
-	var uid = utils.uid(32);
-	var time = Date.now();
-	console.log(String.format('insert new todo - #id: {0} , time: {1}', uid, time));
+router.get('/init', function (req, res) {
 	new toDoSchema({
 		user_id:   uid,
-		name:      "auto notes " + uid,
+		name:      "auto notes " + new Date().toUTCString(),
 		completed: false,
-		note:      'Auto populated at' + time.toString(),
-		update_at: time
+		update_at: Date.now()
 	})
-		.save(function (err, todo, count) {
+		.save(function (err, todo) {
 			if (err) {
 				return next(err);
 			}
@@ -45,13 +40,26 @@ router.post('/create', function (req, res) {
 			res.redirect('/todo/list');
 		});
 });
-
 router.get('/list', function (req, res) {
-	var q = req.params.q ? req.params.q : /.*.*/;
+	toDoSchema
+		.find()
+		.limit(20)
+		.sort('update_at')
+		.exec(function (err, foundDocs) {
+			res.render('todo/list', {
+				title: String.format('listing 20 docs'),
+				count: foundDocs.length,
+				items: foundDocs
+			});
+		});
+});
+router.get('/list/:q', function (req, res) {
+	var q = req.params.q ? req.params.q : /.*/;
 
 	toDoSchema
-		.find({note: q})
+		.find({note: /q/i})
 		.limit(10)
+		.sort('update_at')
 		.exec(function (err, foundDocs) {
 			res.render('todo/list', {
 				title: String.format('Search result for {note} contains "{0}"', q),

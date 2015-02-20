@@ -6,9 +6,12 @@ block content
         a(href='/todo/create') add new
     h1 Title: #{title}
     h2 Total count: #{count}
-    ul
     if items != ''
-        each item in items
-            li Note: #{item.note}, Created: #{item.updated_at} &nbsp;
-                a(href='/todo/delete/#{item.id}') delete &nbsp;
-                a(href='/todo/update/#{item.id}') update
+        ul
+            each item in items
+                li Note: #{item.note} &nbsp;
+                    a(href='/todo/delete/#{item.id}') delete
+                    &nbsp;
+                    a(href='/todo/update/#{item.id}') update
+                    &nbsp;
+                    a(href='/') home
