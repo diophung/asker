@@ -1,2 +1,2 @@
 # asker
-A simple Nodejs + MongoDb + Express + Jade application
+Providing structured and verified solutions for every particular technology problem.
