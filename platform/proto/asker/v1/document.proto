@@ -1,0 +1,88 @@
+// Canonical Document model (spec §2.4). Every record flowing through Asker —
+// connector output, Kafka topics, index writers, blob GC — is one of these.
+syntax = "proto3";
+
+package asker.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/asker/asker/platform/proto/gen/go/asker/v1;askerv1";
+
+// DocType classifies the source record. Values are flat (no DOC_TYPE_ prefix
+// beyond the zero value) per the M0 build contract.
+enum DocType {
+  DOC_TYPE_UNSPECIFIED = 0; // unknown / not set
+  EMAIL = 1;                // mail message
+  CHAT_MESSAGE = 2;         // Slack/Teams/etc. message
+  FILE = 3;                 // file or document blob
+  CALENDAR_EVENT = 4;       // calendar event
+  WIKI_PAGE = 5;            // wiki/Confluence page
+  TICKET = 6;               // issue tracker ticket
+  IMAGE = 7;                // image asset
+  VIDEO = 8;                // video asset
+  AUDIO = 9;                // audio asset
+}
+
+// Document is the canonical, tenant-scoped representation of one source record.
+message Document {
+  string tenant_id = 1;                // REQUIRED everywhere; isolation key
+  string doc_id = 2;                   // stable: hash(connector_id + source_native_id)
+  string connector_id = 3;             // e.g. "gmail", "slack"
+  string source_native_id = 4;         // message id, file id, event id...
+  DocType type = 5;                    // source record classification
+  string title = 6;                    // display title / subject
+  string body_text = 7;                // extracted/normalized text
+  repeated Chunk chunks = 8;           // retrieval units derived from body_text
+  map<string, string> metadata = 9;    // sender, channel, path, labels...
+  repeated Participant participants = 10; // people involved (typed search facet)
+  Timestamps ts = 11;                  // created / modified / ingested
+  AclInfo acl = 12;                    // who may see it (shared sources)
+  BlobRef original = 13;               // pointer into the blob store
+  string version_etag = 14;            // for idempotent upserts
+  Tombstone tombstone = 15;            // deletions propagate as documents too
+}
+
+// Chunk is one retrieval unit cut from body_text.
+message Chunk {
+  string chunk_id = 1;      // stable within the document
+  string text = 2;          // chunk text
+  string embedding_ref = 3; // reference to the stored embedding
+  int64 char_start = 4;     // offset into body_text (inclusive)
+  int64 char_end = 5;       // offset into body_text (exclusive)
+}
+
+// Participant is a person attached to the document (sender, attendee, ...).
+message Participant {
+  string name = 1;   // display name
+  string email = 2;  // email address, if known
+  string handle = 3; // platform handle, e.g. Slack user id
+  string role = 4;   // e.g. "from", "to", "organizer"
+}
+
+// Timestamps tracks the document lifecycle.
+message Timestamps {
+  google.protobuf.Timestamp created = 1;  // created at the source
+  google.protobuf.Timestamp modified = 2; // last modified at the source
+  google.protobuf.Timestamp ingested = 3; // ingested by Asker
+}
+
+// AclInfo carries source-side visibility for shared sources (Drive, Confluence).
+message AclInfo {
+  repeated string allowed_principals = 1; // principals that may see the document
+  bool is_private = 2;                    // visible only to the owning tenant
+}
+
+// BlobRef points at the original bytes in the blob store.
+message BlobRef {
+  string bucket = 1;       // blob store bucket
+  string key = 2;          // object key
+  int64 size_bytes = 3;    // object size
+  string content_type = 4; // MIME type
+  string sha256 = 5;       // hex content digest
+}
+
+// Tombstone marks a document as deleted; index writers and blob GC honor it.
+message Tombstone {
+  bool deleted = 1;                            // true when the source record is gone
+  google.protobuf.Timestamp deleted_at = 2;    // when the deletion was observed
+}

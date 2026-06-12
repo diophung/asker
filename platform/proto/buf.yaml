@@ -1,0 +1,13 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # The M0 contract fixes DocType values as EMAIL, CHAT_MESSAGE, ... without
+    # the DOC_TYPE_ prefix; the zero value keeps the _UNSPECIFIED convention.
+    - ENUM_VALUE_PREFIX
+breaking:
+  use:
+    - FILE

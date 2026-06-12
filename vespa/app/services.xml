@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  Asker Vespa application, M0.
+  Single-node dev topology: one container cluster (query + document API on
+  container port 8080) and one streaming-mode content cluster.
+  No hosts.xml: with a single node, hostalias resolves to localhost.
+-->
+<services version="1.0">
+
+    <container id="default" version="1.0">
+        <search/>
+        <document-api/>
+        <nodes>
+            <!-- Small heap: dev stacks share a memory-constrained Docker VM. -->
+            <jvm options="-Xms256m -Xmx768m"/>
+            <node hostalias="node1"/>
+        </nodes>
+    </container>
+
+    <content id="asker" version="1.0">
+        <redundancy>1</redundancy>
+        <documents>
+            <!-- Streaming mode: per-tenant document groups (id ... g=<tenant_id>),
+                 queries are scoped with streaming.groupname. -->
+            <document type="doc" mode="streaming"/>
+        </documents>
+        <nodes>
+            <node hostalias="node1" distribution-key="0"/>
+        </nodes>
+    </content>
+
+</services>

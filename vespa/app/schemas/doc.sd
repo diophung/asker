@@ -1,0 +1,51 @@
+# Canonical searchable document for Asker, M0.
+#
+# The content cluster runs in STREAMING mode (see ../services.xml): documents are
+# stored in per-tenant groups and queries scan exactly one group. The indexing
+# statements below do not build inverted indexes or attribute structures in
+# streaming mode -- they select match modes (index => tokenized text matching,
+# attribute => word matching) and summary inclusion.
+schema doc {
+
+    document doc {
+
+        field doc_id type string {
+            indexing: summary | attribute
+        }
+
+        field connector_id type string {
+            indexing: summary | attribute
+        }
+
+        field type type string {
+            indexing: summary | attribute
+        }
+
+        field title type string {
+            indexing: summary | index
+        }
+
+        field body type string {
+            indexing: summary | index
+        }
+
+        # Unix epoch seconds.
+        field created_at type long {
+            indexing: summary | attribute
+        }
+    }
+
+    fieldset default {
+        fields: title, body
+    }
+
+    # Streaming-safe ranking for M0: nativeRank does not depend on index-derived
+    # corpus statistics. bm25 is deliberately NOT used here -- in streaming mode
+    # it requires extra significance/average-field-length configuration to be
+    # meaningful. Hybrid bm25 + vector ranking lands in M1.
+    rank-profile default {
+        first-phase {
+            expression: nativeRank(title, body)
+        }
+    }
+}

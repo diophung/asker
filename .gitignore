@@ -1,0 +1,10 @@
+.DS_Store
+/bin/
+coverage.out
+*.test
+*.out
+.env
+.env.local
+/web/node_modules/
+/web/dist/
+vespa/app.zip

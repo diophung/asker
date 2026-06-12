@@ -1,0 +1,201 @@
+# Asker dev stack (M0). Dev-only credentials throughout — never reuse in production.
+# Bring up with `make dev-up` (compose up --wait gates on the healthchecks below,
+# then vespa/deploy.sh pushes the Vespa application package).
+name: asker
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: services/gateway/Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      GATEWAY_ADDR: ":8080"
+      OIDC_ISSUER: "http://localhost:8081/realms/asker"
+      # Token `iss` is the host-visible URL (KC_HOSTNAME), but the gateway fetches
+      # JWKS over the compose network — hence explicit issuer + JWKS instead of discovery.
+      OIDC_JWKS_URL: "http://keycloak:8080/realms/asker/protocol/openid-connect/certs"
+      OIDC_AUDIENCE: "asker-web"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      # Distroless image (no shell): the binary self-probes /healthz.
+      test: ["CMD", "/gateway", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HOSTNAME: "http://localhost:8081"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: "admin" # dev-only
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "admin" # dev-only
+      # Dev-only: without a cgroup limit Keycloak sizes its heap as 70% of the
+      # whole Docker VM. Cap it for shared dev machines.
+      JAVA_OPTS_KC_HEAP: "-Xms64m -Xmx400m"
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./keycloak/realm-asker.json:/opt/keycloak/data/import/realm-asker.json:ro
+    healthcheck:
+      # Image has bash but no curl/wget; health lives on management port 9000.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q 'HTTP/1.1 200' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 90s
+
+  vespa:
+    image: vespaengine/vespa:8
+    environment:
+      # Dev-only: the image refuses to start with <4GB available; a single-node
+      # dev app runs fine smaller. Production sizing is an M4/M5 concern.
+      VESPA_IGNORE_NOT_ENOUGH_MEMORY: "true"
+      # Dev-only: shrink the config server heap (defaults to ~1.5G); the query
+      # container heap is capped in vespa/app/services.xml for the same reason.
+      VESPA_CONFIGSERVER_JVMARGS: "-Xms32m -Xmx256m"
+    ports:
+      - "127.0.0.1:8082:8080" # query + document API (alive only after app deploy via vespa/deploy.sh)
+      - "127.0.0.1:19071:19071" # config server
+    volumes:
+      - vespa-var:/opt/vespa/var
+      - vespa-logs:/opt/vespa/logs
+    healthcheck:
+      # Config-server health only: the query port comes alive after the application
+      # package is deployed, which vespa/deploy.sh does AFTER `compose up --wait`.
+      test: ["CMD", "curl", "-fsS", "http://localhost:19071/state/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  tei:
+    # TEI publishes CPU images for linux/amd64 only; on Apple Silicon this runs
+    # under Docker Desktop's Rosetta/QEMU emulation (works, but embeds slowly).
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:8083:80"
+    environment:
+      # Override for CI with a small model: TEI_MODEL_ID=sentence-transformers/all-MiniLM-L6-v2
+      MODEL_ID: ${TEI_MODEL_ID:-BAAI/bge-m3}
+    # Default CMD is just --json-output; keep it and bound tokenization workers
+    # (default = nproc = 18 here) plus warmup/runtime batch size — both spiked
+    # memory enough to get the container OOM-killed on constrained dev machines.
+    command:
+      [
+        "--json-output",
+        "--tokenization-workers",
+        "2",
+        "--max-batch-tokens",
+        "1024",
+        "--max-concurrent-requests",
+        "32",
+      ]
+    volumes:
+      - tei-cache:/data # HF model cache (HUGGINGFACE_HUB_CACHE=/data in the image)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      # First start downloads ~2.3GB for BAAI/bge-m3.
+      start_period: 20m
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "127.0.0.1:9000:9000" # S3 API
+      - "127.0.0.1:9001:9001" # web console
+    environment:
+      MINIO_ROOT_USER: "asker-minio" # dev-only
+      MINIO_ROOT_PASSWORD: "asker-minio-secret" # dev-only
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  postgres:
+    image: postgres:17
+    ports:
+      - "127.0.0.1:15432:5432" # host 5432 is taken on the dev machine
+    environment:
+      POSTGRES_USER: "asker" # dev-only
+      POSTGRES_PASSWORD: "asker" # dev-only
+      POSTGRES_DB: "asker"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asker -d asker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  redis:
+    image: redis:7
+    ports:
+      - "127.0.0.1:16379:6379" # host 6379 is taken on the dev machine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redpanda:
+    image: redpandadata/redpanda:v24.3.11
+    command:
+      - redpanda
+      - start
+      - --mode dev-container
+      - --smp 1
+      # Dev-only: Seastar otherwise sizes its upfront allocation from total VM
+      # memory and gets OOM-killed on shared dev machines.
+      - --memory 512M
+      - --reserve-memory 0M
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      # Schema registry stays on the compose network only (no host port published).
+      - --schema-registry-addr internal://0.0.0.0:8081
+    ports:
+      - "127.0.0.1:19092:19092" # Kafka API, external listener (advertised as localhost:19092)
+      - "127.0.0.1:9644:9644" # admin API
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres-data:
+  minio-data:
+  redpanda-data:
+  vespa-var:
+  vespa-logs:
+  tei-cache:
