@@ -7,7 +7,7 @@ passing tests before the next begins. Source of truth for scope:
 | Milestone | Name | Status |
 | :--- | :--- | :--- |
 | M0 | Foundations (skeleton that runs) | **Complete** (2026-06-12) |
-| M1 | Vertical slice | Not started |
+| M1 | Vertical slice | **In progress** |
 | M2 | Connector framework + breadth | Not started |
 | M3 | Media pipeline | Not started |
 | M4 | Production deployment | Not started |

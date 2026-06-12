@@ -27,24 +27,28 @@ proto: ## Regenerate Go code from protobuf definitions
 fmt: ## gofmt all non-generated Go files
 	@gofmt -w $$(git ls-files '*.go' | grep -v '/gen/' || true)
 
+# Go source roots. NEVER bare ./... — web/node_modules can contain vendored
+# Go files from npm packages that must not enter the build/test/lint walk.
+GO_PKGS := ./platform/... ./services/... ./connectors/... ./tools/...
+
 vet: ## go vet everything
-	go vet ./...
+	go vet $(GO_PKGS)
 
 build: ## Build all Go packages
-	go build ./...
+	go build $(GO_PKGS)
 
 lint: ## Run golangci-lint (run `make tools` first)
-	$(GOBIN)/golangci-lint run ./...
+	$(GOBIN)/golangci-lint run $(GO_PKGS)
 
 test: ## Run all tests with race detector and coverage
-	go test -race -covermode=atomic -coverprofile=coverage.out ./...
+	go test -race -covermode=atomic -coverprofile=coverage.out $(GO_PKGS)
 
 coverage-gate: test ## Enforce coverage floors (platform/tenancy 100%, platform/* >= 75%)
 	bash tools/ci/coverage_gate.sh coverage.out
 
 dev-up: ## Start the full dev stack and deploy the Vespa app
 	$(COMPOSE) up -d --build --wait --wait-timeout 1800
-	bash vespa/deploy.sh
+	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; bash vespa/deploy.sh
 
 dev-down: ## Stop the dev stack (volumes survive, incl. the TEI model cache)
 	$(COMPOSE) down
@@ -56,7 +60,7 @@ dev-logs: ## Tail dev stack logs
 	$(COMPOSE) logs -f --tail=100
 
 vespa-deploy: ## (Re)deploy the Vespa application package
-	bash vespa/deploy.sh
+	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; bash vespa/deploy.sh
 
 e2e-smoke: ## End-to-end smoke test against the running dev stack
 	bash tools/e2e/smoke.sh

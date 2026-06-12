@@ -39,6 +39,7 @@ linters:
     generated: lax
     paths:
       - platform/proto/gen
+      - web/
 
 formatters:
   enable:
@@ -46,3 +47,4 @@ formatters:
   exclusions:
     paths:
       - platform/proto/gen
+      - web/

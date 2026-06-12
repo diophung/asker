@@ -1,0 +1,68 @@
+// Internal query API: gateway -> query service.
+//
+// The tenant is NEVER a request field: it travels in gRPC metadata installed
+// by the platform/tenancy interceptors, which the query service requires on
+// every call. A request without a tenant context is rejected.
+syntax = "proto3";
+
+package asker.query.v1;
+
+import "asker/v1/document.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/asker/asker/platform/proto/gen/go/asker/query/v1;queryv1";
+
+// QueryService executes tenant-scoped searches against the index.
+service QueryService {
+  // Search runs a hybrid (keyword + vector) search over the calling tenant's
+  // documents, with graceful degradation to keyword-only under failure/load.
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+// SearchMode selects the retrieval strategy.
+enum SearchMode {
+  SEARCH_MODE_UNSPECIFIED = 0; // treated as HYBRID
+  HYBRID = 1; // keyword + vector blend (default)
+  KEYWORD = 2; // keyword only
+  VECTOR = 3; // vector only
+}
+
+message SearchRequest {
+  // Raw user query. Inline filters (from:alice, type:email, before:/after:)
+  // are extracted by query understanding before retrieval.
+  string query = 1;
+  // Optional structured filters; combined with extracted inline filters.
+  repeated asker.v1.DocType doc_types = 2;
+  google.protobuf.Timestamp from_date = 3;
+  google.protobuf.Timestamp to_date = 4;
+  // Participant filter (sender/attendee handle or email substring).
+  string participant = 5;
+  // Page size; default 20, max 100.
+  int32 limit = 6;
+  int32 offset = 7;
+  SearchMode mode = 8;
+}
+
+message SearchResponse {
+  repeated Hit hits = 1;
+  // Total matching documents (tenant-scoped).
+  int64 total = 2;
+  // Degradation applied: "" (none), "keyword-only" (vector path skipped).
+  string degraded = 3;
+  int64 took_ms = 4;
+  // True when served from the result cache.
+  bool cached = 5;
+}
+
+message Hit {
+  string doc_id = 1;
+  string connector_id = 2;
+  asker.v1.DocType type = 3;
+  string title = 4;
+  // Snippet with query-term highlights wrapped in <hi>...</hi>.
+  string snippet = 5;
+  double score = 6;
+  google.protobuf.Timestamp created = 7;
+  google.protobuf.Timestamp modified = 8;
+  map<string, string> metadata = 9;
+}

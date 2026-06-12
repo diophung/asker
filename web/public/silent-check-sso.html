@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Silent SSO check</title>
+  </head>
+  <body>
+    <script>
+      // keycloak-js loads this page in a hidden iframe during init({onLoad:
+      // "check-sso"}). It reports the authorization response back to the SPA
+      // without a full-page redirect.
+      parent.postMessage(location.href, location.origin);
+    </script>
+  </body>
+</html>

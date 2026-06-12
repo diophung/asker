@@ -1,10 +1,14 @@
-# Canonical searchable document for Asker, M0.
+# Canonical searchable document for Asker, M1.
 #
 # The content cluster runs in STREAMING mode (see ../services.xml): documents are
 # stored in per-tenant groups and queries scan exactly one group. The indexing
 # statements below do not build inverted indexes or attribute structures in
 # streaming mode -- they select match modes (index => tokenized text matching,
 # attribute => word matching) and summary inclusion.
+#
+# @EMBEDDING_DIM@ is a template token substituted by ../deploy.sh from the
+# EMBEDDING_DIM environment variable (default 1024 for bge-m3; local dev .env
+# uses 384). This file is NOT a deployable schema until that substitution runs.
 schema doc {
 
     document doc {
@@ -33,19 +37,147 @@ schema doc {
         field created_at type long {
             indexing: summary | attribute
         }
+
+        # ~512-token chunks, 64-token overlap, structure-aware (spec section 2.4).
+        # One string per chunk; the chunk's position in this array is the key of
+        # its vector in the `embedding` tensor's mapped dimension ("0", "1", ...).
+        field chunks type array<string> {
+            indexing: summary | index
+        }
+
+        # One @EMBEDDING_DIM@-dim vector per chunk, keyed by the chunk array index.
+        # - bfloat16 halves vector memory/disk vs float (spec section 2.7); cells
+        #   are widened to float during the distance calculation, so a
+        #   tensor<float> query tensor is the correct pairing.
+        # - attribute only, deliberately no summary: vectors are ranking inputs,
+        #   never response payload -- keeps summaries lean.
+        # - distance-metric angular = cosine distance. TEI serves bge-m3 vectors
+        #   L2-normalized, but angular stays correct even if normalization drifts
+        #   (prenormalized-angular would silently mis-rank); in a streaming exact
+        #   scan the extra norm computation is noise next to document-store IO.
+        # - Streaming mode never builds HNSW: nearestNeighbor over this field is
+        #   always an exact scan of the tenant's group, no index config needed.
+        field embedding type tensor<bfloat16>(chunk{},x[@EMBEDDING_DIM@]) {
+            indexing: attribute
+            attribute {
+                distance-metric: angular
+            }
+        }
+
+        # Participant display strings, e.g. "Alice Smith <alice@example.com>".
+        # `index`, not `attribute`: in streaming mode, attribute means exact
+        # whole-word matching on the untokenized value, while index gives
+        # tokenized text matching ("alice" hits "Alice Smith <alice@example.com>")
+        # AND query-time match annotations -- streaming supports
+        # {substring:true}/{prefix:true}/{suffix:true} on index fields, which is
+        # what the query service uses for participant= filtering.
+        field participants type array<string> {
+            indexing: summary | index
+        }
+
+        # Connector metadata (sender, channel, path, labels, ...) serialized as a
+        # JSON object. Opaque to Vespa -- the query service parses it to build the
+        # `metadata` map on result cards.
+        field metadata_json type string {
+            indexing: summary
+        }
+
+        # Unix epoch seconds.
+        field modified_at type long {
+            indexing: summary | attribute
+        }
+
+        # Source-provided etag for idempotent upserts; surfaced in summaries so
+        # freshness can be verified end-to-end.
+        field version_etag type string {
+            indexing: summary | attribute
+        }
+
+        # ACL principal strings for shared sources (Drive, Confluence, ...).
+        # attribute => exact word matching for filter terms; excluded from all
+        # summary classes.
+        field acl type array<string> {
+            indexing: attribute
+        }
     }
 
     fieldset default {
-        fields: title, body
+        fields: title, body, chunks
     }
 
-    # Streaming-safe ranking for M0: nativeRank does not depend on index-derived
-    # corpus statistics. bm25 is deliberately NOT used here -- in streaming mode
-    # it requires extra significance/average-field-length configuration to be
-    # meaningful. Hybrid bm25 + vector ranking lands in M1.
+    # M0-compatible default profile (used when no ranking= is given, e.g. by the
+    # M0 smoke test). nativeRank does not depend on index-derived corpus
+    # statistics, so it is meaningful in streaming mode. bm25 is deliberately NOT
+    # used -- in streaming mode it requires significance / average-field-length
+    # configuration to be meaningful.
     rank-profile default {
         first-phase {
             expression: nativeRank(title, body)
+        }
+    }
+
+    # mode=keyword: text-only ranking over everything the default fieldset
+    # searches. Streaming-safe for the same reasons as `default`.
+    rank-profile keyword {
+        first-phase {
+            expression: nativeRank(title, body, chunks)
+        }
+    }
+
+    # mode=hybrid: linear blend of keyword score and vector closeness.
+    # - query(q) is the TEI query embedding, passed as input.query(q)=[...] and
+    #   declared float: bfloat16 document cells widen to float for the distance
+    #   computation.
+    # - closeness(field, embedding) = 1/(1+distance) in [0,1]; for this mixed
+    #   tensor (multiple vectors per document) the CLOSEST chunk vector is used,
+    #   i.e. max closeness over the mapped `chunk` dimension. Documents matched
+    #   by keyword only (no embedding / outside nearestNeighbor targetHits) get
+    #   closeness 0 and rank on the keyword term alone.
+    # - Weight defaults are declared as input defaults (Vespa 8 `inputs` section;
+    #   this replaces the legacy rank-properties query() defaults) and can be
+    #   overridden per query: input.query(keywordWeight)=0.7 etc.
+    rank-profile hybrid {
+        inputs {
+            query(q) tensor<float>(x[@EMBEDDING_DIM@])
+            query(keywordWeight) double: 0.5
+            query(vectorWeight) double: 0.5
+        }
+        first-phase {
+            expression: query(keywordWeight) * nativeRank(title, body, chunks) + query(vectorWeight) * closeness(field, embedding)
+        }
+    }
+
+    # Summary class for the query service (&presentation.summary=search): lean
+    # result-card fields plus dynamic summaries of body and chunks -- extracted
+    # fragments around matching query terms, terms wrapped in <hi>...</hi>.
+    # `dynamic` is supported for string and array<string> index fields (for
+    # array<string>, an abstract is generated per element), and dynamic
+    # summaries work in streaming mode (they are not among the documented
+    # streaming-search limitations; teasers originated there).
+    # The dynamic fields MUST use distinct names + `source:`: reusing the field
+    # name (e.g. `summary body { dynamic }`) is rejected at deploy time --
+    # "a field with the same name can not have different transforms in
+    # different summary classes" (body/chunks are `full` in the default class).
+    # The embedding tensor and acl are intentionally absent from every summary
+    # class. Note: `body`/`chunks` raw values are NOT in this class -- the query
+    # service falls back to the default summary if it ever needs full text.
+    document-summary search {
+        summary doc_id {}
+        summary connector_id {}
+        summary type {}
+        summary title {}
+        summary created_at {}
+        summary modified_at {}
+        summary version_etag {}
+        summary participants {}
+        summary metadata_json {}
+        summary snippet {
+            source: body
+            dynamic
+        }
+        summary chunk_snippets {
+            source: chunks
+            dynamic
         }
     }
 }

@@ -78,7 +78,9 @@ jobs:
     timeout-minutes: 30
     env:
       # Small embedding model for CI speed; dev default stays BAAI/bge-m3.
+      # EMBEDDING_DIM must match the model (ADR-005): bge-small = 384.
       TEI_MODEL_ID: BAAI/bge-small-en-v1.5
+      EMBEDDING_DIM: "384"
     steps:
       - uses: actions/checkout@v4
       - name: Start the dev stack

@@ -3,9 +3,11 @@
 #
 # Flow:
 #   1. Wait for the config server health endpoint to report "up".
-#   2. Zip vespa/app (services.xml at archive root).
-#   3. POST the zip to /application/v2/tenant/default/prepareandactivate.
-#   4. Wait for the query/document-API container to report "up" (the container
+#   2. Stage a copy of vespa/app and substitute the @EMBEDDING_DIM@ template
+#      token (in schemas etc.) with ${EMBEDDING_DIM}.
+#   3. Zip the staged copy (services.xml at archive root).
+#   4. POST the zip to /application/v2/tenant/default/prepareandactivate.
+#   5. Wait for the query/document-API container to report "up" (the container
 #      port only comes alive after the first application activation).
 #
 # Idempotent: re-running with the same or a changed package is safe; Vespa
@@ -15,11 +17,21 @@
 #   VESPA_CFG_URL      config server base URL   (default http://localhost:19071)
 #   VESPA_QUERY_URL    query container base URL (default http://localhost:8082)
 #   WAIT_TIMEOUT_SECS  health-wait timeout per endpoint, seconds (default 180)
+#   EMBEDDING_DIM      embedding vector dimensionality substituted for
+#                      @EMBEDDING_DIM@ in the application package (default 1024,
+#                      bge-m3; local dev .env uses 384). MUST match the TEI
+#                      model's output dimension and the services' EMBEDDING_DIM.
 set -euo pipefail
 
 VESPA_CFG_URL="${VESPA_CFG_URL:-http://localhost:19071}"
 VESPA_QUERY_URL="${VESPA_QUERY_URL:-http://localhost:8082}"
 WAIT_TIMEOUT_SECS="${WAIT_TIMEOUT_SECS:-180}"
+EMBEDDING_DIM="${EMBEDDING_DIM:-1024}"
+
+if ! [[ "${EMBEDDING_DIM}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: EMBEDDING_DIM must be a positive integer, got '${EMBEDDING_DIM}'" >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${SCRIPT_DIR}/app"
@@ -66,10 +78,24 @@ wait_for_health() {
 
 wait_for_health "${VESPA_CFG_URL}/state/v1/health" "Vespa config server"
 
-echo "==> Zipping application package from ${APP_DIR}"
-# Zip from inside the app dir so services.xml sits at the archive root.
+# Stage the package and substitute the @EMBEDDING_DIM@ template token. The
+# committed package is deployed verbatim except for this substitution; vespa/app
+# itself is never modified.
+STAGE_DIR="${TMP_DIR}/app"
+echo "==> Staging application package from ${APP_DIR} (EMBEDDING_DIM=${EMBEDDING_DIM})"
+mkdir -p "${STAGE_DIR}"
+cp -R "${APP_DIR}/." "${STAGE_DIR}/"
+find "${STAGE_DIR}" -type f -print0 | while IFS= read -r -d '' file; do
+    if grep -q '@EMBEDDING_DIM@' "${file}"; then
+        sed "s/@EMBEDDING_DIM@/${EMBEDDING_DIM}/g" "${file}" > "${file}.sub" \
+            && mv "${file}.sub" "${file}"
+    fi
+done
+
+echo "==> Zipping staged application package"
+# Zip from inside the staged dir so services.xml sits at the archive root.
 # Exclude dotfiles (e.g. .DS_Store) at any depth.
-(cd "${APP_DIR}" && zip -q -r "${APP_ZIP}" . -x '.*' -x '*/.*')
+(cd "${STAGE_DIR}" && zip -q -r "${APP_ZIP}" . -x '.*' -x '*/.*')
 
 DEPLOY_URL="${VESPA_CFG_URL}/application/v2/tenant/default/prepareandactivate"
 echo "==> Deploying application package to ${DEPLOY_URL}"

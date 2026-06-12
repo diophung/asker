@@ -1,0 +1,155 @@
+// Internal control-plane API: connector-hub and gateway -> control-plane.
+//
+// Owns the durable metadata: tenants, connector instances, sync cursors, and
+// OAuth tokens (encrypted at rest via platform/crypto before storage). The
+// tenant is NEVER a request field: it travels in gRPC metadata installed by
+// the platform/tenancy interceptors; every RPC is scoped to that tenant.
+syntax = "proto3";
+
+package asker.controlplane.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1;controlplanev1";
+
+// ControlPlaneService is the tenant-scoped metadata store.
+service ControlPlaneService {
+  // EnsureTenant idempotently registers the calling tenant (first login).
+  rpc EnsureTenant(EnsureTenantRequest) returns (EnsureTenantResponse);
+
+  // Connector instances: a tenant's configured connection to one source.
+  rpc CreateConnectorInstance(CreateConnectorInstanceRequest) returns (CreateConnectorInstanceResponse);
+  rpc ListConnectorInstances(ListConnectorInstancesRequest) returns (ListConnectorInstancesResponse);
+  rpc GetConnectorInstance(GetConnectorInstanceRequest) returns (GetConnectorInstanceResponse);
+  rpc DeleteConnectorInstance(DeleteConnectorInstanceRequest) returns (DeleteConnectorInstanceResponse);
+
+  // Sync state: resumable cursors + health, one row per connector instance.
+  rpc GetSyncState(GetSyncStateRequest) returns (GetSyncStateResponse);
+  rpc SetSyncState(SetSyncStateRequest) returns (SetSyncStateResponse);
+
+  // Token vault: opaque credential blobs, encrypted before they hit Postgres.
+  rpc PutToken(PutTokenRequest) returns (PutTokenResponse);
+  rpc GetToken(GetTokenRequest) returns (GetTokenResponse);
+  rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
+}
+
+message Tenant {
+  string tenant_id = 1;
+  google.protobuf.Timestamp created = 2;
+}
+
+message EnsureTenantRequest {}
+
+message EnsureTenantResponse {
+  Tenant tenant = 1;
+}
+
+message ConnectorInstance {
+  // Server-assigned UUID.
+  string id = 1;
+  // Connector type, e.g. "gmail", "upload".
+  string connector_id = 2;
+  string display_name = 3;
+  // Connector-specific configuration (JSON, validated against the connector's
+  // config schema). Never contains credentials — those live in the token vault.
+  bytes config_json = 4;
+  ConnectorStatus status = 5;
+  google.protobuf.Timestamp created = 6;
+  google.protobuf.Timestamp updated = 7;
+}
+
+enum ConnectorStatus {
+  CONNECTOR_STATUS_UNSPECIFIED = 0;
+  ACTIVE = 1;
+  PAUSED = 2;
+  ERROR = 3;
+}
+
+message CreateConnectorInstanceRequest {
+  string connector_id = 1;
+  string display_name = 2;
+  bytes config_json = 3;
+}
+
+message CreateConnectorInstanceResponse {
+  ConnectorInstance instance = 1;
+}
+
+message ListConnectorInstancesRequest {}
+
+message ListConnectorInstancesResponse {
+  repeated ConnectorInstance instances = 1;
+}
+
+message GetConnectorInstanceRequest {
+  string id = 1;
+}
+
+message GetConnectorInstanceResponse {
+  ConnectorInstance instance = 1;
+}
+
+message DeleteConnectorInstanceRequest {
+  string id = 1;
+}
+
+message DeleteConnectorInstanceResponse {}
+
+enum SyncPhase {
+  SYNC_PHASE_UNSPECIFIED = 0;
+  PENDING = 1; // created, no sync yet
+  FULL_SYNC = 2; // initial backfill in progress
+  INCREMENTAL = 3; // steady state
+  FAILED = 4; // last attempt errored (see last_error)
+}
+
+message SyncState {
+  string connector_instance_id = 1;
+  // Opaque, connector-defined resume cursor (checkpoint).
+  string cursor = 2;
+  SyncPhase phase = 3;
+  google.protobuf.Timestamp last_sync_started = 4;
+  google.protobuf.Timestamp last_sync_completed = 5;
+  string last_error = 6;
+  // Documents emitted over the lifetime of this instance.
+  int64 docs_emitted = 7;
+}
+
+message GetSyncStateRequest {
+  string connector_instance_id = 1;
+}
+
+message GetSyncStateResponse {
+  SyncState state = 1;
+}
+
+message SetSyncStateRequest {
+  SyncState state = 1;
+}
+
+message SetSyncStateResponse {
+  SyncState state = 1;
+}
+
+message PutTokenRequest {
+  string connector_instance_id = 1;
+  // Plaintext credential blob (e.g. OAuth token JSON); the control plane
+  // encrypts it with the tenant's DEK before storage.
+  bytes token = 2;
+}
+
+message PutTokenResponse {}
+
+message GetTokenRequest {
+  string connector_instance_id = 1;
+}
+
+message GetTokenResponse {
+  bytes token = 1;
+}
+
+message DeleteTokenRequest {
+  string connector_instance_id = 1;
+}
+
+message DeleteTokenResponse {}

@@ -1,6 +1,10 @@
 version: v2
 plugins:
-  # protoc-gen-go must be on PATH; `make tools` installs it into ./bin.
+  # protoc-gen-go and protoc-gen-go-grpc must be on PATH; `make tools`
+  # installs both into ./bin.
   - local: protoc-gen-go
+    out: gen/go
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
     out: gen/go
     opt: paths=source_relative

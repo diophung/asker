@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS tenant_deks;
+DROP TABLE IF EXISTS tokens;
+DROP TABLE IF EXISTS sync_states;
+DROP TABLE IF EXISTS connector_instances;
+DROP TABLE IF EXISTS tenants;
