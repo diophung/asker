@@ -64,9 +64,17 @@ func run(ctx context.Context, cfg gatewayConfig, logger *slog.Logger) error {
 
 	auth := newAuthenticator(ctx, cfg.OIDCIssuer, cfg.OIDCJWKSURL, cfg.OIDCAudience, logger)
 
+	// Downstream clients (query, control-plane, hub, redis) all dial lazily,
+	// so startup never blocks on a backend being up.
+	d, cleanup, err := newDeps(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("init downstream clients: %w", err)
+	}
+	defer cleanup()
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           newHandler(cfg, auth),
+		Handler:           newHandler(cfg, auth, d),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

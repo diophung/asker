@@ -234,6 +234,33 @@ func (s *pgStore) DeleteToken(ctx context.Context, tenantID tenancy.TenantID, in
 	return nil
 }
 
+func (s *pgStore) ListAll(ctx context.Context) ([]ConnectorInstance, error) {
+	// Deliberately tenant-UNSCOPED: this backs the scheduler's cross-tenant
+	// enumeration only (Store.ListAll contract).
+	const q = `
+		SELECT id, tenant_id, connector_id, display_name, config_json, status, created_at, updated_at
+		FROM connector_instances
+		ORDER BY tenant_id, created_at, id`
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list all instances: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ConnectorInstance
+	for rows.Next() {
+		inst, err := scanInstance(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list all instances: scan: %w", err)
+		}
+		out = append(out, inst)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list all instances: rows: %w", err)
+	}
+	return out, nil
+}
+
 // scanInstance scans one connector_instances row in the canonical column
 // order used by Get and List.
 func scanInstance(row pgx.Row) (ConnectorInstance, error) {

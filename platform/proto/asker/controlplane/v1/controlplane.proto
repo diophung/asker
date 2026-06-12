@@ -153,3 +153,27 @@ message DeleteTokenRequest {
 }
 
 message DeleteTokenResponse {}
+
+// SchedulerService is the INTERNAL-ONLY cross-tenant enumeration surface for
+// the connector-hub scheduler, which must discover every tenant's connector
+// instances to schedule syncs. It is exempt from the per-tenant metadata
+// requirement (the control-plane wires its interceptor to skip exactly this
+// service) and must NEVER be reachable from outside the internal network —
+// the trust model is ADR-009's: only trusted services share that network.
+service SchedulerService {
+  rpc ListAllInstances(ListAllInstancesRequest) returns (ListAllInstancesResponse);
+}
+
+message ListAllInstancesRequest {}
+
+message ListAllInstancesResponse {
+  repeated TenantInstance instances = 1;
+}
+
+// TenantInstance pairs a connector instance with the tenant that owns it —
+// the only place tenant_id appears in a payload, because the caller has no
+// single-tenant scope.
+message TenantInstance {
+  string tenant_id = 1;
+  ConnectorInstance instance = 2;
+}

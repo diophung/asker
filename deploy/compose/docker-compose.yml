@@ -17,6 +17,13 @@ services:
       # JWKS over the compose network — hence explicit issuer + JWKS instead of discovery.
       OIDC_JWKS_URL: "http://keycloak:8080/realms/asker/protocol/openid-connect/certs"
       OIDC_AUDIENCE: "asker-web"
+      QUERY_GRPC_ADDR: "dns:///query:9200"
+      CONTROL_PLANE_GRPC_ADDR: "dns:///control-plane:9100"
+      HUB_HTTP_URL: "http://connector-hub:9300"
+      REDIS_ADDR: "redis:6379"
+      RATE_LIMIT_PER_MINUTE: "600"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000"
+      MAX_UPLOAD_MB: "32"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
       keycloak:
@@ -28,6 +35,184 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: services/control-plane/Dockerfile
+    environment:
+      CONTROL_PLANE_ADDR: ":9100"
+      CONTROL_PLANE_HEALTH_ADDR: ":9101"
+      DATABASE_URL: "postgres://asker:asker@postgres:5432/asker"
+      KEK_FILE: "/keys/kek.bin"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    volumes:
+      - kek-keys:/keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/control-plane", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  connector-hub:
+    build:
+      context: ../..
+      dockerfile: services/connector-hub/Dockerfile
+    environment:
+      HUB_ADDR: ":9300"
+      HUB_HEALTH_ADDR: ":9301"
+      HUB_WEBHOOK_BASE: "http://connector-hub:9300"
+      CONTROL_PLANE_GRPC_ADDR: "dns:///control-plane:9100"
+      KAFKA_BROKERS: "redpanda:9092"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "asker-minio" # dev-only
+      MINIO_SECRET_KEY: "asker-minio-secret" # dev-only
+      MINIO_USE_SSL: "false"
+      BLOB_BUCKET: "asker-blobs"
+      KEK_FILE: "/keys/kek.bin"
+      CONNECTOR_SYNC_INTERVAL: "30s"
+      SCHEDULER_TICK: "10s"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    volumes:
+      - kek-keys:/keys
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/connector-hub", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ingest:
+    build:
+      context: ../..
+      dockerfile: services/ingest/Dockerfile
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      REDIS_ADDR: "redis:6379"
+      INGEST_HEALTH_ADDR: ":9501"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/ingest", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  enrich:
+    build:
+      context: ../..
+      dockerfile: services/enrich/Dockerfile
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      TEI_URL: "http://tei:80"
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      ENRICH_HEALTH_ADDR: ":9601"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      tei:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9601/healthz', timeout=2).status==200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  index-writer:
+    build:
+      context: ../..
+      dockerfile: services/index-writer/Dockerfile
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      VESPA_URL: "http://vespa:8080"
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      INDEX_WRITER_HEALTH_ADDR: ":9701"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      vespa:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/index-writer", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  query:
+    build:
+      context: ../..
+      dockerfile: services/query/Dockerfile
+    environment:
+      QUERY_ADDR: ":9200"
+      QUERY_HEALTH_ADDR: ":9201"
+      VESPA_URL: "http://vespa:8080"
+      TEI_URL: "http://tei:80"
+      REDIS_ADDR: "redis:6379"
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    depends_on:
+      vespa:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/query", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  fake-gmail:
+    # Dev/CI only: local Gmail API fake (ADR-008). Admin API is unauthenticated
+    # by design — NEVER expose beyond the compose network.
+    build:
+      context: ../..
+      dockerfile: tools/fake-gmail/Dockerfile
+    environment:
+      FAKE_GMAIL_ADDR: ":9400"
+    healthcheck:
+      test: ["CMD", "/fake-gmail", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: web/Dockerfile
+    ports:
+      - "127.0.0.1:3000:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.3
@@ -103,7 +288,7 @@ services:
         "--tokenization-workers",
         "2",
         "--max-batch-tokens",
-        "1024",
+        "4096",
         "--max-concurrent-requests",
         "32",
       ]
@@ -199,3 +384,6 @@ volumes:
   vespa-var:
   vespa-logs:
   tei-cache:
+  # Shared dev KEK for envelope encryption (control-plane token vault +
+  # connector-hub blob store). Vault replaces this in M4.
+  kek-keys:

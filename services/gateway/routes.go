@@ -3,7 +3,10 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/asker/asker/platform/telemetry"
@@ -12,13 +15,52 @@ import (
 
 const readyzProbeTimeout = 2 * time.Second
 
-func newHandler(cfg gatewayConfig, auth *authenticator) http.Handler {
+// newHandler assembles the middleware chain. Outermost to innermost:
+// CORS (answers preflights pre-auth) -> telemetry -> mux -> auth ->
+// per-tenant rate limit -> handler.
+func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
+	limiter := newRateLimiter(d.counter, cfg.RateLimitPerMinute, d.logger)
+	cors := newCORSPolicy(cfg.CORSAllowedOrigins)
+
+	// authed routes: tenant from the verified token ONLY, then rate limit.
+	authed := func(h http.Handler) http.Handler {
+		return auth.middleware(limiter.middleware(h))
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", getOnly(handleHealthz))
 	mux.HandleFunc("/readyz", getOnly(handleReadyz(cfg.OIDCJWKSURL)))
-	mux.Handle("/v1/me", auth.middleware(getOnly(handleMe)))
+	mux.Handle("/v1/me", authed(getOnly(handleMe)))
+	mux.Handle("/v1/search", authed(getOnly(d.handleSearch)))
+	mux.Handle("/v1/connectors", authed(methods(map[string]http.HandlerFunc{
+		http.MethodGet:  d.handleListConnectors,
+		http.MethodPost: d.handleCreateConnector,
+	})))
+	mux.Handle("/v1/connectors/{id}", authed(methods(map[string]http.HandlerFunc{
+		http.MethodDelete: d.handleDeleteConnector,
+	})))
+	mux.Handle("/v1/connectors/{id}/token", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPut: d.handlePutToken,
+	})))
+	mux.Handle("/v1/upload", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleUpload,
+	})))
 	mux.HandleFunc("/", handleNotFound)
-	return telemetry.HTTPMiddleware("gateway")(mux)
+	return cors.middleware(telemetry.HTTPMiddleware("gateway")(mux))
+}
+
+// methods dispatches by HTTP method with a JSON 405 (and Allow header) for
+// anything unhandled, mirroring getOnly for multi-method routes.
+func methods(handlers map[string]http.HandlerFunc) http.Handler {
+	allow := strings.Join(slices.Sorted(maps.Keys(handlers)), ", ")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h, ok := handlers[r.Method]; ok {
+			h(w, r)
+			return
+		}
+		w.Header().Set("Allow", allow)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	})
 }
 
 // getOnly rejects non-GET methods with a JSON 405 (ServeMux method patterns
@@ -90,7 +132,8 @@ func handleNotFound(w http.ResponseWriter, _ *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	// Encoding a map[string]string cannot fail; a write error here means the
-	// client went away and there is nothing useful left to do.
+	// The bodies passed here (maps, slices, plain structs) cannot fail to
+	// encode; a write error means the client went away and there is nothing
+	// useful left to do.
 	_ = json.NewEncoder(w).Encode(body)
 }

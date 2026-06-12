@@ -122,6 +122,12 @@ type Spec struct {
 // no push path. The hub treats it as "use polling", not as a failure.
 var ErrWebhookUnsupported = errors.New("sdk: connector does not support webhooks")
 
+// ErrCursorExpired is returned (possibly wrapped) by IncrementalSync when the
+// source reports the cursor is no longer replayable (e.g. Gmail history.list
+// 404 on a stale startHistoryId). The hub responds by restarting FullSync for
+// the instance; connectors must NOT silently full-sync themselves.
+var ErrCursorExpired = errors.New("sdk: sync cursor expired at the source")
+
 // Connector is the interface every data-source connector implements. M1
 // connectors run in-process; the M2 gRPC plugin transport adapts the same
 // interface, so implementations must not assume shared memory with the hub

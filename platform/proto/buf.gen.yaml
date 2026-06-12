@@ -8,3 +8,9 @@ plugins:
   - local: protoc-gen-go-grpc
     out: gen/go
     opt: paths=source_relative
+  # Python bindings for the enrich worker (ADR-007). Remote buf plugins (no
+  # local protoc needed); committed like the Go output.
+  - remote: buf.build/protocolbuffers/python
+    out: gen/python
+  - remote: buf.build/protocolbuffers/pyi
+    out: gen/python

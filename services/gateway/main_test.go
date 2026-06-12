@@ -94,14 +94,9 @@ func baseClaims() map[string]any {
 func newTestHandler(t *testing.T, jwksURL string) http.Handler {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	cfg := gatewayConfig{
-		Addr:         ":0",
-		OIDCIssuer:   testIssuer,
-		OIDCJWKSURL:  jwksURL,
-		OIDCAudience: testAudience,
-	}
+	cfg := testGatewayConfig(jwksURL)
 	auth := newAuthenticator(t.Context(), cfg.OIDCIssuer, cfg.OIDCJWKSURL, cfg.OIDCAudience, logger)
-	return newHandler(cfg, auth)
+	return newHandler(cfg, auth, newFakeDeps(t))
 }
 
 func doRequest(t *testing.T, h http.Handler, method, path string, header http.Header) (int, map[string]string) {
@@ -380,20 +375,62 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("OIDC_JWKS_URL", "http://jwks.test/certs")
 	t.Setenv("OIDC_AUDIENCE", "aud-x")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel:4317")
+	t.Setenv("QUERY_GRPC_ADDR", "dns:///q.test:1")
+	t.Setenv("CONTROL_PLANE_GRPC_ADDR", "dns:///cp.test:2")
+	t.Setenv("HUB_HTTP_URL", "http://hub.test:3")
+	t.Setenv("REDIS_ADDR", "redis.test:4")
+	t.Setenv("RATE_LIMIT_PER_MINUTE", "42")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "http://a.test,http://b.test")
+	t.Setenv("MAX_UPLOAD_MB", "7")
 
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	want := gatewayConfig{
-		Addr:         ":9999",
-		OIDCIssuer:   "http://issuer.test/realms/x",
-		OIDCJWKSURL:  "http://jwks.test/certs",
-		OIDCAudience: "aud-x",
-		OTLPEndpoint: "otel:4317",
+		Addr:                 ":9999",
+		OIDCIssuer:           "http://issuer.test/realms/x",
+		OIDCJWKSURL:          "http://jwks.test/certs",
+		OIDCAudience:         "aud-x",
+		OTLPEndpoint:         "otel:4317",
+		QueryGRPCAddr:        "dns:///q.test:1",
+		ControlPlaneGRPCAddr: "dns:///cp.test:2",
+		HubHTTPURL:           "http://hub.test:3",
+		RedisAddr:            "redis.test:4",
+		RateLimitPerMinute:   42,
+		CORSAllowedOrigins:   "http://a.test,http://b.test",
+		MaxUploadMB:          7,
 	}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestLoadConfigDefaults(t *testing.T) {
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.QueryGRPCAddr != "dns:///query:9200" {
+		t.Errorf("QueryGRPCAddr default = %q", cfg.QueryGRPCAddr)
+	}
+	if cfg.ControlPlaneGRPCAddr != "dns:///control-plane:9100" {
+		t.Errorf("ControlPlaneGRPCAddr default = %q", cfg.ControlPlaneGRPCAddr)
+	}
+	if cfg.HubHTTPURL != "http://connector-hub:9300" {
+		t.Errorf("HubHTTPURL default = %q", cfg.HubHTTPURL)
+	}
+	if cfg.RedisAddr != "redis:6379" {
+		t.Errorf("RedisAddr default = %q", cfg.RedisAddr)
+	}
+	if cfg.RateLimitPerMinute != 600 {
+		t.Errorf("RateLimitPerMinute default = %d", cfg.RateLimitPerMinute)
+	}
+	if cfg.CORSAllowedOrigins != "http://localhost:3000" {
+		t.Errorf("CORSAllowedOrigins default = %q", cfg.CORSAllowedOrigins)
+	}
+	if cfg.MaxUploadMB != 32 {
+		t.Errorf("MaxUploadMB default = %d", cfg.MaxUploadMB)
 	}
 }
 

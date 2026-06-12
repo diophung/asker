@@ -1244,6 +1244,141 @@ func (*DeleteTokenResponse) Descriptor() ([]byte, []int) {
 	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{22}
 }
 
+type ListAllInstancesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAllInstancesRequest) Reset() {
+	*x = ListAllInstancesRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAllInstancesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAllInstancesRequest) ProtoMessage() {}
+
+func (x *ListAllInstancesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAllInstancesRequest.ProtoReflect.Descriptor instead.
+func (*ListAllInstancesRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{23}
+}
+
+type ListAllInstancesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Instances     []*TenantInstance      `protobuf:"bytes,1,rep,name=instances,proto3" json:"instances,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAllInstancesResponse) Reset() {
+	*x = ListAllInstancesResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAllInstancesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAllInstancesResponse) ProtoMessage() {}
+
+func (x *ListAllInstancesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAllInstancesResponse.ProtoReflect.Descriptor instead.
+func (*ListAllInstancesResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ListAllInstancesResponse) GetInstances() []*TenantInstance {
+	if x != nil {
+		return x.Instances
+	}
+	return nil
+}
+
+// TenantInstance pairs a connector instance with the tenant that owns it —
+// the only place tenant_id appears in a payload, because the caller has no
+// single-tenant scope.
+type TenantInstance struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Instance      *ConnectorInstance     `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TenantInstance) Reset() {
+	*x = TenantInstance{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TenantInstance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TenantInstance) ProtoMessage() {}
+
+func (x *TenantInstance) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TenantInstance.ProtoReflect.Descriptor instead.
+func (*TenantInstance) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *TenantInstance) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *TenantInstance) GetInstance() *ConnectorInstance {
+	if x != nil {
+		return x.Instance
+	}
+	return nil
+}
+
 var File_asker_controlplane_v1_controlplane_proto protoreflect.FileDescriptor
 
 const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
@@ -1308,7 +1443,13 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\x05token\x18\x01 \x01(\fR\x05token\"H\n" +
 	"\x12DeleteTokenRequest\x122\n" +
 	"\x15connector_instance_id\x18\x01 \x01(\tR\x13connectorInstanceId\"\x15\n" +
-	"\x13DeleteTokenResponse*V\n" +
+	"\x13DeleteTokenResponse\"\x19\n" +
+	"\x17ListAllInstancesRequest\"_\n" +
+	"\x18ListAllInstancesResponse\x12C\n" +
+	"\tinstances\x18\x01 \x03(\v2%.asker.controlplane.v1.TenantInstanceR\tinstances\"s\n" +
+	"\x0eTenantInstance\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12D\n" +
+	"\binstance\x18\x02 \x01(\v2(.asker.controlplane.v1.ConnectorInstanceR\binstance*V\n" +
 	"\x0fConnectorStatus\x12 \n" +
 	"\x1cCONNECTOR_STATUS_UNSPECIFIED\x10\x00\x12\n" +
 	"\n" +
@@ -1333,7 +1474,9 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\fSetSyncState\x12*.asker.controlplane.v1.SetSyncStateRequest\x1a+.asker.controlplane.v1.SetSyncStateResponse\x12[\n" +
 	"\bPutToken\x12&.asker.controlplane.v1.PutTokenRequest\x1a'.asker.controlplane.v1.PutTokenResponse\x12[\n" +
 	"\bGetToken\x12&.asker.controlplane.v1.GetTokenRequest\x1a'.asker.controlplane.v1.GetTokenResponse\x12d\n" +
-	"\vDeleteToken\x12).asker.controlplane.v1.DeleteTokenRequest\x1a*.asker.controlplane.v1.DeleteTokenResponseBSZQgithub.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1;controlplanev1b\x06proto3"
+	"\vDeleteToken\x12).asker.controlplane.v1.DeleteTokenRequest\x1a*.asker.controlplane.v1.DeleteTokenResponse2\x87\x01\n" +
+	"\x10SchedulerService\x12s\n" +
+	"\x10ListAllInstances\x12..asker.controlplane.v1.ListAllInstancesRequest\x1a/.asker.controlplane.v1.ListAllInstancesResponseBSZQgithub.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1;controlplanev1b\x06proto3"
 
 var (
 	file_asker_controlplane_v1_controlplane_proto_rawDescOnce sync.Once
@@ -1348,7 +1491,7 @@ func file_asker_controlplane_v1_controlplane_proto_rawDescGZIP() []byte {
 }
 
 var file_asker_controlplane_v1_controlplane_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_asker_controlplane_v1_controlplane_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_asker_controlplane_v1_controlplane_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_asker_controlplane_v1_controlplane_proto_goTypes = []any{
 	(ConnectorStatus)(0),                    // 0: asker.controlplane.v1.ConnectorStatus
 	(SyncPhase)(0),                          // 1: asker.controlplane.v1.SyncPhase
@@ -1375,48 +1518,55 @@ var file_asker_controlplane_v1_controlplane_proto_goTypes = []any{
 	(*GetTokenResponse)(nil),                // 22: asker.controlplane.v1.GetTokenResponse
 	(*DeleteTokenRequest)(nil),              // 23: asker.controlplane.v1.DeleteTokenRequest
 	(*DeleteTokenResponse)(nil),             // 24: asker.controlplane.v1.DeleteTokenResponse
-	(*timestamppb.Timestamp)(nil),           // 25: google.protobuf.Timestamp
+	(*ListAllInstancesRequest)(nil),         // 25: asker.controlplane.v1.ListAllInstancesRequest
+	(*ListAllInstancesResponse)(nil),        // 26: asker.controlplane.v1.ListAllInstancesResponse
+	(*TenantInstance)(nil),                  // 27: asker.controlplane.v1.TenantInstance
+	(*timestamppb.Timestamp)(nil),           // 28: google.protobuf.Timestamp
 }
 var file_asker_controlplane_v1_controlplane_proto_depIdxs = []int32{
-	25, // 0: asker.controlplane.v1.Tenant.created:type_name -> google.protobuf.Timestamp
+	28, // 0: asker.controlplane.v1.Tenant.created:type_name -> google.protobuf.Timestamp
 	2,  // 1: asker.controlplane.v1.EnsureTenantResponse.tenant:type_name -> asker.controlplane.v1.Tenant
 	0,  // 2: asker.controlplane.v1.ConnectorInstance.status:type_name -> asker.controlplane.v1.ConnectorStatus
-	25, // 3: asker.controlplane.v1.ConnectorInstance.created:type_name -> google.protobuf.Timestamp
-	25, // 4: asker.controlplane.v1.ConnectorInstance.updated:type_name -> google.protobuf.Timestamp
+	28, // 3: asker.controlplane.v1.ConnectorInstance.created:type_name -> google.protobuf.Timestamp
+	28, // 4: asker.controlplane.v1.ConnectorInstance.updated:type_name -> google.protobuf.Timestamp
 	5,  // 5: asker.controlplane.v1.CreateConnectorInstanceResponse.instance:type_name -> asker.controlplane.v1.ConnectorInstance
 	5,  // 6: asker.controlplane.v1.ListConnectorInstancesResponse.instances:type_name -> asker.controlplane.v1.ConnectorInstance
 	5,  // 7: asker.controlplane.v1.GetConnectorInstanceResponse.instance:type_name -> asker.controlplane.v1.ConnectorInstance
 	1,  // 8: asker.controlplane.v1.SyncState.phase:type_name -> asker.controlplane.v1.SyncPhase
-	25, // 9: asker.controlplane.v1.SyncState.last_sync_started:type_name -> google.protobuf.Timestamp
-	25, // 10: asker.controlplane.v1.SyncState.last_sync_completed:type_name -> google.protobuf.Timestamp
+	28, // 9: asker.controlplane.v1.SyncState.last_sync_started:type_name -> google.protobuf.Timestamp
+	28, // 10: asker.controlplane.v1.SyncState.last_sync_completed:type_name -> google.protobuf.Timestamp
 	14, // 11: asker.controlplane.v1.GetSyncStateResponse.state:type_name -> asker.controlplane.v1.SyncState
 	14, // 12: asker.controlplane.v1.SetSyncStateRequest.state:type_name -> asker.controlplane.v1.SyncState
 	14, // 13: asker.controlplane.v1.SetSyncStateResponse.state:type_name -> asker.controlplane.v1.SyncState
-	3,  // 14: asker.controlplane.v1.ControlPlaneService.EnsureTenant:input_type -> asker.controlplane.v1.EnsureTenantRequest
-	6,  // 15: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:input_type -> asker.controlplane.v1.CreateConnectorInstanceRequest
-	8,  // 16: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:input_type -> asker.controlplane.v1.ListConnectorInstancesRequest
-	10, // 17: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:input_type -> asker.controlplane.v1.GetConnectorInstanceRequest
-	12, // 18: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:input_type -> asker.controlplane.v1.DeleteConnectorInstanceRequest
-	15, // 19: asker.controlplane.v1.ControlPlaneService.GetSyncState:input_type -> asker.controlplane.v1.GetSyncStateRequest
-	17, // 20: asker.controlplane.v1.ControlPlaneService.SetSyncState:input_type -> asker.controlplane.v1.SetSyncStateRequest
-	19, // 21: asker.controlplane.v1.ControlPlaneService.PutToken:input_type -> asker.controlplane.v1.PutTokenRequest
-	21, // 22: asker.controlplane.v1.ControlPlaneService.GetToken:input_type -> asker.controlplane.v1.GetTokenRequest
-	23, // 23: asker.controlplane.v1.ControlPlaneService.DeleteToken:input_type -> asker.controlplane.v1.DeleteTokenRequest
-	4,  // 24: asker.controlplane.v1.ControlPlaneService.EnsureTenant:output_type -> asker.controlplane.v1.EnsureTenantResponse
-	7,  // 25: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:output_type -> asker.controlplane.v1.CreateConnectorInstanceResponse
-	9,  // 26: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:output_type -> asker.controlplane.v1.ListConnectorInstancesResponse
-	11, // 27: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:output_type -> asker.controlplane.v1.GetConnectorInstanceResponse
-	13, // 28: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:output_type -> asker.controlplane.v1.DeleteConnectorInstanceResponse
-	16, // 29: asker.controlplane.v1.ControlPlaneService.GetSyncState:output_type -> asker.controlplane.v1.GetSyncStateResponse
-	18, // 30: asker.controlplane.v1.ControlPlaneService.SetSyncState:output_type -> asker.controlplane.v1.SetSyncStateResponse
-	20, // 31: asker.controlplane.v1.ControlPlaneService.PutToken:output_type -> asker.controlplane.v1.PutTokenResponse
-	22, // 32: asker.controlplane.v1.ControlPlaneService.GetToken:output_type -> asker.controlplane.v1.GetTokenResponse
-	24, // 33: asker.controlplane.v1.ControlPlaneService.DeleteToken:output_type -> asker.controlplane.v1.DeleteTokenResponse
-	24, // [24:34] is the sub-list for method output_type
-	14, // [14:24] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	27, // 14: asker.controlplane.v1.ListAllInstancesResponse.instances:type_name -> asker.controlplane.v1.TenantInstance
+	5,  // 15: asker.controlplane.v1.TenantInstance.instance:type_name -> asker.controlplane.v1.ConnectorInstance
+	3,  // 16: asker.controlplane.v1.ControlPlaneService.EnsureTenant:input_type -> asker.controlplane.v1.EnsureTenantRequest
+	6,  // 17: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:input_type -> asker.controlplane.v1.CreateConnectorInstanceRequest
+	8,  // 18: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:input_type -> asker.controlplane.v1.ListConnectorInstancesRequest
+	10, // 19: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:input_type -> asker.controlplane.v1.GetConnectorInstanceRequest
+	12, // 20: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:input_type -> asker.controlplane.v1.DeleteConnectorInstanceRequest
+	15, // 21: asker.controlplane.v1.ControlPlaneService.GetSyncState:input_type -> asker.controlplane.v1.GetSyncStateRequest
+	17, // 22: asker.controlplane.v1.ControlPlaneService.SetSyncState:input_type -> asker.controlplane.v1.SetSyncStateRequest
+	19, // 23: asker.controlplane.v1.ControlPlaneService.PutToken:input_type -> asker.controlplane.v1.PutTokenRequest
+	21, // 24: asker.controlplane.v1.ControlPlaneService.GetToken:input_type -> asker.controlplane.v1.GetTokenRequest
+	23, // 25: asker.controlplane.v1.ControlPlaneService.DeleteToken:input_type -> asker.controlplane.v1.DeleteTokenRequest
+	25, // 26: asker.controlplane.v1.SchedulerService.ListAllInstances:input_type -> asker.controlplane.v1.ListAllInstancesRequest
+	4,  // 27: asker.controlplane.v1.ControlPlaneService.EnsureTenant:output_type -> asker.controlplane.v1.EnsureTenantResponse
+	7,  // 28: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:output_type -> asker.controlplane.v1.CreateConnectorInstanceResponse
+	9,  // 29: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:output_type -> asker.controlplane.v1.ListConnectorInstancesResponse
+	11, // 30: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:output_type -> asker.controlplane.v1.GetConnectorInstanceResponse
+	13, // 31: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:output_type -> asker.controlplane.v1.DeleteConnectorInstanceResponse
+	16, // 32: asker.controlplane.v1.ControlPlaneService.GetSyncState:output_type -> asker.controlplane.v1.GetSyncStateResponse
+	18, // 33: asker.controlplane.v1.ControlPlaneService.SetSyncState:output_type -> asker.controlplane.v1.SetSyncStateResponse
+	20, // 34: asker.controlplane.v1.ControlPlaneService.PutToken:output_type -> asker.controlplane.v1.PutTokenResponse
+	22, // 35: asker.controlplane.v1.ControlPlaneService.GetToken:output_type -> asker.controlplane.v1.GetTokenResponse
+	24, // 36: asker.controlplane.v1.ControlPlaneService.DeleteToken:output_type -> asker.controlplane.v1.DeleteTokenResponse
+	26, // 37: asker.controlplane.v1.SchedulerService.ListAllInstances:output_type -> asker.controlplane.v1.ListAllInstancesResponse
+	27, // [27:38] is the sub-list for method output_type
+	16, // [16:27] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_asker_controlplane_v1_controlplane_proto_init() }
@@ -1430,9 +1580,9 @@ func file_asker_controlplane_v1_controlplane_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_asker_controlplane_v1_controlplane_proto_rawDesc), len(file_asker_controlplane_v1_controlplane_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   23,
+			NumMessages:   26,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_asker_controlplane_v1_controlplane_proto_goTypes,
 		DependencyIndexes: file_asker_controlplane_v1_controlplane_proto_depIdxs,

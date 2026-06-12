@@ -256,12 +256,16 @@ func (x *Document) GetTombstone() *Tombstone {
 
 // Chunk is one retrieval unit cut from body_text.
 type Chunk struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ChunkId       string                 `protobuf:"bytes,1,opt,name=chunk_id,json=chunkId,proto3" json:"chunk_id,omitempty"`                // stable within the document
-	Text          string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`                                     // chunk text
-	EmbeddingRef  string                 `protobuf:"bytes,3,opt,name=embedding_ref,json=embeddingRef,proto3" json:"embedding_ref,omitempty"` // reference to the stored embedding
-	CharStart     int64                  `protobuf:"varint,4,opt,name=char_start,json=charStart,proto3" json:"char_start,omitempty"`         // offset into body_text (inclusive)
-	CharEnd       int64                  `protobuf:"varint,5,opt,name=char_end,json=charEnd,proto3" json:"char_end,omitempty"`               // offset into body_text (exclusive)
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	ChunkId      string                 `protobuf:"bytes,1,opt,name=chunk_id,json=chunkId,proto3" json:"chunk_id,omitempty"`                // stable within the document
+	Text         string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`                                     // chunk text
+	EmbeddingRef string                 `protobuf:"bytes,3,opt,name=embedding_ref,json=embeddingRef,proto3" json:"embedding_ref,omitempty"` // reference to an externally stored embedding (unused in M1)
+	CharStart    int64                  `protobuf:"varint,4,opt,name=char_start,json=charStart,proto3" json:"char_start,omitempty"`         // offset into body_text (inclusive)
+	CharEnd      int64                  `protobuf:"varint,5,opt,name=char_end,json=charEnd,proto3" json:"char_end,omitempty"`               // offset into body_text (exclusive)
+	// Embedding vector, filled by the enrich worker on docs.enriched only
+	// (empty on docs.raw / docs.chunked). Length must equal EMBEDDING_DIM
+	// (ADR-005); the index writer rejects mismatches.
+	Embedding     []float32 `protobuf:"fixed32,6,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -329,6 +333,13 @@ func (x *Chunk) GetCharEnd() int64 {
 		return x.CharEnd
 	}
 	return 0
+}
+
+func (x *Chunk) GetEmbedding() []float32 {
+	if x != nil {
+		return x.Embedding
+	}
+	return nil
 }
 
 // Participant is a person attached to the document (sender, attendee, ...).
@@ -668,14 +679,15 @@ const file_asker_v1_document_proto_rawDesc = "" +
 	"\ttombstone\x18\x0f \x01(\v2\x13.asker.v1.TombstoneR\ttombstone\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x95\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb3\x01\n" +
 	"\x05Chunk\x12\x19\n" +
 	"\bchunk_id\x18\x01 \x01(\tR\achunkId\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12#\n" +
 	"\rembedding_ref\x18\x03 \x01(\tR\fembeddingRef\x12\x1d\n" +
 	"\n" +
 	"char_start\x18\x04 \x01(\x03R\tcharStart\x12\x19\n" +
-	"\bchar_end\x18\x05 \x01(\x03R\acharEnd\"c\n" +
+	"\bchar_end\x18\x05 \x01(\x03R\acharEnd\x12\x1c\n" +
+	"\tembedding\x18\x06 \x03(\x02R\tembedding\"c\n" +
 	"\vParticipant\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x16\n" +

@@ -94,4 +94,12 @@ type Store interface {
 	GetToken(ctx context.Context, tenantID tenancy.TenantID, instanceID string) ([]byte, error)
 
 	DeleteToken(ctx context.Context, tenantID tenancy.TenantID, instanceID string) error
+
+	// ListAll returns EVERY tenant's connector instances, ordered by tenant,
+	// then creation time, then ID. It is the single deliberate exception to
+	// the tenancy contract above and exists only to back
+	// SchedulerService.ListAllInstances, the connector-hub scheduler's
+	// cross-tenant enumeration surface (see scheduler.go for the trust
+	// model). No other caller may use it.
+	ListAll(ctx context.Context) ([]ConnectorInstance, error)
 }

@@ -195,6 +195,28 @@ func (m *memStore) DeleteToken(ctx context.Context, tenantID tenancy.TenantID, i
 	return nil
 }
 
+func (m *memStore) ListAll(ctx context.Context) ([]ConnectorInstance, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ConnectorInstance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		out = append(out, cloneInstance(inst))
+	}
+	slices.SortFunc(out, func(a, b ConnectorInstance) int {
+		if c := strings.Compare(string(a.TenantID), string(b.TenantID)); c != 0 {
+			return c
+		}
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return out, nil
+}
+
 // ownedInstance returns the instance only when it exists AND belongs to the
 // tenant; both misses collapse into a single "not ok". Callers must hold m.mu.
 func (m *memStore) ownedInstance(tenantID tenancy.TenantID, id string) (ConnectorInstance, bool) {

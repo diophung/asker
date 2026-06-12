@@ -37,7 +37,6 @@ import (
 	"github.com/asker/asker/platform/crypto"
 	controlplanev1 "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1"
 	"github.com/asker/asker/platform/telemetry"
-	"github.com/asker/asker/platform/tenancy/tenancygrpc"
 )
 
 const serviceName = "control-plane"
@@ -99,12 +98,19 @@ func run(ctx context.Context, cfg controlPlaneConfig, logger *slog.Logger) error
 	}
 	cipher := crypto.NewTenantCipher(kek, newPGDEKStore(pool))
 
-	srv := newServer(newPGStore(pool), cipher, logger)
+	store := newPGStore(pool)
+	srv := newServer(store, cipher, logger)
 
+	// SchedulerService.ListAllInstances is the single cross-tenant RPC and is
+	// exempted from the tenant-metadata requirement by exact method name; all
+	// ControlPlaneService RPCs keep the fail-closed tenancy interceptor.
 	grpcServer := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(tenancygrpc.UnaryServerInterceptor()),
+		grpc.ChainUnaryInterceptor(tenantInterceptorSkipping(
+			controlplanev1.SchedulerService_ListAllInstances_FullMethodName,
+		)),
 	)
 	controlplanev1.RegisterControlPlaneServiceServer(grpcServer, srv)
+	controlplanev1.RegisterSchedulerServiceServer(grpcServer, newSchedulerServer(store, logger))
 
 	lis, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {

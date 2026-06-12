@@ -423,3 +423,43 @@ func TestPGTokenVaultEndToEnd(t *testing.T) {
 		t.Errorf("round trip = %q, want %q", got.GetToken(), secret)
 	}
 }
+
+// TestPGStoreListAllIntegration covers the deliberately tenant-unscoped
+// ListAll (SchedulerService backing) against real Postgres: rows span
+// tenants, ordered by tenant then creation time.
+func TestPGStoreListAllIntegration(t *testing.T) {
+	pool := newPGTestStore(t)
+	store := newPGStore(pool)
+	ctx := context.Background()
+
+	mk := func(tenant, connector string) ConnectorInstance {
+		t.Helper()
+		inst, err := store.CreateConnectorInstance(ctx, ConnectorInstance{
+			TenantID:    tenancy.TenantID(tenant),
+			ConnectorID: connector,
+			ConfigJSON:  []byte("{}"),
+			Status:      "ACTIVE",
+		})
+		if err != nil {
+			t.Fatalf("CreateConnectorInstance(%s/%s): %v", tenant, connector, err)
+		}
+		return inst
+	}
+	b := mk("listall-tenant-b", "upload")
+	a1 := mk("listall-tenant-a", "gmail")
+	a2 := mk("listall-tenant-a", "upload")
+
+	all, err := store.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ListAll returned %d rows, want 3", len(all))
+	}
+	wantOrder := []string{a1.ID, a2.ID, b.ID}
+	for i, want := range wantOrder {
+		if all[i].ID != want {
+			t.Errorf("ListAll[%d].ID = %s, want %s", i, all[i].ID, want)
+		}
+	}
+}

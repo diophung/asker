@@ -13,6 +13,19 @@ type gatewayConfig struct {
 	OIDCAudience string `env:"OIDC_AUDIENCE" envDefault:"asker-web"`
 	// Empty endpoint means telemetry is a no-op.
 	OTLPEndpoint string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:""`
+
+	// M1 backends. gRPC targets use the dns resolver so compose service names
+	// re-resolve across container restarts.
+	QueryGRPCAddr        string `env:"QUERY_GRPC_ADDR" envDefault:"dns:///query:9200"`
+	ControlPlaneGRPCAddr string `env:"CONTROL_PLANE_GRPC_ADDR" envDefault:"dns:///control-plane:9100"`
+	HubHTTPURL           string `env:"HUB_HTTP_URL" envDefault:"http://connector-hub:9300"`
+	RedisAddr            string `env:"REDIS_ADDR" envDefault:"redis:6379"`
+	// Per-tenant fixed-window limit; <= 0 disables limiting entirely.
+	RateLimitPerMinute int `env:"RATE_LIMIT_PER_MINUTE" envDefault:"600"`
+	// Comma-separated exact-match origins. Never "*": the allowed origin is
+	// echoed back verbatim.
+	CORSAllowedOrigins string `env:"CORS_ALLOWED_ORIGINS" envDefault:"http://localhost:3000"`
+	MaxUploadMB        int64  `env:"MAX_UPLOAD_MB" envDefault:"32"`
 }
 
 func loadConfig() (gatewayConfig, error) {
