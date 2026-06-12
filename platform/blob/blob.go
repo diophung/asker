@@ -7,11 +7,10 @@
 // tenant-bound AEAD refuses cross-tenant ciphertext, and the decrypted
 // plaintext must match the BlobRef's sha256.
 //
-// The wire transport is a minimal S3 SigV4 client over net/http (s3client.go)
-// because the frozen go.mod does not carry minio-go/v7; the unexported
-// objectAPI seam is exactly the three calls a minio-go client would provide
-// (MakeBucket/BucketExists, PutObject, GetObject), so swapping the transport
-// later does not touch Store semantics.
+// The wire transport is github.com/minio/minio-go/v7 (minio.go); the
+// unexported objectAPI seam is exactly the three calls Store needs
+// (MakeBucket/BucketExists, PutObject, GetObject), so tests exercise Store
+// semantics against a fake without a live object store.
 package blob
 
 import (
@@ -99,7 +98,11 @@ func New(ctx context.Context, cfg Config, cipher *crypto.TenantCipher) (*Store, 
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
 		return nil, errors.New("blob: access key and secret key are required")
 	}
-	return newStore(ctx, cfg.Bucket, cipher, newS3Client(endpoint, cfg.AccessKey, cfg.SecretKey, useSSL))
+	api, err := newMinioClient(endpoint, cfg.AccessKey, cfg.SecretKey, useSSL)
+	if err != nil {
+		return nil, fmt.Errorf("blob: %w", err)
+	}
+	return newStore(ctx, cfg.Bucket, cipher, api)
 }
 
 // newStore wires a Store over any objectAPI, ensuring the bucket exists.

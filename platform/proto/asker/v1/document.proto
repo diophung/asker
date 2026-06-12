@@ -47,8 +47,8 @@ message Chunk {
   string chunk_id = 1;      // stable within the document
   string text = 2;          // chunk text
   string embedding_ref = 3; // reference to an externally stored embedding (unused in M1)
-  int64 char_start = 4;     // offset into body_text (inclusive)
-  int64 char_end = 5;       // offset into body_text (exclusive)
+  int64 char_start = 4;     // BYTE offset into body_text (inclusive; UTF-8 safe boundaries)
+  int64 char_end = 5;       // BYTE offset into body_text (exclusive)
   // Embedding vector, filled by the enrich worker on docs.enriched only
   // (empty on docs.raw / docs.chunked). Length must equal EMBEDDING_DIM
   // (ADR-005); the index writer rejects mismatches.

@@ -20,7 +20,9 @@ import (
 )
 
 // fakeRedis is a minimal RESP2 server speaking just enough protocol for the
-// GET / SET ... EX commands the cache issues.
+// GET / SET ... EX commands the cache issues. Handshake commands go-redis
+// sends on connect (HELLO, CLIENT SETINFO) fall through to the -ERR branch,
+// which the client tolerates by design (RESP2 fallback).
 type fakeRedis struct {
 	lis net.Listener
 
@@ -189,11 +191,10 @@ func TestRedisCacheServerErrorSurfaces(t *testing.T) {
 	c := newRedisCache(f.addr())
 	defer c.Close()
 
-	// The fake rejects SET without EX-style shape only; force an -ERR via an
-	// unknown command path by corrupting through Set with a zero TTL is still
-	// valid, so instead call do directly.
-	if _, err := c.do(context.Background(), []byte("FLUSHALL")); err == nil {
-		t.Fatal("unknown command must surface a redis server error")
+	// A zero TTL makes go-redis send a plain SET, which the fake rejects with
+	// -ERR; the server error must surface so the caller can skip the cache.
+	if err := c.Set(context.Background(), "k", []byte("v"), 0); err == nil {
+		t.Fatal("server error reply must surface from Set")
 	}
 
 	// The connection survives a protocol-level error and is reused.

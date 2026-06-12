@@ -28,8 +28,11 @@ var errVespaPermanent = errors.New("vespa rejected the request (4xx, permanent)"
 const feedTimeout = 10 * time.Second
 
 // writer turns canonical Documents from docs.enriched into Vespa document/v1
-// operations: tombstones become DELETEs, everything else a full-fields PUT
-// (plain PUT upserts — ?create=true semantics; see vespa/README.md).
+// operations: tombstones become DELETEs, everything else a full-document POST
+// (document/v1 "put": creates or fully replaces, so replays are idempotent).
+// PUT is reserved by document/v1 for partial updates with
+// {"fields":{"f":{"assign":...}}} syntax — never used here (see
+// vespa/README.md).
 type writer struct {
 	vespaURL string // base URL, no trailing slash
 	dim      int    // EMBEDDING_DIM; every chunk vector must have exactly this length
@@ -97,7 +100,7 @@ func (w *writer) Handle(ctx context.Context, doc *askerv1.Document) error {
 	if err != nil {
 		return fmt.Errorf("index-writer: marshal feed for doc %s: %w", doc.GetDocId(), err)
 	}
-	if err := w.send(ctx, http.MethodPut, docURL, body, doc.GetDocId()); err != nil {
+	if err := w.send(ctx, http.MethodPost, docURL, body, doc.GetDocId()); err != nil {
 		return err
 	}
 	w.log.Info("document fed to vespa",

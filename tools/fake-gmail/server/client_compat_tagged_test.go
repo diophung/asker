@@ -6,16 +6,13 @@ package server
 // (google.golang.org/api/gmail/v1) pointed at the fake via
 // option.WithEndpoint, exactly how the Asker Gmail connector will use it.
 //
-// BUILD TAG: the repo's frozen go.mod pins google.golang.org/api v0.284.0
-// but does not (yet) carry its transitive module requirements
-// (cloud.google.com/go/auth, googleapis/gax-go, ...), so importing gmail/v1
-// from main-module code fails with "updates to go.mod needed" — and M1
-// builders must not run `go mod tidy`. Once the Gmail connector lands and
-// go.mod gains those entries, enable this suite with:
+// BUILD TAG: kept opt-in because the suite drives the full generated client
+// (slower, network-stack heavy). go.mod carries all required deps; run it
+// with:
 //
 //	go test -tags gmail_compat ./tools/fake-gmail/server/
 //
-// Until then, compat_test.go provides always-on coverage by replicating the
+// compat_test.go provides always-on coverage by replicating the
 // generated client's exact wire behavior (verified against the module-cache
 // source; see citations there).
 
@@ -121,6 +118,40 @@ func TestGeneratedClientListAndGet(t *testing.T) {
 	}
 	if len(body) == 0 {
 		t.Fatal("empty body")
+	}
+}
+
+func TestGeneratedClientGetProfile(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.seed(testEmail, 3, 7)
+	svc := newGmailService(t, f.ts.URL, testToken)
+
+	prof, err := svc.Users.GetProfile("me").Do()
+	if err != nil {
+		t.Fatalf("users.getProfile: %v", err)
+	}
+	if prof.EmailAddress != testEmail {
+		t.Errorf("emailAddress = %q, want %q", prof.EmailAddress, testEmail)
+	}
+	if prof.HistoryId == 0 {
+		t.Error("historyId not decoded (must serialize as a JSON string)")
+	}
+	if prof.MessagesTotal != 3 || prof.ThreadsTotal != 3 {
+		t.Errorf("totals = %d/%d, want 3/3", prof.MessagesTotal, prof.ThreadsTotal)
+	}
+
+	// The profile historyId tracks admin mutations.
+	msg := f.addMessage(testEmail, "bump", "history")
+	prof, err = svc.Users.GetProfile("me").Do()
+	if err != nil {
+		t.Fatalf("users.getProfile after add: %v", err)
+	}
+	if prof.HistoryId != msg.HistoryID {
+		t.Errorf("historyId after add = %d, want %d", prof.HistoryId, msg.HistoryID)
+	}
+	if prof.MessagesTotal != 4 {
+		t.Errorf("messagesTotal after add = %d, want 4", prof.MessagesTotal)
 	}
 }
 

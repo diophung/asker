@@ -185,7 +185,8 @@ func asJSONValue(t *testing.T, raw []byte) any {
 	return v
 }
 
-// feedFields unmarshals a captured PUT body and returns its "fields" object.
+// feedFields unmarshals a captured feed POST body and returns its "fields"
+// object.
 func feedFields(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	doc, ok := asJSONValue(t, body).(map[string]any)
@@ -213,8 +214,9 @@ func TestHandleFeedsRichDocumentGolden(t *testing.T) {
 		t.Fatalf("vespa saw %d requests, want 1", len(reqs))
 	}
 	req := reqs[0]
-	if req.method != http.MethodPut {
-		t.Errorf("method = %s, want PUT", req.method)
+	// document/v1 full puts are POST; PUT would be parsed as a partial update.
+	if req.method != http.MethodPost {
+		t.Errorf("method = %s, want POST", req.method)
 	}
 	if want := "/document/v1/asker/doc/group/tenant-a/doc-rich-1"; req.path != want {
 		t.Errorf("path = %q, want %q", req.path, want)

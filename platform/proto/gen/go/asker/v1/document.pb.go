@@ -260,8 +260,8 @@ type Chunk struct {
 	ChunkId      string                 `protobuf:"bytes,1,opt,name=chunk_id,json=chunkId,proto3" json:"chunk_id,omitempty"`                // stable within the document
 	Text         string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`                                     // chunk text
 	EmbeddingRef string                 `protobuf:"bytes,3,opt,name=embedding_ref,json=embeddingRef,proto3" json:"embedding_ref,omitempty"` // reference to an externally stored embedding (unused in M1)
-	CharStart    int64                  `protobuf:"varint,4,opt,name=char_start,json=charStart,proto3" json:"char_start,omitempty"`         // offset into body_text (inclusive)
-	CharEnd      int64                  `protobuf:"varint,5,opt,name=char_end,json=charEnd,proto3" json:"char_end,omitempty"`               // offset into body_text (exclusive)
+	CharStart    int64                  `protobuf:"varint,4,opt,name=char_start,json=charStart,proto3" json:"char_start,omitempty"`         // BYTE offset into body_text (inclusive; UTF-8 safe boundaries)
+	CharEnd      int64                  `protobuf:"varint,5,opt,name=char_end,json=charEnd,proto3" json:"char_end,omitempty"`               // BYTE offset into body_text (exclusive)
 	// Embedding vector, filled by the enrich worker on docs.enriched only
 	// (empty on docs.raw / docs.chunked). Length must equal EMBEDDING_DIM
 	// (ADR-005); the index writer rejects mismatches.

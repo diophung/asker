@@ -136,11 +136,32 @@ func TestFullSyncGolden(t *testing.T) {
 	}
 }
 
-// TestFullSyncUsesGetProfile drives the canonical users.getProfile path (the
-// raw fake lacks the endpoint; the harness shims it).
+// TestFullSyncUsesGetProfile drives the canonical users.getProfile path,
+// which the fake now implements natively.
 func TestFullSyncUsesGetProfile(t *testing.T) {
 	t.Parallel()
-	f := newFixtureWithProfile(t)
+	f := newFixture(t)
+	seeded := f.seed(5, 3)
+	cfg := f.connectorConfig("", nil)
+
+	var rec connectortest.EmitRecorder
+	cur, err := newTestConnector().FullSync(context.Background(), cfg, rec.Emit)
+	if err != nil {
+		t.Fatalf("FullSync: %v", err)
+	}
+	if want := incrementalCursor(seeded.HistoryID); cur != want {
+		t.Errorf("cursor = %q, want %q", cur, want)
+	}
+	if len(rec.Docs()) != 5 {
+		t.Fatalf("emitted %d documents, want 5", len(rec.Docs()))
+	}
+}
+
+// TestFullSyncProfileFallback drives the history.list fallback the connector
+// keeps for sources without users.getProfile (the harness 404s the route).
+func TestFullSyncProfileFallback(t *testing.T) {
+	t.Parallel()
+	f := newFixtureWithoutProfile(t)
 	seeded := f.seed(5, 3)
 	cfg := f.connectorConfig("", nil)
 

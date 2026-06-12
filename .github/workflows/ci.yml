@@ -71,6 +71,52 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+  enrich:
+    name: enrich (python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/enrich
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/enrich/requirements*.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Test (pytest)
+        run: pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/platform/proto/gen/python
+
+  web:
+    name: web (typescript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test -- --run
+      - name: Build
+        run: npm run build
+
   e2e-smoke:
     name: e2e-smoke
     runs-on: ubuntu-latest

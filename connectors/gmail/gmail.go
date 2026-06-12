@@ -180,9 +180,10 @@ func (c *Connector) Validate(ctx context.Context, cfg sdk.Config) error {
 		}
 		return nil
 	case isNotFound(err):
-		// The in-repo fake-gmail does not implement users.getProfile (see
-		// package issues); fall back to another authenticated round-trip so
-		// the credential is still exercised.
+		// Defensive fallback for Gmail-API subsets without users.getProfile
+		// (the in-repo fake implements it, so this is normally dead): use
+		// another authenticated round-trip so the credential is still
+		// exercised.
 		if _, lerr := svc.Users.Messages.List(gmailUser).MaxResults(1).Context(ctx).Do(); lerr != nil {
 			return fmt.Errorf("gmail: credential check failed: %w", lerr)
 		}

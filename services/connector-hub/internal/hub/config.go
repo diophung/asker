@@ -43,12 +43,14 @@ type Config struct {
 	// connector wiring that needs envelope encryption (blob store).
 	KEKFile string `env:"KEK_FILE" envDefault:"/keys/kek.bin"`
 
-	// MinIO settings are consumed by the upload connector's blob store,
-	// wired in package main; the hub only loads and forwards them.
+	// MinIO settings are consumed by the upload connector's blob store
+	// (platform/blob), wired in package main; the hub only loads and
+	// forwards them. The env names match platform/blob.Config so either
+	// loading path sees the same configuration.
 	MinIOEndpoint  string `env:"MINIO_ENDPOINT" envDefault:"minio:9000"`
 	MinIOAccessKey string `env:"MINIO_ACCESS_KEY" envDefault:"asker-minio"`
 	MinIOSecretKey string `env:"MINIO_SECRET_KEY" envDefault:"asker-minio-secret"`
-	MinIOBucket    string `env:"MINIO_BUCKET" envDefault:"asker-blobs"`
+	MinIOBucket    string `env:"BLOB_BUCKET" envDefault:"asker-blobs"`
 	MinIOUseSSL    bool   `env:"MINIO_USE_SSL" envDefault:"false"`
 
 	// Kafka carries KAFKA_BROKERS / KAFKA_CLIENT_ID.

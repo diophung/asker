@@ -1,6 +1,6 @@
 // Command index-writer consumes enriched documents from docs.enriched and
-// feeds them into Vespa: upserts via document/v1 PUT into the tenant's
-// streaming group, tombstones via document/v1 DELETE. Delivery is
+// feeds them into Vespa: upserts via document/v1 POST (full-document put) into
+// the tenant's streaming group, tombstones via document/v1 DELETE. Delivery is
 // at-least-once (kafkautil); Vespa upserts keyed by doc id make replays
 // no-ops (ADR-004).
 package main

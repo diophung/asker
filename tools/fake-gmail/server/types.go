@@ -46,6 +46,17 @@ type wirePartBody struct {
 	Size int64  `json:"size,omitempty"`
 }
 
+// wireProfile is the users.getProfile resource. Like the other wire types,
+// historyId carries the `,string` option because the generated client's
+// Profile decode target declares it that way; serializing it as a bare JSON
+// number would fail the client's decode.
+type wireProfile struct {
+	EmailAddress  string `json:"emailAddress"`
+	MessagesTotal int64  `json:"messagesTotal"`
+	ThreadsTotal  int64  `json:"threadsTotal"`
+	HistoryID     uint64 `json:"historyId,string"`
+}
+
 type wireListMessagesResponse struct {
 	Messages           []wireMessageRef `json:"messages,omitempty"`
 	NextPageToken      string           `json:"nextPageToken,omitempty"`

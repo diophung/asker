@@ -102,6 +102,15 @@ type genWatchResponse struct {
 	HistoryId  uint64 `json:"historyId,omitempty,string"`
 }
 
+// genProfile mirrors gmail.Profile (gmail-gen.go:1901): historyId is
+// declared with the `,string` option.
+type genProfile struct {
+	EmailAddress  string `json:"emailAddress,omitempty"`
+	HistoryId     uint64 `json:"historyId,omitempty,string"`
+	MessagesTotal int64  `json:"messagesTotal,omitempty"`
+	ThreadsTotal  int64  `json:"threadsTotal,omitempty"`
+}
+
 // genErrorReply mirrors googleapi.errorReply / googleapi.Error.
 type genErrorReply struct {
 	Error *struct {
@@ -192,6 +201,28 @@ func TestClientWireListAndGet(t *testing.T) {
 	}
 	if _, err := base64.RawURLEncoding.DecodeString(msg.Payload.Body.Data); err != nil {
 		t.Fatalf("body data not base64url: %v", err)
+	}
+}
+
+func TestClientWireGetProfile(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	res := f.seed(testEmail, 3, 7)
+
+	var prof genProfile
+	code, body := clientGet(t, f, "users/me/profile", nil, &prof)
+	if code != http.StatusOK {
+		t.Fatalf("getProfile: status %d body %s", code, body)
+	}
+	if prof.EmailAddress != testEmail {
+		t.Errorf("emailAddress = %q, want %q", prof.EmailAddress, testEmail)
+	}
+	// HistoryId proves the `,string` envelope works end to end.
+	if prof.HistoryId != res.HistoryID {
+		t.Errorf("historyId = %d, want %d", prof.HistoryId, res.HistoryID)
+	}
+	if prof.MessagesTotal != 3 || prof.ThreadsTotal != 3 {
+		t.Errorf("totals = %d/%d, want 3/3", prof.MessagesTotal, prof.ThreadsTotal)
 	}
 }
 

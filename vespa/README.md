@@ -111,8 +111,12 @@ never taken from a request body, query string, or header.
 
 ## Feeding (index-writer contract)
 
-Document v1 API; the path segment `group/<tenant_id>` sets `g=`. PUT (or POST)
-with the full field set. The example below uses `EMBEDDING_DIM=4` — i.e. field
+Document v1 API; the path segment `group/<tenant_id>` sets `g=`. **POST** with
+the full field set — document/v1 reserves PUT for *partial updates*, whose
+bodies use `{"fields": {"<field>": {"assign": ...}}}` syntax; a PUT with plain
+field values is not a full-document put. POST creates or fully replaces the
+document, so replays are idempotent. The example below uses `EMBEDDING_DIM=4`
+— i.e. field
 type `tensor<bfloat16>(chunk{},x[4])` — for readability; real vectors have
 `EMBEDDING_DIM` values per chunk. The mixed tensor uses the **blocks** form:
 one dense array per `chunk` label, and the label is the **stringified index of

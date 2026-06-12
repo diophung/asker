@@ -48,9 +48,11 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 		_ = queryConn.Close()
 		return nil, nil, fmt.Errorf("create control-plane client: %w", err)
 	}
+	counter := newRedisCounter(cfg.RedisAddr)
 	cleanup := func() {
 		_ = queryConn.Close()
 		_ = controlConn.Close()
+		_ = counter.Close()
 	}
 	return &deps{
 		query:   queryv1.NewQueryServiceClient(queryConn),
@@ -58,7 +60,7 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 		hubURL:  strings.TrimRight(cfg.HubHTTPURL, "/"),
 		// Generous timeout: uploads stream through this client.
 		hubClient:      &http.Client{Timeout: 2 * time.Minute},
-		counter:        newRedisCounter(cfg.RedisAddr),
+		counter:        counter,
 		maxUploadBytes: cfg.MaxUploadMB << 20,
 		logger:         logger,
 	}, cleanup, nil

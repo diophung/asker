@@ -84,6 +84,7 @@ func New(opts ...Option) *Server {
 
 	mux := http.NewServeMux()
 	// Gmail API surface (bearer-token authenticated).
+	mux.HandleFunc("GET /gmail/v1/users/{userId}/profile", s.requireAuth(s.handleGetProfile))
 	mux.HandleFunc("GET /gmail/v1/users/{userId}/messages", s.requireAuth(s.handleListMessages))
 	mux.HandleFunc("GET /gmail/v1/users/{userId}/messages/{id}", s.requireAuth(s.handleGetMessage))
 	mux.HandleFunc("GET /gmail/v1/users/{userId}/history", s.requireAuth(s.handleListHistory))
@@ -148,6 +149,19 @@ func (s *Server) requireAuth(next func(w http.ResponseWriter, r *http.Request, e
 }
 
 // --- Gmail API handlers -----------------------------------------------
+
+// handleGetProfile implements GET /gmail/v1/users/{userId}/profile
+// (users.getProfile): the canonical way for clients to learn the mailbox's
+// current historyId (e.g. before starting a full sync).
+func (s *Server) handleGetProfile(w http.ResponseWriter, _ *http.Request, email string) {
+	p := s.store.profile(email)
+	s.writeJSON(w, http.StatusOK, wireProfile{
+		EmailAddress:  email,
+		MessagesTotal: p.messagesTotal,
+		ThreadsTotal:  p.threadsTotal,
+		HistoryID:     p.historyID,
+	})
+}
 
 // handleListMessages implements GET /gmail/v1/users/{userId}/messages
 // (users.messages.list): id+threadId refs, newest first, paginated via

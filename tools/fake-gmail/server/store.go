@@ -240,6 +240,29 @@ func (s *store) seedMessages(email string, inputs []messageInput) upsertResult {
 	return upsertResult{historyID: mb.historyID, watch: mb.watch}
 }
 
+// profileInfo is the users.getProfile snapshot of a mailbox.
+type profileInfo struct {
+	messagesTotal int64
+	threadsTotal  int64
+	historyID     uint64
+}
+
+// profile returns the mailbox's message/thread totals and current historyId.
+func (s *store) profile(email string) profileInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mb := s.mailboxLocked(email)
+	threads := make(map[string]struct{}, len(mb.messages))
+	for _, m := range mb.messages {
+		threads[m.threadID] = struct{}{}
+	}
+	return profileInfo{
+		messagesTotal: int64(len(mb.messages)),
+		threadsTotal:  int64(len(threads)),
+		historyID:     mb.historyID,
+	}
+}
+
 func (s *store) getMessage(email, id string) (*storedMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
