@@ -112,3 +112,19 @@ services:
     replicaCount: 1
     autoscaling: { enabled: false }
     pdb: { enabled: false }
+
+# M4 wave 1 dev overrides: single-node kind/k3d sizing (small storage, single
+# brokers/groups, small TEI model agreeing with config.embeddingDim=384). The
+# heavy operator features stay OFF by default; the CI kind deploy (wave 2)
+# enables the lightweight forms it needs.
+stateful:
+  postgres: { storage: { size: 1Gi } }
+  minio: { storage: { size: 2Gi } }
+  tei: { modelId: BAAI/bge-small-en-v1.5, storage: { size: 2Gi } }
+kafka:
+  strimzi: { replicas: 1, storage: { type: ephemeral } }
+  topics: { partitions: 12, replicas: 1 }
+vespa:
+  groups: 1
+  nodesPerGroup: 1
+  storage: { size: 5Gi }

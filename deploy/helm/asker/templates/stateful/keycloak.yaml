@@ -1,0 +1,186 @@
+{{- /*
+================================================================================
+keycloak — self-hosted Deployment (OIDC issuer the gateway verifies against).
+Compose: image quay.io/keycloak/keycloak:26.3, command `start-dev --import-realm`,
+env KC_HOSTNAME / KC_HTTP_ENABLED / KC_HEALTH_ENABLED / KC_BOOTSTRAP_ADMIN_* /
+JAVA_OPTS_KC_HEAP, ports 8080 (HTTP) + 9000 (management/health), realm JSON mounted
+read-only and imported on boot. Health lives on the MANAGEMENT port (9000):
+GET /health/ready (image has no curl/wget — we use an httpGet probe, which the
+kubelet performs itself, so no in-container HTTP client is needed).
+
+A Deployment (not a StatefulSet) because in start-dev mode Keycloak uses an
+in-memory H2 store and re-imports the realm on boot — there is nothing durable to
+persist (matches compose, which mounts no Keycloak data volume). The realm JSON is
+delivered via a ConfigMap: an integrator-supplied one when
+stateful.keycloak.realmConfigMap is set, else the embedded dev "asker" realm
+(asker.stateful.keycloakRealm — the same realm compose imports). Set
+stateful.keycloak.importRealm=false to skip realm import entirely.
+
+Service "keycloak" (compose DNS) resolves the gateway OIDC JWKS URL
+("http://keycloak:8080/realms/asker/protocol/openid-connect/certs") unchanged.
+Admin bootstrap creds come from the EXISTING dev Secret (KEYCLOAK_ADMIN_USER /
+KEYCLOAK_ADMIN_PASSWORD, dev defaults admin/admin). Gated by stateful.keycloak.deploy
+(default true); flip false to use a managed/central Keycloak (point the gateway
+config.oidcIssuer / oidcJwksUrl at it, ADR-014 §4).
+
+NOTE: start-dev is a DEV posture (matches compose / ADR-003). A production Keycloak
+should run `start` with an external DB + TLS; that hardening is a later wave — this
+renders the cloud-agnostic self-hosted dev default.
+================================================================================
+*/ -}}
+{{- $dep := "keycloak" -}}
+{{- if eq (include "asker.stateful.enabled" (list . $dep)) "true" -}}
+{{- $sf := .Values.stateful | default dict -}}
+{{- $c := index $sf $dep | default dict -}}
+{{- $img := $c.image | default "quay.io/keycloak/keycloak:26.3" -}}
+{{- $httpPort := 8080 -}}
+{{- $mgmtPort := 9000 -}}
+{{- $heap := $c.javaOptsHeap | default "-Xms64m -Xmx512m" -}}
+{{- $hostname := $c.hostname | default "" -}}
+{{- /* Realm import: an integrator ConfigMap wins; else the embedded dev realm. */ -}}
+{{- $importRealm := ne ($c.importRealm | default true | toString) "false" -}}
+{{- $externalRealmCM := $c.realmConfigMap | default "" -}}
+{{- $realmCMName := $externalRealmCM | default (printf "%s-realm" (include "asker.stateful.fullname" (list . $dep))) -}}
+{{- $ports := list (dict "name" "http" "port" $httpPort "appProtocol" "http") (dict "name" "management" "port" $mgmtPort "appProtocol" "http") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "asker.stateful.fullname" (list . $dep) }}
+  labels:
+    {{- include "asker.stateful.labels" (list . $dep) | nindent 4 }}
+spec:
+  replicas: {{ $c.replicaCount | default 1 }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.stateful.labels" (list . $dep) | nindent 8 }}
+      {{- with $c.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with ($c.imagePullSecrets | default .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml ($c.podSecurityContext | default (dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault"))) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $c.terminationGracePeriodSeconds | default 60 }}
+      containers:
+        - name: keycloak
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ $c.imagePullPolicy | default .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "asker.stateful.containerSecurityContext" (list . $dep) | nindent 12 }}
+          args:
+            - start-dev
+            {{- if $importRealm }}
+            - --import-realm
+            {{- end }}
+          env:
+            {{- if $hostname }}
+            - name: KC_HOSTNAME
+              value: {{ $hostname | quote }}
+            {{- end }}
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            # Health/metrics on the dedicated management port (9000).
+            - name: KC_HTTP_MANAGEMENT_PORT
+              value: {{ $mgmtPort | quote }}
+            # Dev-only: cap the heap (default heap is 70% of the node memory when
+            # uncgrouped). Mirrors the compose JAVA_OPTS_KC_HEAP cap (ADR-003 §5).
+            - name: JAVA_OPTS_KC_HEAP
+              value: {{ $heap | quote }}
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "asker.secretName" . }}
+                  key: KEYCLOAK_ADMIN_USER
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "asker.secretName" . }}
+                  key: KEYCLOAK_ADMIN_PASSWORD
+          ports:
+            - name: http
+              containerPort: {{ $httpPort }}
+              protocol: TCP
+            - name: management
+              containerPort: {{ $mgmtPort }}
+              protocol: TCP
+          # Health on the management port (ADR / compose: /health/ready on :9000).
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with ($c.resources | default (dict "requests" (dict "cpu" "250m" "memory" "512Mi") "limits" (dict "cpu" "2" "memory" "768Mi"))) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $importRealm }}
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          {{- end }}
+      {{- if $importRealm }}
+      volumes:
+        - name: realm-import
+          configMap:
+            name: {{ $realmCMName }}
+      {{- end }}
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if and $importRealm (not $externalRealmCM) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $realmCMName }}
+  labels:
+    {{- include "asker.stateful.labels" (list . $dep) | nindent 4 }}
+  annotations:
+    asker.dev/warning: "DEV-ONLY realm (users alice/bob/carol, password123). Provide stateful.keycloak.realmConfigMap or set deploy=false for a managed IdP in production."
+data:
+  realm-asker.json: |-
+    {{- include "asker.stateful.keycloakRealm" . | nindent 4 }}
+{{- end }}
+---
+{{ include "asker.stateful.clusterIPService" (list . $dep $ports) }}
+{{- end -}}

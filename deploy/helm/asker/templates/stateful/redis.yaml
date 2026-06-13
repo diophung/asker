@@ -1,0 +1,111 @@
+{{- /*
+================================================================================
+redis — self-hosted StatefulSet (gateway rate-limit + query result cache).
+Compose: image redis:7, container port 6379, healthcheck redis-cli ping. Compose
+runs redis with no persistence config and no auth (dev-only); we keep that posture
+but attach a small PVC so an RDB/AOF snapshot survives a reschedule if enabled.
+
+Service "redis" (compose DNS) resolves config.redisAddr ("redis:6379") unchanged.
+Gated by stateful.redis.deploy (default true); flip false + point config.redisAddr
+at a managed Redis (ElastiCache/Memorystore — address change only, ADR-014 §4).
+================================================================================
+*/ -}}
+{{- $dep := "redis" -}}
+{{- if eq (include "asker.stateful.enabled" (list . $dep)) "true" -}}
+{{- $sf := .Values.stateful | default dict -}}
+{{- $c := index $sf $dep | default dict -}}
+{{- $img := $c.image | default "redis:7" -}}
+{{- $storage := ($c.storage | default dict).size | default "1Gi" -}}
+{{- $port := 6379 -}}
+{{- $ports := list (dict "name" "redis" "port" $port "appProtocol" "redis") -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "asker.stateful.fullname" (list . $dep) }}
+  labels:
+    {{- include "asker.stateful.labels" (list . $dep) | nindent 4 }}
+spec:
+  serviceName: {{ printf "%s-headless" $dep }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.stateful.labels" (list . $dep) | nindent 8 }}
+      {{- with $c.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with ($c.imagePullSecrets | default .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml ($c.podSecurityContext | default (dict "runAsNonRoot" true "runAsUser" 999 "runAsGroup" 999 "fsGroup" 999 "seccompProfile" (dict "type" "RuntimeDefault"))) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $c.terminationGracePeriodSeconds | default 30 }}
+      containers:
+        - name: redis
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ $c.imagePullPolicy | default .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "asker.stateful.containerSecurityContext" (list . $dep) | nindent 12 }}
+          {{- with $c.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: redis
+              containerPort: {{ $port }}
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with ($c.resources | default (dict "requests" (dict "cpu" "50m" "memory" "64Mi") "limits" (dict "cpu" "1" "memory" "512Mi"))) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "asker.stateful.storageClass" (list . $dep) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ $storage | quote }}
+---
+{{ include "asker.stateful.headlessService" (list . $dep $ports) }}
+---
+{{ include "asker.stateful.clusterIPService" (list . $dep $ports) }}
+{{- end -}}

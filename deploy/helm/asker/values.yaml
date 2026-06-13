@@ -893,3 +893,105 @@ secrets:
     # control-plane DATABASE_URL is composed from postgres* + these creds.
     keycloakAdminUser: "admin"
     keycloakAdminPassword: "admin"
+
+# =============================================================================
+# M4 wave 1 — stateful layer + security (ADR-014/015/016).
+# All keys below also have safe in-template defaults; declared here as the
+# authoritative, documented interface. Heavy/operator-dependent features
+# (Strimzi, Vespa, Vault) default OFF — a greenfield prod values file opts in.
+# values-dev.yaml shrinks these for a single-node kind/k3d cluster.
+# =============================================================================
+
+# Self-hosted stateful dependencies (StatefulSets/Deployments + PVCs). Flip a
+# <dep>.deploy to false to use a managed/external instance and point the
+# corresponding config.* address at it.
+stateful:
+  postgres:
+    deploy: true
+    image: postgres:17
+    storage: { size: 8Gi, className: "" }
+    resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "2", memory: 1Gi } }
+  redis:
+    deploy: true
+    image: redis:7
+    storage: { size: 1Gi, className: "" }
+    resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: "1", memory: 512Mi } }
+  minio:
+    deploy: true
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    storage: { size: 20Gi, className: "" }
+    console: { enabled: true }
+    resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "2", memory: 1Gi } }
+  keycloak:
+    deploy: true
+    image: quay.io/keycloak/keycloak:26.3
+    javaOptsHeap: "-Xms64m -Xmx512m"
+    importRealm: true
+    realmConfigMap: "" # external ConfigMap override; empty = chart's embedded dev realm
+    replicaCount: 1
+    resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: "2", memory: 768Mi } }
+  tei:
+    deploy: true
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    modelId: BAAI/bge-m3 # must agree with config.embeddingDim (1024); dev uses bge-small (384)
+    args: [--json-output, --tokenization-workers, "2", --max-batch-tokens, "4096", --max-concurrent-requests, "32"]
+    storage: { size: 10Gi, className: "", enabled: true }
+    replicaCount: 1
+    resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: "4", memory: 4Gi } }
+
+# Kafka via the Strimzi operator (ADR-003: Redpanda in dev compose, Strimzi in
+# prod). The operator itself is NOT shipped by this chart — install
+# strimzi-kafka-operator in the cluster first; the chart provides the Kafka +
+# KafkaTopic CRs. When enabled, set config.kafkaBrokers to the bootstrap
+# Service: "<clusterName>-kafka-bootstrap:9092".
+kafka:
+  strimzi:
+    enabled: false
+    clusterName: asker-kafka
+    replicas: 3
+    kafkaVersion: "3.9.0"
+    storage: { type: persistent-claim, size: 100Gi, className: "", deleteClaim: false }
+  topics:
+    partitions: 512 # spec §2.7 prod floor; dev overrides to a small number
+    replicas: 3
+
+# Vespa streaming-mode content cluster on K8s (multi-group; a hot tenant's
+# query touches one group — spec §2.7). The application package is deployed by
+# a follow-up Job posting to the config server (see DEPLOY_NOTES).
+vespa:
+  deploy: false
+  groups: 1
+  nodesPerGroup: 1
+  redundancy: 1
+  image: { repository: vespaengine/vespa, tag: "8" }
+  ignoreNotEnoughMemory: "true"
+  containerJvmOptions: "-Xms256m -Xmx768m"
+  storage: { size: 50Gi, storageClass: "" }
+  resources: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "4", memory: 6Gi } }
+
+# HashiCorp Vault Transit as the prod envelope-encryption KEK (ADR-015),
+# replacing the file-KEK dev shim. The shipped dev Vault is in-memory and
+# NON-production; prod runs Vault out-of-band (vault.deploy=false, vault.addr
+# at the external HA Vault) and control-plane/connector-hub pick VaultKEK when
+# VAULT_ADDR is set.
+vault:
+  deploy: false
+  enabled: false
+  addr: "http://vault:8200"
+  keyName: asker-kek
+  image: hashicorp/vault:1.18
+  port: 8200
+  devRootToken: asker-dev-root # dev-only
+
+# Default-deny NetworkPolicies encoding the real call graph (ADR-016).
+# Requires a policy-enforcing CNI (Calico/Cilium) to be meaningful.
+networkPolicy:
+  enabled: true
+  restrictEgress: false
+  deps: { enabled: true }
+
+# Internal TLS/mTLS scaffolding (ADR-016). Full mTLS needs a mesh/cert-manager;
+# cert-manager Certificate CRs are gated here and the public edge TLS is the
+# gateway Ingress (wave 0).
+tls:
+  internal: { enabled: false, issuer: "" }

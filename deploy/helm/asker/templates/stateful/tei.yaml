@@ -1,0 +1,157 @@
+{{- /*
+================================================================================
+tei — self-hosted Text Embeddings Inference (the dense-embedding model server).
+Compose: image ghcr.io/huggingface/text-embeddings-inference:cpu-1.8,
+container port 80, env MODEL_ID (default BAAI/bge-m3; CI/dev override to a small
+model), args `--json-output --tokenization-workers 2 --max-batch-tokens 4096
+--max-concurrent-requests 32`, volume tei-cache:/data (HUGGINGFACE_HUB_CACHE=/data),
+healthcheck GET /health. First boot downloads model weights (~2.3GB for bge-m3),
+so a generous startupProbe guards liveness while the model loads.
+
+A Deployment + a SEPARATE model-cache PVC (not volumeClaimTemplates) so a single
+RWO cache volume is reused across rollouts and the weights are not re-downloaded on
+every pod restart (the cache is shared, not per-replica identity state). Scale via
+stateful.tei.replicaCount (each replica mounts the same RWO PVC => keep at 1 unless
+the storageClass is RWX; for true scale-out, point config.teiUrl at a managed TEI
+fleet and set stateful.tei.deploy=false).
+
+Service "tei" (compose DNS) resolves config.teiUrl ("http://tei:80") unchanged.
+Gated by stateful.tei.deploy (default true). MODEL_ID + dim must agree with the
+deployed Vespa schema and config.embeddingDim (ADR-005): prod bge-m3 (1024),
+the dev profile sets the small bge-small (384) — set stateful.tei.modelId in
+values-dev to BAAI/bge-small-en-v1.5 to match config.embeddingDim 384.
+================================================================================
+*/ -}}
+{{- $dep := "tei" -}}
+{{- if eq (include "asker.stateful.enabled" (list . $dep)) "true" -}}
+{{- $sf := .Values.stateful | default dict -}}
+{{- $c := index $sf $dep | default dict -}}
+{{- $img := $c.image | default "ghcr.io/huggingface/text-embeddings-inference:cpu-1.8" -}}
+{{- $storage := ($c.storage | default dict).size | default "10Gi" -}}
+{{- $cacheEnabled := ne ((($c.storage | default dict).enabled) | default true | toString) "false" -}}
+{{- $port := 80 -}}
+{{- $modelId := $c.modelId | default "BAAI/bge-m3" -}}
+{{- $args := $c.args | default (list "--json-output" "--tokenization-workers" "2" "--max-batch-tokens" "4096" "--max-concurrent-requests" "32") -}}
+{{- $ports := list (dict "name" "http" "port" $port "appProtocol" "http") -}}
+{{- $fullname := include "asker.stateful.fullname" (list . $dep) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "asker.stateful.labels" (list . $dep) | nindent 4 }}
+spec:
+  replicas: {{ $c.replicaCount | default 1 }}
+  strategy:
+    # RWO model-cache PVC can attach to one node at a time; Recreate avoids a
+    # multi-attach deadlock during rollout.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.stateful.labels" (list . $dep) | nindent 8 }}
+      {{- with $c.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with ($c.imagePullSecrets | default .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml ($c.podSecurityContext | default (dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault"))) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $c.terminationGracePeriodSeconds | default 30 }}
+      containers:
+        - name: tei
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ $c.imagePullPolicy | default .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "asker.stateful.containerSecurityContext" (list . $dep) | nindent 12 }}
+          args:
+            {{- toYaml $args | nindent 12 }}
+          env:
+            - name: MODEL_ID
+              value: {{ $modelId | quote }}
+            # HF cache dir (the image defaults HUGGINGFACE_HUB_CACHE=/data; set it
+            # explicitly so the mounted PVC below is the download target).
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /data
+          ports:
+            - name: http
+              containerPort: {{ $port }}
+              protocol: TCP
+          # First boot downloads weights (~2.3GB for bge-m3); the startupProbe
+          # gives up to ~25 min (150 * 10s) before liveness applies (compose uses
+          # start_period 20m), so a still-downloading pod is not killed.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 150
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          {{- with ($c.resources | default (dict "requests" (dict "cpu" "500m" "memory" "1Gi") "limits" (dict "cpu" "4" "memory" "4Gi"))) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /data
+      volumes:
+        - name: model-cache
+          {{- if $cacheEnabled }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-cache
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if $cacheEnabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-cache
+  labels:
+    {{- include "asker.stateful.labels" (list . $dep) | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "asker.stateful.storageClass" (list . $dep) | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ $storage | quote }}
+{{- end }}
+---
+{{ include "asker.stateful.clusterIPService" (list . $dep $ports) }}
+{{- end -}}

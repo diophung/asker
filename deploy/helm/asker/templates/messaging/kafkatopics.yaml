@@ -1,0 +1,53 @@
+{{- /*
+Strimzi KafkaTopic CRs (kafka.strimzi.io/v1beta2) for the four pipeline topics
+(ADR-004): docs.raw -> docs.chunked -> docs.enriched, plus docs.deadletter for
+poison-document quarantine. The Strimzi Topic Operator (entityOperator in the
+Kafka CR) reconciles these into real Kafka topics.
+
+Records are keyed by tenant_id (ADR-004 §2) for per-tenant ordering, so partition
+count is the per-topic parallelism ceiling across the fleet. Spec §2.7 / ADR-004
+§6: >=512 partitions in PROD; a much smaller dev default (e.g. 12) belongs in
+values-dev.yaml. INTEGRATOR: see the build report — kafka.topics.partitions
+default is 512 (prod), and values-dev.yaml must override it to a small number for
+single-node kind/k3d (changing partition counts later re-shuffles tenant->partition
+assignment and transiently breaks per-tenant ordering, so size it once).
+
+Per-topic overrides come from `kafka.topics.overrides.<topic-key>` (a topic-key is
+the topic name with "." replaced by "-", a valid CR metadata.name). Gated behind
+kafka.strimzi.enabled. apiVersion kafka.strimzi.io/... is kubeconform-skipped.
+*/ -}}
+{{- $kafka := .Values.kafka | default dict -}}
+{{- $strimzi := $kafka.strimzi | default dict -}}
+{{- if $strimzi.enabled -}}
+{{- $topicsCfg := $kafka.topics | default dict -}}
+{{- $partitions := int ($topicsCfg.partitions | default 512) -}}
+{{- $strimziReplicas := int ($strimzi.replicas | default 3) -}}
+{{- $replicas := int ($topicsCfg.replicas | default (min $strimziReplicas 3)) -}}
+{{- $retentionMs := $topicsCfg.retentionMs | default "604800000" -}}
+{{- $overrides := $topicsCfg.overrides | default dict -}}
+{{- /* The four pipeline topics (ADR-004 §1/§5). Keep names in sync with
+       platform/kafkautil topic constants. */ -}}
+{{- $topics := list "docs.raw" "docs.chunked" "docs.enriched" "docs.deadletter" -}}
+{{- range $topic := $topics }}
+{{- $key := $topic | replace "." "-" }}
+{{- $o := index $overrides $key | default dict }}
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  # CR metadata.name must be RFC-1123; Strimzi maps it to the real topic via
+  # spec.topicName so the dotted Kafka name is preserved exactly (ADR-004 §1).
+  name: {{ $key }}
+  labels:
+    {{- include "asker.kafka.topicLabels" $ | nindent 4 }}
+spec:
+  topicName: {{ $topic | quote }}
+  partitions: {{ $o.partitions | default $partitions }}
+  replicas: {{ $o.replicas | default $replicas }}
+  config:
+    retention.ms: {{ ($o.retentionMs | default $retentionMs) | quote }}
+    {{- with $o.config }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

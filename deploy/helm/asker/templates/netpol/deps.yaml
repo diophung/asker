@@ -1,0 +1,194 @@
+{{- /*
+================================================================================
+Dependency INGRESS allow policies (ADR-016). Each stateful dependency that lives
+IN this release namespace accepts connections only from the app services that
+dial it (call graph from deploy/compose/docker-compose.yml). The dependency pods
+are selected by the configurable .Values.networkPolicy.deps.<dep>.podSelector
+(default: app.kubernetes.io/part-of: asker + app.kubernetes.io/component: <dep>),
+because the sibling stateful-layer builder owns those StatefulSets' exact labels.
+
+  redis     <- gateway, query, ingest          :6379
+  vespa     <- query, index-writer             :8080
+  tei       <- query, enrich                   :80
+  clip      (app service; in allow-app-services.yaml)
+  postgres  <- control-plane                   :5432
+  minio     <- connector-hub                   :9000
+  vault     <- connector-hub, control-plane    :8200
+  kafka     <- ingest, enrich, index-writer, connector-hub :9092
+
+GATING: this whole file is gated behind networkPolicy.deps.enabled (default
+true). Flip it off when a dependency runs OUTSIDE the namespace / cluster (a
+managed Postgres, an external Vault, a Strimzi Kafka in its own namespace) — then
+that dependency is not subject to these in-namespace policies and the connection
+is governed by the app-side egress posture (networkPolicy.restrictEgress) plus
+the external network. Per-dep selectors let an operator point a policy at the
+real labels the stateful builder chose without editing templates.
+
+These dependency-side INGRESS policies are the enforced complement to the
+optional app-side egress policies in allow-egress.yaml: ingress-default-deny
+means a dep only accepts the named callers regardless of restrictEgress.
+*/ -}}
+{{- if (include "asker.netpol.enabled" .) }}
+{{- $root := . -}}
+{{- $np := .Values.networkPolicy | default dict -}}
+{{- $deps := $np.deps | default dict -}}
+{{- if ne (toString (dig "enabled" true $deps)) "false" }}
+# --- redis: query cache + gateway rate limiter; from gateway, query, ingest ----
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-redis-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- $sel := (dig "redis" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "redis")) $deps) }}
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "gateway") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "query") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "ingest") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# --- vespa: search backend; from query (search) + index-writer (feed) ----------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-vespa-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- $sel := (dig "vespa" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "vespa")) $deps) }}
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "query") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "index-writer") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# --- tei: text embeddings; from query (query embed) + enrich (doc embed) --------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-tei-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- $sel := (dig "tei" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "tei")) $deps) }}
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "query") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "enrich") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 80
+---
+# --- postgres: control-plane token vault / registry; from control-plane only ----
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-postgres-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- $sel := (dig "postgres" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "postgres")) $deps) }}
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "control-plane") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# --- minio: blob store; from connector-hub only --------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-minio-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- $sel := (dig "minio" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "minio")) $deps) }}
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "connector-hub") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+# --- vault: KEK provider (ADR-013/016); from connector-hub + control-plane ------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-vault-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- $sel := (dig "vault" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "vault")) $deps) }}
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "connector-hub") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "control-plane") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8200
+---
+# --- kafka/redpanda: event backbone; from the four Kafka clients ----------------
+# Strimzi Kafka in prod (ADR-003 §1), redpanda in dev compose. Bootstrap +
+# broker listener on 9092. Producers/consumers: ingest, enrich, index-writer,
+# connector-hub.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-kafka-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- $sel := (dig "kafka" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "kafka")) $deps) }}
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "ingest") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "enrich") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "index-writer") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "connector-hub") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+{{- end }}
+{{- end }}

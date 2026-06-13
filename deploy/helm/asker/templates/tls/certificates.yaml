@@ -1,0 +1,32 @@
+{{- /*
+================================================================================
+Per-service cert-manager Certificate CRs for internal mTLS (ADR-016).
+
+GATED OFF BY DEFAULT (tls.internal.enabled=false). When an operator enables it AND
+cert-manager is installed with the named issuer (tls.issuer), this renders one
+Certificate per ENABLED app service, each producing a Secret named
+<fullname>-<svc>-tls (asker.tls.secretName) holding a keypair whose SANs cover the
+service's in-cluster DNS (asker.tls.dnsNames). A service mesh or the service's own
+TLS config then mounts that Secret to present/verify peer certs — THIS chart does
+not itself terminate TLS in the app containers (the binaries speak plaintext on
+the internal network today; see ADR-016 "wired vs documented").
+
+Certificate is a cert-manager CRD (cert-manager.io/v1); kubeconform skips it via
+-ignore-missing-schemas, like the Strimzi / Vespa-operator kinds elsewhere in the
+chart. Rendering requires cert-manager's CRDs to be installed in the target
+cluster; this is why the feature is opt-in and documented as prod-config, not
+enforced now.
+*/ -}}
+{{- if (include "asker.tls.enabled" .) }}
+{{- $root := . -}}
+{{- $first := true -}}
+{{- range $svc, $cfg := .Values.services }}
+{{- if ne ($cfg.enabled | toString) "false" }}
+{{- if not $first }}
+---
+{{- end }}
+{{- $first = false }}
+{{ include "asker.tls.certificate" (list $root $svc) }}
+{{- end }}
+{{- end }}
+{{- end }}

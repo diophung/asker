@@ -1,0 +1,48 @@
+{{- /*
+Strimzi KafkaNodePool (kafka.strimzi.io/v1beta2) — required by current Strimzi
+KRaft mode (the Kafka CR carries "strimzi.io/node-pools: enabled" +
+"strimzi.io/kraft: enabled"; the actual broker/controller nodes + their storage
+live in node pools). One combined pool (controller+broker roles) keeps the prod
+topology simple while staying ZK-less.
+
+`kafka.strimzi.replicas` (default 3) sizes the pool. Storage is ephemeral or
+persistent-claim with a cloud-agnostic, configurable storageClass (default "" =>
+cluster default; NO provider class name). Gated behind kafka.strimzi.enabled.
+
+apiVersion kafka.strimzi.io/... is kubeconform-skipped (-ignore-missing-schemas);
+the Strimzi operator validates it on apply.
+*/ -}}
+{{- $kafka := .Values.kafka | default dict -}}
+{{- $strimzi := $kafka.strimzi | default dict -}}
+{{- if $strimzi.enabled -}}
+{{- $storage := $strimzi.storage | default dict -}}
+{{- $storageType := $storage.type | default "persistent-claim" -}}
+{{- $persistence := .Values.persistence | default dict -}}
+{{- $storageClass := $storage.storageClass | default $persistence.storageClass | default "" -}}
+{{- $replicas := int ($strimzi.replicas | default 3) -}}
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: {{ printf "%s-pool" (include "asker.kafka.clusterName" .) }}
+  labels:
+    {{- include "asker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: messaging
+    # Strimzi associates a node pool with its Kafka cluster via this label.
+    strimzi.io/cluster: {{ include "asker.kafka.clusterName" . }}
+spec:
+  replicas: {{ $replicas }}
+  roles:
+    - controller
+    - broker
+  storage:
+    {{- if eq $storageType "ephemeral" }}
+    type: ephemeral
+    {{- else }}
+    type: persistent-claim
+    size: {{ $storage.size | default "100Gi" | quote }}
+    deleteClaim: {{ $storage.deleteClaim | default false }}
+    {{- if $storageClass }}
+    class: {{ $storageClass | quote }}
+    {{- end }}
+    {{- end }}
+{{- end }}
