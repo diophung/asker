@@ -484,17 +484,26 @@ class FFmpegVideoExtractor:
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / f"in{in_suffix}"
             src.write_bytes(video)
-            frames = self._extract_with_filter(
-                src,
-                Path(d),
+            # Try, in order: scene-cut selection, then periodic sampling (for
+            # low-motion clips that trip no scene cut), then a single first
+            # frame (for clips shorter than the sampling interval). Each filter
+            # that yields no frames makes ffmpeg exit non-zero ("Nothing was
+            # written") — treat that as "this method found nothing" and fall
+            # through, NEVER dead-lettering the video: a clip with no extractable
+            # keyframes must still index its ASR transcript (the exit criterion).
+            filters = (
                 f"select='gt(scene,{self._scene_threshold})',showinfo",
-                max_keyframes,
+                "fps=1/5,showinfo",
+                "select='eq(n\\,0)',showinfo",  # guaranteed first frame as a poster
             )
-            if not frames:
-                # Fallback: periodic sampling (1 frame / 5 s) for low-motion clips
-                # that trip no scene cut.
-                frames = self._extract_with_filter(src, Path(d), "fps=1/5,showinfo", max_keyframes)
-            return frames
+            for vf in filters:
+                try:
+                    frames = self._extract_with_filter(src, Path(d), vf, max_keyframes)
+                except MediaError:
+                    frames = []  # this filter produced no frames; try the next
+                if frames:
+                    return frames
+            return []
 
     def _extract_with_filter(
         self, src: Path, workdir: Path, vf: str, max_keyframes: int

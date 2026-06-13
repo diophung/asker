@@ -31,10 +31,15 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 # --- known content (kept in sync with manifest.json the test reads) ----------
-PHRASE="the quarterly roadmap review happens on tuesday afternoon"
-# Rare-ish words from the phrase the test searches for (whisper-tiny must
-# transcribe at least one of these for the spoken-phrase->video arm to match).
-ASR_WORDS='["roadmap","quarterly","tuesday"]'
+# Phrase uses only single, whisper-verbatim words (no compounds like "roadmap"
+# which whisper-tiny splits into "road map", breaking a one-word keyword match).
+PHRASE="the quarterly planning review happens on tuesday afternoon"
+# Words the test searches for; whisper-tiny must transcribe at least one
+# verbatim for the spoken-phrase->video@timestamp arm to match.
+ASR_WORDS='["tuesday","planning","afternoon"]'
+# Leading silence (ms) prepended before the speech, so the transcript segment
+# starts mid-clip and the deep-link timestamp is demonstrably non-zero.
+LEAD_SILENCE_MS=2500
 BLUE_WORD="OCEAN"
 RED_WORD="SUNSET"
 
@@ -52,13 +57,20 @@ DUR="$(ffprobe -v error -show_entries format=duration \
   -of default=noprint_wrappers=1:nokey=1 "$TMP/p.aiff")"
 echo "   speech duration: ${DUR}s"
 
+# Total clip = leading silence + speech, so the spoken phrase starts at
+# ~LEAD_SILENCE_MS and its transcript segment has a non-zero start_ms.
+TOTAL="$(python3 -c 'import sys;print(float(sys.argv[1])+float(sys.argv[2])/1000.0)' "$DUR" "$LEAD_SILENCE_MS")"
+echo "   lead silence: ${LEAD_SILENCE_MS}ms; total clip: ${TOTAL}s"
+
 # Tiny .mp4: 160x120 solid color at 8fps with a keyframe every 16 frames, muxed
-# with the say audio (mono 16kHz AAC @ 24k). H.264 + faststart so any player /
+# with the say audio DELAYED by LEAD_SILENCE_MS (adelay) and padded to the full
+# duration (mono 16kHz AAC @ 24k). H.264 + faststart so any player /
 # ffmpeg-based enrich worker can demux the audio track for whisper.
 ffmpeg -v error -y \
-  -f lavfi -i "color=c=0x1f4e79:s=160x120:d=${DUR}:r=8" \
+  -f lavfi -i "color=c=0x1f4e79:s=160x120:d=${TOTAL}:r=8" \
   -i "$TMP/p.aiff" \
-  -shortest \
+  -filter_complex "[1:a]adelay=${LEAD_SILENCE_MS}|${LEAD_SILENCE_MS},apad[a]" \
+  -map 0:v -map "[a]" -shortest \
   -c:v libx264 -preset veryfast -crf 40 -pix_fmt yuv420p -g 16 \
   -c:a aac -b:a 24k -ac 1 -ar 16000 \
   -movflags +faststart \

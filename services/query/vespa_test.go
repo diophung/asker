@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
 	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
 )
 
@@ -387,6 +388,30 @@ func TestPopulateMediaFieldsMediaStaysPopulated(t *testing.T) {
 	}
 	if h.GetEndMs() != 90000 {
 		t.Errorf("EndMs = %d, want 90000 for the matched ASR chunk", h.GetEndMs())
+	}
+}
+
+// TestPopulateMediaFallbackToFirstTranscriptChunk: a media hit whose matched
+// chunk could not be pinpointed from snippet highlights still anchors to its
+// first timestamped (asr/ocr) chunk, so the deep-link is reliable.
+func TestPopulateMediaFallbackToFirstTranscriptChunk(t *testing.T) {
+	var hit queryv1.Hit
+	f := vespaHitFields{
+		ChunkSnippets:   []string{"no highlight here", ""}, // no <hi> anywhere
+		ChunkModalities: []string{"asr", "caption"},
+		ChunkStartsMs:   []int64{2500, 0},
+		ChunkEndsMs:     []int64{6000, 0},
+		ThumbnailKey:    "thumb/v.jpg",
+	}
+	populateMediaFields(&hit, f, retrieveHybrid)
+	if hit.GetModality() != "asr" {
+		t.Errorf("Modality = %q, want asr (fallback to first transcript chunk)", hit.GetModality())
+	}
+	if hit.GetStartMs() != 2500 || hit.GetEndMs() != 6000 {
+		t.Errorf("segment = [%d,%d], want [2500,6000]", hit.GetStartMs(), hit.GetEndMs())
+	}
+	if hit.GetThumbnailKey() != "thumb/v.jpg" {
+		t.Errorf("ThumbnailKey = %q, want thumb/v.jpg", hit.GetThumbnailKey())
 	}
 }
 

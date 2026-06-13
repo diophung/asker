@@ -168,8 +168,11 @@ class MediaHandler:
                 char_end=len(ocr_text.encode("utf-8")),
             )
 
-        # CLIP image embedding (clip_embedding) on a caption chunk.
-        clip_vecs = await self._clip.embed_images([fetched.data])
+        # CLIP image embedding (clip_embedding) on a caption chunk. Degrade
+        # gracefully if the clip service is unavailable: the image still indexes
+        # its OCR text (and metadata) — a CLIP outage must not lose the document
+        # (ADR-006/013 degradation, mirroring the query service's CLIP arm).
+        clip_vecs = await self._embed_images_or_degrade(doc, [fetched.data])
         if clip_vecs:
             self._add_caption_chunk(doc, embedding=clip_vecs[0])
 
@@ -241,8 +244,11 @@ class MediaHandler:
             self._max_keyframes,
         )
         keyframes = list(keyframes or [])
-        if keyframes:
-            clip_vecs = await self._clip.embed_images([kf.jpeg for kf in keyframes])
+        # Degrade gracefully if the clip service is unavailable: the video still
+        # indexes its ASR transcript (the spoken-phrase exit criterion) — a CLIP
+        # outage must not dead-letter the document and lose its transcript.
+        clip_vecs = await self._embed_images_or_degrade(doc, [kf.jpeg for kf in keyframes])
+        if keyframes and clip_vecs:
             for i, (kf, vec) in enumerate(zip(keyframes, clip_vecs, strict=True)):
                 chunk = self._add_caption_chunk(
                     doc, embedding=vec, start_ms=kf.ts_ms, end_ms=kf.ts_ms
@@ -260,6 +266,28 @@ class MediaHandler:
                 doc.tenant_id, f"thumb/{doc.doc_id}.jpg", "image/jpeg", keyframes[0].jpeg
             )
             _set_blobref(doc.media.thumbnail, poster)
+
+    async def _embed_images_or_degrade(
+        self, doc: document_pb2.Document, images: Sequence[bytes]
+    ) -> list[list[float]]:
+        """CLIP-embed images, degrading to [] if the clip service is unavailable.
+
+        A clip outage must NOT dead-letter the document: an image still indexes
+        its OCR text and a video still indexes its ASR transcript. The vector
+        (text/keyword/OCR/ASR) arm carries the document; only pure text->image
+        visual matching is lost until clip recovers (ADR-006/013). A re-sync
+        after clip is back re-adds the CLIP chunks (idempotent doc_id upsert).
+        """
+        if not images:
+            return []
+        try:
+            return await self._clip.embed_images(list(images))
+        except mc.MediaError as exc:
+            log.warning(
+                "clip unavailable; indexing without CLIP embeddings (text/OCR/ASR only)",
+                extra={"doc_id": doc.doc_id, "tenant_id": doc.tenant_id, "error": str(exc)},
+            )
+            return []
 
     # --- chunk builders -----------------------------------------------------
 

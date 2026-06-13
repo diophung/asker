@@ -473,15 +473,13 @@ async def test_enrich_is_idempotent_across_retries():
 
 @pytest.mark.parametrize(
     "broken",
-    ["fetch", "clip", "whisper"],
+    ["fetch", "whisper"],
 )
 async def test_collaborator_failure_raises_for_retry_loop(broken):
-    """A media collaborator failure raises (not crashes) so the worker retries."""
+    """A non-degradable collaborator failure (media fetch, ASR) raises so the
+    worker's retry/dead-letter loop sees it — never a silent crash."""
     if broken == "fetch":
         handler = make_handler(store=FakeStore(fail_fetch=True))
-        doc = make_media_doc(document_pb2.IMAGE, content_type="image/png")
-    elif broken == "clip":
-        handler = make_handler(clip=FakeClip(fail=True))
         doc = make_media_doc(document_pb2.IMAGE, content_type="image/png")
     else:  # whisper
 
@@ -491,7 +489,43 @@ async def test_collaborator_failure_raises_for_retry_loop(broken):
         handler = make_handler(transcriber=boom)
         doc = make_media_doc(document_pb2.AUDIO, content_type="audio/wav")
 
-    # The failure propagates (raises) rather than being swallowed, so the
-    # worker's retry/dead-letter loop sees it — never a silent crash.
     with pytest.raises(mc.MediaError):
         await handler.enrich(doc)
+
+
+async def test_clip_failure_degrades_not_dead_letters_image():
+    """A clip outage must NOT dead-letter: the image still indexes its OCR text
+    (and the video its ASR transcript). Only the CLIP caption chunk is dropped."""
+    store = FakeStore(data=b"png-bytes", content_type="image/png")
+    handler = make_handler(
+        store=store,
+        clip=FakeClip(fail=True),
+        ocr=fake_ocr_returning("INVOICE total"),
+        thumbnailer=fake_thumbnailer(),
+    )
+    doc = make_media_doc(document_pb2.IMAGE, content_type="image/png")
+    out = parse(await handler.enrich(doc))  # must not raise
+    assert chunks_by_modality(out, MOD_OCR), "OCR chunk lost when clip degraded"
+    assert not chunks_by_modality(out, MOD_CAPTION), (
+        "caption chunk should be dropped when clip down"
+    )
+
+
+async def test_clip_failure_keeps_video_asr_transcript():
+    video = FakeVideo(
+        info=mc.VideoInfo(duration_ms=30000, width=640, height=480, has_audio=True),
+        audio=b"wav",
+        keyframes=[mc.KeyframeImage(ts_ms=2000, jpeg=b"frame-0")],
+    )
+    handler = make_handler(
+        clip=FakeClip(fail=True),
+        video=video,
+        transcriber=fake_transcriber([(1.5, 4.2, "the quarterly review")], language="en"),
+    )
+    doc = make_media_doc(document_pb2.VIDEO, content_type="video/mp4")
+    out = parse(await handler.enrich(doc))  # must not raise
+    asr = chunks_by_modality(out, MOD_ASR)
+    assert asr and asr[0].start_ms == 1500, "ASR transcript lost when clip degraded on a video"
+    assert not chunks_by_modality(out, MOD_CAPTION), (
+        "keyframe captions should be dropped when clip down"
+    )

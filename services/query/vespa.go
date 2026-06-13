@@ -401,6 +401,15 @@ func populateMediaFields(hit *queryv1.Hit, f vespaHitFields, kind retrievalKind)
 		idx = matchedClipChunkIndex(f.SummaryFeatures)
 	} else {
 		idx = matchedTextChunkIndex(f.ChunkSnippets)
+		// A media hit matched by the text arm should anchor to a transcript
+		// segment even when Vespa's dynamic summary did not highlight the term
+		// in a returned snippet, so the timestamp deep-link is reliable rather
+		// than dependent on snippet highlighting. Fall back to the first
+		// timestamped media chunk (asr/ocr); a pure-text doc has none and stays
+		// at the whole-document/non-media case.
+		if idx < 0 {
+			idx = firstTimedMediaChunkIndex(f.ChunkModalities)
+		}
 	}
 	if idx < 0 || idx >= len(f.ChunkModalities) {
 		return
@@ -425,6 +434,19 @@ func matchedTextChunkIndex(chunkSnippets []string) int {
 	const hi = "<hi>"
 	for i, cs := range chunkSnippets {
 		if strings.Contains(cs, hi) {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstTimedMediaChunkIndex returns the index of the first asr/ocr chunk (a
+// timestamped media segment), or -1 when there is none. It anchors a media
+// hit's deep-link to its first transcript segment when the exact matched chunk
+// could not be pinpointed from the snippet highlights.
+func firstTimedMediaChunkIndex(modalities []string) int {
+	for i, m := range modalities {
+		if m == "asr" || m == "ocr" {
 			return i
 		}
 	}

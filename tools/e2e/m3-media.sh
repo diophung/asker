@@ -120,18 +120,29 @@ print(d)
 
 # upload USER FILE TITLE: POST /v1/upload as USER; on 202 print the doc_id.
 # Body lands in $TMP/upload.json for diagnostics.
+#
+# The upload connector's doc_id is content-addressed (sha256 of the bytes), and
+# ingest dedupes by (doc_id, version_etag). The committed fixtures are static,
+# so to keep the suite RERUNNABLE (a prior run's dead-lettered/indexed copy must
+# not dedupe-skip this run) we make each upload content-unique per run: copy the
+# fixture and append a run-scoped marker as trailing bytes. PNG readers stop at
+# IEND and MP4/ffmpeg read the valid boxes, so the trailing marker is ignored by
+# OCR/CLIP/ffmpeg/whisper but changes the content hash -> a fresh doc_id.
 upload() {
-  local user="$1" file="$2" title="$3" tok code ct
+  local user="$1" file="$2" title="$3" tok code ct uniq
   tok="$(fetch_token "$user")" || return 1
   case "$file" in
     *.mp4) ct="video/mp4" ;;
     *.png) ct="image/png" ;;
     *) ct="application/octet-stream" ;;
   esac
+  uniq="$TMP/upload-$(basename "$file")"
+  cp "$file" "$uniq" || return 1
+  printf '\n<!-- asker-e2e-run %s -->\n' "$RUN_ID" >>"$uniq"
   code="$(curl -s -o "$TMP/upload.json" -w '%{http_code}' --max-time 120 \
     -X POST "${GATEWAY_URL}/v1/upload" \
     -H "Authorization: Bearer ${tok}" \
-    -F "file=@${file};type=${ct}" -F "title=${title}")" || code="000"
+    -F "file=@${uniq};type=${ct}" -F "title=${title}")" || code="000"
   if [ "$code" != "202" ]; then
     echo "upload HTTP ${code}: $(head -c 200 "$TMP/upload.json" 2>/dev/null || true)" >&2
     return 1
@@ -279,7 +290,7 @@ fi
 
 # Load known content from the manifest.
 PHRASE="$(manifest video.phrase 2>/dev/null || echo '')"
-ASR_WORD="$(manifest video.asr_words.0 2>/dev/null || echo 'roadmap')"
+ASR_WORD="$(manifest video.asr_words.0 2>/dev/null || echo 'tuesday')"
 CLIP_MS="$(manifest video.duration_ms 2>/dev/null || echo '0')"
 VIDEO_TITLE="m3-${RUN_ID}-$(manifest video.title 2>/dev/null | tr ' ' '-' || echo video)"
 BLUE_WORD="$(manifest images.0.word 2>/dev/null || echo 'OCEAN')"
