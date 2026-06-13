@@ -17,6 +17,54 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — M1 vertical slice (functionally complete; full-scale e2e gated on dev VM memory)
+
+- Done: **The M1 vertical slice runs end to end on the live stack.** Gmail + upload connectors
+  → connector-hub → Kafka (`docs.raw`) → ingest (normalize/dedupe/chunk) → enrich (Python, TEI
+  embeddings) → index-writer → Vespa streaming groups; query service (hybrid + degradation +
+  Redis cache) behind the gateway REST API; React search UI. 16-service compose stack, all
+  healthy. Built in three parallel waves (platform libs + SDK + control-plane + Vespa-v1 +
+  fake-gmail + web; then the 7 pipeline services; then the e2e/leakage suites), each integrated
+  and committed.
+  - **New platform libs:** `kafkautil` (tenant-enforcing producer/consumer, at-least-once +
+    deadletter), `crypto` (per-tenant envelope encryption, file-KEK dev shim), `blob` (encrypted
+    MinIO store), tenancy gRPC/Kafka propagation. `connectors/sdk` + `connectortest`.
+  - **Services:** control-plane (encrypted token vault, SchedulerService), connector-hub
+    (scheduler, webhooks, upload), ingest, enrich, index-writer, query, gateway REST buildout
+    (search/connectors/upload + per-tenant rate limit + CORS).
+  - **Verified directly against the live stack:** hybrid search precise (rare token → 1 hit) AND
+    vector-ranked (closeness contributes — scores vary); keyword + hybrid + degradation paths;
+    tenant isolation (per-group doc_id distinctness; streaming.groupname enforced).
+  - **Adversarial review (21 agents):** 2 blockers + 1 major + minors found and fixed — ingest
+    at-least-once (record-after-produce), hybrid vector signal (rank() operator), scheduler
+    concurrent-sync drain, enrich retry/acks parity, before: date inclusivity. All with
+    regression tests. 9 findings refuted as non-issues.
+  - **Sacred cross-tenant leakage suite passes** (search/header-injection/param-injection/
+    resource-id/token-abuse/internal-port-exposure isolation, 49 checks).
+- Next: **M2 — connector framework + breadth.** Finalize the SDK (in-proc + gRPC plugin), then
+  Outlook mail, Google Drive (ACLs), S3, calendars, iCal, Slack, Confluence, Jira, WhatsApp
+  export, iMessage agent; connector management UI; "build a connector in <1 day" tutorial proven
+  by implementing MS Teams. Before M2, run the full `tools/e2e/m1-e2e.sh` at 10K scale in CI
+  (see known issues) to formally bank the M1 exit criterion.
+- Known issues:
+  - **The full 3-tenant / 10K-email e2e (`tools/e2e/m1-e2e.sh`) cannot run to completion on this
+    8 GB Docker VM** — it is shared with two other always-on stacks (~3 GB), and the 16-service
+    Asker stack under multi-tenant ingest load OOM-kills Vespa (exit 137), bringing the project
+    down. The suite is wired into CI (`e2e-m1` job, ubuntu-latest 16 GB) where it has the
+    headroom. Locally, every behavior the suite asserts was verified directly (search precision,
+    vector ranking, isolation, the leakage suite). **Recommend bumping Docker Desktop memory to
+    ≥14 GB before relying on the full local e2e.** The stack at rest fits comfortably (~3–4 GB);
+    only concurrent ingest + builds + heavy host commands tip it over.
+  - Pipeline freshness/delete/upload paths are exercised by the leakage suite (upload + isolation
+    + post-attack re-sync) and by direct verification, but the m1-e2e suite's freshness/delete
+    stopwatch assertions have only been validated for logic, not run green at scale locally — CI
+    is the proving ground.
+  - gmail `replayHistory` buffers a full `history.list` response in memory (fine at M1 scale;
+    bound it for M5 large-corpus seeding — review finding, deferred with the other scale work).
+  - SSRF: connector `base_url`/`webhook_url` are tenant-supplied and fetched server-side without
+    host validation. Acceptable under the M1 closed-network trust model (ADR-009); harden in
+    M4 (NetworkPolicy/egress) and the M6 security review.
+
 ## 2026-06-12 — M0 closed
 
 - Done: **M0 complete — `make dev-up && make e2e-smoke` passes (all 19 checks).**

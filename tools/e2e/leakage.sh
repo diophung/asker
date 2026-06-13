@@ -866,7 +866,10 @@ else
 fi
 
 begin "vespa :8082: query WITHOUT streaming.groupname fails closed (0 hits + error)"
-body="$("${CURL[@]}" -G "${VESPA_URL}/search/" \
+# Plain curl (no -f): Vespa rejects a group-less streaming query with HTTP 400,
+# and the JSON error body is exactly the fail-closed evidence we assert on, so
+# we must NOT let -f discard it.
+body="$(curl -sS -G "${VESPA_URL}/search/" \
   --data-urlencode 'yql=select * from sources * where userQuery()' \
   --data-urlencode "query=${TOKEN_MAIL}" 2>&1)" || body=""
 if out="$(python3 -c '
