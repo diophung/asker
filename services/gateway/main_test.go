@@ -382,6 +382,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("RATE_LIMIT_PER_MINUTE", "42")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "http://a.test,http://b.test")
 	t.Setenv("MAX_UPLOAD_MB", "7")
+	t.Setenv("MAX_MEDIA_MB", "9")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -400,6 +401,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		RateLimitPerMinute:   42,
 		CORSAllowedOrigins:   "http://a.test,http://b.test",
 		MaxUploadMB:          7,
+		MaxMediaMB:           9,
 	}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
@@ -431,6 +433,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.MaxUploadMB != 32 {
 		t.Errorf("MaxUploadMB default = %d", cfg.MaxUploadMB)
+	}
+	if cfg.MaxMediaMB != 25 {
+		t.Errorf("MaxMediaMB default = %d", cfg.MaxMediaMB)
 	}
 }
 

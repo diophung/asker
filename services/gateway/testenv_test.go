@@ -43,6 +43,7 @@ func testGatewayConfig(jwksURL string) gatewayConfig {
 		RateLimitPerMinute:   600,
 		CORSAllowedOrigins:   "http://localhost:3000",
 		MaxUploadMB:          32,
+		MaxMediaMB:           25,
 	}
 }
 
@@ -57,8 +58,10 @@ func newFakeDeps(t *testing.T) *deps {
 	return &deps{
 		hubURL:         "http://127.0.0.1:1",
 		hubClient:      &http.Client{Timeout: time.Second},
+		mediaClient:    &http.Client{Timeout: time.Second},
 		counter:        &fakeCounter{},
 		maxUploadBytes: 32 << 20,
+		maxMediaBytes:  25 << 20,
 		logger:         discardLogger(),
 	}
 }
@@ -328,8 +331,10 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 		control:        controlplanev1.NewControlPlaneServiceClient(conn),
 		hubURL:         "http://127.0.0.1:1",
 		hubClient:      &http.Client{Timeout: 5 * time.Second},
+		mediaClient:    &http.Client{Timeout: 5 * time.Second},
 		counter:        counter,
 		maxUploadBytes: cfg.MaxUploadMB << 20,
+		maxMediaBytes:  cfg.MaxMediaMB << 20,
 		logger:         discardLogger(),
 	}
 	for _, opt := range opts {

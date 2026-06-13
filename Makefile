@@ -77,3 +77,6 @@ e2e-m1: ## M1 exit test: synthetic email ingest, freshness, hybrid search (E2E_E
 
 e2e-leakage: ## Cross-tenant leakage suite (sacred — must always pass)
 	bash tools/e2e/leakage.sh
+
+e2e-m3-media: ## M3 media exit test (spoken phrase -> video@timestamp, CLIP text->image, OCR, isolation)
+	bash tools/e2e/m3-media.sh

@@ -372,6 +372,72 @@ body {
   color: var(--text-muted);
 }
 
+/* Media hits (IMAGE / VIDEO / AUDIO) */
+
+.result-media {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+}
+
+.result-media .result-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.thumb {
+  flex-shrink: 0;
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.thumb-placeholder {
+  background: linear-gradient(90deg, #ececef 25%, #f6f6f8 50%, #ececef 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.thumb-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  color: var(--text-muted);
+}
+
+.media-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.media-jump {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius);
+}
+
+.media-jump:hover,
+.media-jump:focus-visible {
+  background: #eef1fb;
+  text-decoration: underline;
+}
+
+.badge-modality {
+  background: #f3edfb;
+  color: #5a3aa8;
+  text-transform: capitalize;
+}
+
 /* Pagination */
 
 .pagination {

@@ -46,6 +46,19 @@ export interface Hit {
   created: string;
   modified: string;
   metadata: Record<string, string>;
+  // Media fields (M3): present (non-zero / non-empty) only on media hits.
+  // The gateway hand-writes its JSON with snake_case tags for every field
+  // (doc_id, connector_id, took_ms, ...); these media fields follow the same
+  // convention. They are optional because text-document hits omit them
+  // (Go zero values: 0 / "" with omitempty-style absence handled defensively).
+  /** Matched-chunk start offset in milliseconds (VIDEO/AUDIO); 0 when N/A. */
+  start_ms?: number;
+  /** Matched-chunk end offset in milliseconds (VIDEO/AUDIO); 0 when N/A. */
+  end_ms?: number;
+  /** What matched: e.g. "transcript", "caption", "ocr", "visual". */
+  modality?: string;
+  /** Blob key of a thumbnail/poster, fetched via GET /v1/media?key=. */
+  thumbnail_key?: string;
 }
 
 export interface SearchResponse {
@@ -285,6 +298,52 @@ export class ConnectorClient {
       throw new ApiError(res.status, await errorMessage(res));
     }
     return res;
+  }
+}
+
+/**
+ * Client for the gateway's authenticated media proxy.
+ *
+ *   GET /v1/media?key=<blobKey>   Authorization: Bearer <JWT>
+ *
+ * The gateway derives the tenant from the verified JWT only and streams the
+ * decrypted bytes from the (internal-only) hub with the upstream Content-Type.
+ * <img> elements cannot send an Authorization header, so we fetch the bytes
+ * here and hand back an object URL the caller assigns to `src` — and MUST
+ * revoke (URL.revokeObjectURL) once the image unmounts to avoid leaking blobs.
+ */
+export class MediaClient {
+  private readonly baseUrl: string;
+  private readonly getToken: () => Promise<string>;
+  private readonly fetchFn: FetchFn;
+
+  constructor(opts: SearchClientOptions) {
+    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.getToken = opts.getToken;
+    this.fetchFn =
+      opts.fetchFn ?? ((input, init) => globalThis.fetch(input, init));
+  }
+
+  /**
+   * Fetch a thumbnail/poster blob by key and return an object URL for it.
+   * Sends the bearer token; throws ApiError on a non-2xx response (e.g. 404
+   * when the key is absent, 401 when unauthenticated). The returned URL must
+   * be revoked by the caller when no longer needed.
+   */
+  async fetchThumbnail(key: string, signal?: AbortSignal): Promise<string> {
+    const token = await this.getToken();
+    signal?.throwIfAborted();
+    const url = `${this.baseUrl}/v1/media?key=${encodeURIComponent(key)}`;
+    const res = await this.fetchFn(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    });
+    if (!res.ok) {
+      throw new ApiError(res.status, await errorMessage(res));
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
   }
 }
 

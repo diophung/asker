@@ -9,6 +9,7 @@ import { defaultFilters, type Filters, toSearchRequest } from "./search/filters"
 import { FilterSidebar } from "./components/FilterSidebar";
 import { Pagination } from "./components/Pagination";
 import { ResultCard } from "./components/ResultCard";
+import type { FetchThumbnail } from "./components/Thumbnail";
 import { SearchBar } from "./components/SearchBar";
 import {
   EmptyState,
@@ -29,7 +30,14 @@ interface Submitted {
  * clicks / typing. Stale in-flight requests are aborted by SearchClient. */
 const SEARCH_DEBOUNCE_MS = 250;
 
-export function SearchPage({ client }: { client: SearchClient }) {
+export function SearchPage({
+  client,
+  fetchThumbnail,
+}: {
+  client: SearchClient;
+  /** Resolves a media hit's thumbnail key to an object URL (bearer-auth). */
+  fetchThumbnail?: FetchThumbnail;
+}) {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [submitted, setSubmitted] = useState<Submitted | null>(null);
   const [offset, setOffset] = useState(0);
@@ -104,7 +112,11 @@ export function SearchPage({ client }: { client: SearchClient }) {
               ) : (
                 <div className="results">
                   {result.hits.map((hit) => (
-                    <ResultCard key={hit.doc_id} hit={hit} />
+                    <ResultCard
+                      key={hit.doc_id}
+                      hit={hit}
+                      fetchThumbnail={fetchThumbnail}
+                    />
                   ))}
                 </div>
               )}

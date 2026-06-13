@@ -112,7 +112,7 @@ func HandleUpload(ctx context.Context, deps Deps, tenant tenancy.Context, file i
 		DocId:          sdk.DocID(ID, blobKey),
 		ConnectorId:    ID,
 		SourceNativeId: blobKey,
-		Type:           askerv1.DocType_FILE,
+		Type:           classifyDocType(contentType),
 		Title:          docTitle,
 		BodyText:       bodyText,
 		Metadata: map[string]string{
@@ -124,6 +124,27 @@ func HandleUpload(ctx context.Context, deps Deps, tenant tenancy.Context, file i
 		Original:    ref,
 		VersionEtag: digest,
 	}, nil
+}
+
+// classifyDocType maps the upload's MIME type to a DocType so media uploads
+// reach the M3 media-enrich path (OCR/CLIP/ASR) instead of being indexed as a
+// plain FILE. image/* -> IMAGE, video/* -> VIDEO, audio/* -> AUDIO; anything
+// else (incl. text and unknown) -> FILE.
+func classifyDocType(contentType string) askerv1.DocType {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return askerv1.DocType_FILE
+	}
+	switch {
+	case strings.HasPrefix(mediaType, "image/"):
+		return askerv1.DocType_IMAGE
+	case strings.HasPrefix(mediaType, "video/"):
+		return askerv1.DocType_VIDEO
+	case strings.HasPrefix(mediaType, "audio/"):
+		return askerv1.DocType_AUDIO
+	default:
+		return askerv1.DocType_FILE
+	}
 }
 
 // isTextual reports whether the upload should have its content indexed as

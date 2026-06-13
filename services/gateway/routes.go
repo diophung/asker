@@ -32,6 +32,7 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	mux.HandleFunc("/readyz", getOnly(handleReadyz(cfg.OIDCJWKSURL)))
 	mux.Handle("/v1/me", authed(getOnly(handleMe)))
 	mux.Handle("/v1/search", authed(getOnly(d.handleSearch)))
+	mux.Handle("/v1/media", authed(getOnly(d.handleMedia)))
 	mux.Handle("/v1/connectors", authed(methods(map[string]http.HandlerFunc{
 		http.MethodGet:  d.handleListConnectors,
 		http.MethodPost: d.handleCreateConnector,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiUrl, getToken, initAuth, login, logout, username } from "./auth";
-import { ConnectorClient, SearchClient } from "./api";
+import { ConnectorClient, MediaClient, SearchClient } from "./api";
 import { SearchPage } from "./SearchPage";
 import { ConnectorsPage } from "./connectors/ConnectorsPage";
 
@@ -35,6 +35,10 @@ export function App() {
   );
   const connectorClient = useMemo(
     () => new ConnectorClient({ baseUrl: apiUrl, getToken }),
+    [],
+  );
+  const mediaClient = useMemo(
+    () => new MediaClient({ baseUrl: apiUrl, getToken }),
     [],
   );
 
@@ -117,7 +121,12 @@ export function App() {
       )}
 
       {auth === "authenticated" && view === "search" && (
-        <SearchPage client={searchClient} />
+        <SearchPage
+          client={searchClient}
+          fetchThumbnail={(key, signal) =>
+            mediaClient.fetchThumbnail(key, signal)
+          }
+        />
       )}
       {auth === "authenticated" && view === "connectors" && (
         <ConnectorsPage client={connectorClient} />

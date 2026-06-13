@@ -23,9 +23,13 @@ type deps struct {
 	// hubURL is the connector-hub base URL (no trailing slash).
 	hubURL    string
 	hubClient *http.Client
+	// mediaClient is dedicated to GET /v1/media: a shorter timeout than the
+	// upload client (thumbnails/keyframes are small).
+	mediaClient *http.Client
 	// counter backs the per-tenant rate limiter (Redis in production).
 	counter        rateCounter
 	maxUploadBytes int64
+	maxMediaBytes  int64
 	logger         *slog.Logger
 }
 
@@ -59,9 +63,12 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 		control: controlplanev1.NewControlPlaneServiceClient(controlConn),
 		hubURL:  strings.TrimRight(cfg.HubHTTPURL, "/"),
 		// Generous timeout: uploads stream through this client.
-		hubClient:      &http.Client{Timeout: 2 * time.Minute},
+		hubClient: &http.Client{Timeout: 2 * time.Minute},
+		// Media fetches are small (thumbnails/keyframes): a tighter timeout.
+		mediaClient:    &http.Client{Timeout: 30 * time.Second},
 		counter:        counter,
 		maxUploadBytes: cfg.MaxUploadMB << 20,
+		maxMediaBytes:  cfg.MaxMediaMB << 20,
 		logger:         logger,
 	}, cleanup, nil
 }

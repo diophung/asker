@@ -26,6 +26,9 @@ type gatewayConfig struct {
 	// echoed back verbatim.
 	CORSAllowedOrigins string `env:"CORS_ALLOWED_ORIGINS" envDefault:"http://localhost:3000"`
 	MaxUploadMB        int64  `env:"MAX_UPLOAD_MB" envDefault:"32"`
+	// Cap on the bytes streamed back from the hub for GET /v1/media — these
+	// are thumbnails/keyframes, so the default is small.
+	MaxMediaMB int64 `env:"MAX_MEDIA_MB" envDefault:"25"`
 }
 
 func loadConfig() (gatewayConfig, error) {

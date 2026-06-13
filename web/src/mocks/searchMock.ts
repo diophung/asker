@@ -35,6 +35,40 @@ export const searchMock: SearchResponse = {
   cached: false,
 };
 
+/** An IMAGE hit whose OCR text matched (carries a thumbnail). */
+export const imageHitMock: SearchResponse["hits"][number] = {
+  doc_id: "img00000000000000000000000000000000000000000000000000000000000001",
+  connector_id: "upload",
+  type: "IMAGE",
+  title: "whiteboard-sketch.png",
+  snippet: "Whiteboard with the <hi>roadmap</hi> diagram.",
+  score: 0.83,
+  created: "2026-05-10T12:00:00Z",
+  modified: "",
+  metadata: {},
+  start_ms: 0,
+  end_ms: 0,
+  modality: "ocr",
+  thumbnail_key: "tenants/t1/thumbs/img1.jpg",
+};
+
+/** A VIDEO hit matched on a transcript chunk at 1:23 (83000ms). */
+export const videoHitMock: SearchResponse["hits"][number] = {
+  doc_id: "vid00000000000000000000000000000000000000000000000000000000000002",
+  connector_id: "upload",
+  type: "VIDEO",
+  title: "all-hands.mp4",
+  snippet: "...and then we discussed the <hi>quarterly</hi> targets...",
+  score: 0.79,
+  created: "2026-05-11T09:00:00Z",
+  modified: "",
+  metadata: {},
+  start_ms: 83000,
+  end_ms: 91000,
+  modality: "transcript",
+  thumbnail_key: "tenants/t1/thumbs/vid2.jpg",
+};
+
 /** Build a Response carrying `searchMock` (or an override) as JSON. */
 export function mockSearchResponse(body: SearchResponse = searchMock): Response {
   return new Response(JSON.stringify(body), {

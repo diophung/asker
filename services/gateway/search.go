@@ -27,6 +27,11 @@ type searchHitJSON struct {
 	Created     string            `json:"created"`
 	Modified    string            `json:"modified"`
 	Metadata    map[string]string `json:"metadata"`
+	// Media fields (M3): set for IMAGE/AUDIO/VIDEO hits; zero/empty otherwise.
+	StartMs      int64  `json:"start_ms"`
+	EndMs        int64  `json:"end_ms"`
+	Modality     string `json:"modality"`
+	ThumbnailKey string `json:"thumbnail_key"`
 }
 
 // searchResponseJSON is the pinned REST response shape (web/src/api.ts
@@ -134,15 +139,19 @@ func restSearchResponse(resp *queryv1.SearchResponse) searchResponseJSON {
 			md = map[string]string{} // pinned shape: {} not null
 		}
 		hits = append(hits, searchHitJSON{
-			DocID:       h.GetDocId(),
-			ConnectorID: h.GetConnectorId(),
-			Type:        h.GetType().String(),
-			Title:       h.GetTitle(),
-			Snippet:     h.GetSnippet(),
-			Score:       h.GetScore(),
-			Created:     rfc3339OrEmpty(h.GetCreated()),
-			Modified:    rfc3339OrEmpty(h.GetModified()),
-			Metadata:    md,
+			DocID:        h.GetDocId(),
+			ConnectorID:  h.GetConnectorId(),
+			Type:         h.GetType().String(),
+			Title:        h.GetTitle(),
+			Snippet:      h.GetSnippet(),
+			Score:        h.GetScore(),
+			Created:      rfc3339OrEmpty(h.GetCreated()),
+			Modified:     rfc3339OrEmpty(h.GetModified()),
+			Metadata:     md,
+			StartMs:      h.GetStartMs(),
+			EndMs:        h.GetEndMs(),
+			Modality:     h.GetModality(),
+			ThumbnailKey: h.GetThumbnailKey(),
 		})
 	}
 	return searchResponseJSON{
