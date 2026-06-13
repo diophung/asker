@@ -35,9 +35,24 @@ import (
 // connector-agnostic so it is testable against fakes, and the M2
 // out-of-process plugin transport replaces only this wiring.
 func buildDeps(ctx context.Context, cfg hub.Config, logger *slog.Logger) (hub.Deps, error) {
-	kek, err := crypto.NewFileKEK(cfg.KEKFile)
+	// KEK selection (ADR-015 §3): Vault Transit when VAULT_ADDR is set, else the
+	// dev file KEK — fail closed in production with no Vault. The control plane
+	// makes the IDENTICAL choice (main.go) with the same key name, so DEKs
+	// wrapped by either service interoperate.
+	kek, err := crypto.SelectKEK(crypto.KEKSelection{
+		VaultAddr:    cfg.VaultAddr,
+		VaultToken:   cfg.VaultToken,
+		VaultKeyName: cfg.VaultKEKKeyName,
+		KEKFile:      cfg.KEKFile,
+		IsProd:       cfg.IsProd(),
+	})
 	if err != nil {
-		return hub.Deps{}, fmt.Errorf("load KEK %s: %w", cfg.KEKFile, err)
+		return hub.Deps{}, fmt.Errorf("select KEK: %w", err)
+	}
+	if cfg.VaultAddr != "" {
+		logger.Info("KEK provider: Vault Transit", "vault_addr", cfg.VaultAddr, "key_name", cfg.VaultKEKKeyName)
+	} else {
+		logger.Warn("KEK provider: DEV file KEK (no VAULT_ADDR) — not for production", "kek_file", cfg.KEKFile)
 	}
 	// Blob DEKs are wrapped by the shared dev KEK and persisted on the same
 	// volume so encrypted uploads survive hub restarts (see dekstore.go).

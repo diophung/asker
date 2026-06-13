@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/safehttp"
 )
 
 const (
@@ -179,7 +180,10 @@ func newClient(conf instanceConfig, token []byte) *client {
 	return &client{
 		base: strings.TrimRight(conf.baseURL(), "/"),
 		http: &http.Client{
-			Transport: &bearerTransport{token: string(token), base: http.DefaultTransport},
+			// base_url is tenant-supplied; the SSRF-guarded base refuses
+			// loopback/metadata/private/cluster IPs at connect time so the bearer
+			// token is never sent to an internal host.
+			Transport: &bearerTransport{token: string(token), base: safehttp.GuardedBase()},
 			Timeout:   clientTimeout,
 		},
 	}

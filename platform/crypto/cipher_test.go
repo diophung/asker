@@ -306,6 +306,10 @@ func (s *raceStore) PutWrappedDEK(ctx context.Context, tenantID tenancy.TenantID
 	return errors.New("conflict: wrapped DEK already exists")
 }
 
+func (s *raceStore) Delete(ctx context.Context, tenantID tenancy.TenantID) error {
+	return s.inner.Delete(ctx, tenantID)
+}
+
 func TestTenantCipherConvergesOnStoredDEKAfterPutConflict(t *testing.T) {
 	kek := newTestKEK(t)
 	inner := NewMemDEKStore()
@@ -350,6 +354,8 @@ func (s *failStore) PutWrappedDEK(ctx context.Context, tenantID tenancy.TenantID
 	}
 	return nil
 }
+
+func (s *failStore) Delete(ctx context.Context, tenantID tenancy.TenantID) error { return nil }
 
 func TestTenantCipherStoreFailures(t *testing.T) {
 	kek := newTestKEK(t)
@@ -408,6 +414,13 @@ func (s *overwritableStore) PutWrappedDEK(ctx context.Context, tenantID tenancy.
 	if _, ok := s.deks[tenantID]; !ok {
 		s.deks[tenantID] = bytes.Clone(wrapped)
 	}
+	return nil
+}
+
+func (s *overwritableStore) Delete(ctx context.Context, tenantID tenancy.TenantID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.deks, tenantID)
 	return nil
 }
 

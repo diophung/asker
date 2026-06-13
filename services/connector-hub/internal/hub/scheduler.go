@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +49,12 @@ type scheduler struct {
 	backoffCap   time.Duration
 	now          func() time.Time
 
+	// maxInstancesPerTenant bounds how many sync workers (goroutines) one
+	// tenant may occupy. <= 0 disables the cap. It is defense in depth behind
+	// the control plane's create-time connector-instance quota: even if stale
+	// rows slip past, no single tenant can dominate the scheduler.
+	maxInstancesPerTenant int
+
 	sem chan struct{}
 
 	mu sync.Mutex
@@ -76,6 +83,8 @@ type schedulerOpts struct {
 	backoffBase  time.Duration // optional
 	backoffCap   time.Duration // optional
 	now          func() time.Time
+
+	maxInstancesPerTenant int // optional; <= 0 disables the per-tenant cap
 }
 
 func newScheduler(o schedulerOpts) *scheduler {
@@ -89,20 +98,21 @@ func newScheduler(o schedulerOpts) *scheduler {
 		o.now = time.Now
 	}
 	return &scheduler{
-		cp:           o.cp,
-		sched:        o.sched,
-		registry:     o.registry,
-		emit:         o.emit,
-		logger:       o.logger,
-		webhookBase:  strings.TrimRight(o.webhookBase, "/"),
-		syncInterval: o.syncInterval,
-		tick:         o.tick,
-		backoffBase:  o.backoffBase,
-		backoffCap:   o.backoffCap,
-		now:          o.now,
-		sem:          make(chan struct{}, maxConcurrentSyncs),
-		workers:      make(map[string]*worker),
-		draining:     make(map[string]*worker),
+		cp:                    o.cp,
+		sched:                 o.sched,
+		registry:              o.registry,
+		emit:                  o.emit,
+		logger:                o.logger,
+		webhookBase:           strings.TrimRight(o.webhookBase, "/"),
+		syncInterval:          o.syncInterval,
+		tick:                  o.tick,
+		backoffBase:           o.backoffBase,
+		backoffCap:            o.backoffCap,
+		now:                   o.now,
+		maxInstancesPerTenant: o.maxInstancesPerTenant,
+		sem:                   make(chan struct{}, maxConcurrentSyncs),
+		workers:               make(map[string]*worker),
+		draining:              make(map[string]*worker),
 	}
 }
 
@@ -191,6 +201,12 @@ func (s *scheduler) reconcile(ctx context.Context) {
 		desired[inst.GetId()] = instanceSnap{tenant: tc, inst: inst}
 	}
 
+	// Per-tenant worker cap (abuse control, M6): cap how many instances any one
+	// tenant may schedule, so a single tenant cannot spawn unbounded scheduler
+	// goroutines. Deterministic (sorted by instance id) so the SAME instances
+	// run every tick — no flapping.
+	s.applyTenantCap(ctx, desired)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -233,6 +249,36 @@ func (s *scheduler) reconcile(ctx context.Context) {
 			s.draining[id] = w
 			delete(s.workers, id)
 		}
+	}
+}
+
+// applyTenantCap drops, in place, any desired instances beyond
+// maxInstancesPerTenant for a given tenant. Selection is deterministic: per
+// tenant, instances are kept in ascending instance-id order, so the same set
+// runs every reconcile and the cap never flaps. <= 0 disables the cap. The
+// drop is logged once per over-cap tenant per reconcile so the condition is
+// visible.
+func (s *scheduler) applyTenantCap(ctx context.Context, desired map[string]instanceSnap) {
+	if s.maxInstancesPerTenant <= 0 {
+		return
+	}
+	// Group instance ids by tenant.
+	byTenant := make(map[tenancy.TenantID][]string)
+	for id, snap := range desired {
+		byTenant[snap.tenant.TenantID()] = append(byTenant[snap.tenant.TenantID()], id)
+	}
+	for tenant, ids := range byTenant {
+		if len(ids) <= s.maxInstancesPerTenant {
+			continue
+		}
+		sort.Strings(ids)
+		dropped := ids[s.maxInstancesPerTenant:]
+		for _, id := range dropped {
+			delete(desired, id)
+		}
+		s.logger.WarnContext(ctx, "per-tenant connector cap reached; not scheduling overflow instances",
+			"tenant", tenant, "cap", s.maxInstancesPerTenant,
+			"total", len(ids), "dropped", len(dropped))
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/safehttp"
 )
 
 // maxResponseBody bounds a single events.list response read so a hostile or
@@ -33,7 +34,10 @@ type client struct {
 func newClient(conf instanceConfig, token []byte) *client {
 	return &client{
 		http: &http.Client{
-			Transport: &bearerTransport{token: string(token), base: http.DefaultTransport},
+			// base_url is tenant-supplied; the SSRF-guarded base refuses
+			// loopback/metadata/private/cluster IPs at connect time so the bearer
+			// token is never sent to an internal host.
+			Transport: &bearerTransport{token: string(token), base: safehttp.GuardedBase()},
 			Timeout:   httpTimeout,
 		},
 		baseURL:    strings.TrimRight(conf.BaseURL, "/"),

@@ -45,6 +45,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/safehttp"
 )
 
 const (
@@ -198,7 +199,11 @@ func (c *Connector) Validate(ctx context.Context, cfg sdk.Config) error {
 // gmail/v1/... paths against that endpoint; otherwise it talks to real Gmail.
 func newService(ctx context.Context, conf instanceConfig, token []byte) (*gmailapi.Service, error) {
 	client := &http.Client{
-		Transport: &bearerTransport{token: string(token), base: http.DefaultTransport},
+		// base_url is tenant-supplied (dev/CI points it at the fake); guard the
+		// underlying dial so a hostile endpoint cannot reach loopback, the cloud
+		// metadata IP, RFC1918, or cluster-internal services (and so the bearer
+		// token cannot be sent to such a host). Guarded at connect time.
+		Transport: &bearerTransport{token: string(token), base: safehttp.GuardedBase()},
 		Timeout:   30 * time.Second,
 	}
 	opts := []option.ClientOption{option.WithHTTPClient(client)}

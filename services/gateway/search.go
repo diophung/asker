@@ -48,7 +48,7 @@ type searchResponseJSON struct {
 // handled here: it rides the request context into the gRPC client
 // interceptor, which fails closed without one.
 func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
-	req, err := parseSearchRequest(r.URL.Query())
+	req, err := parseSearchRequest(r.URL.Query(), d.maxQueryChars)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -62,10 +62,16 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseSearchRequest validates and maps the /v1/search query parameters onto
-// the QueryService request. Any malformed parameter is a 400.
-func parseSearchRequest(q url.Values) (*queryv1.SearchRequest, error) {
+// the QueryService request. Any malformed parameter is a 400. The query text is
+// length-capped (maxQueryChars; <= 0 disables) so an oversized q= cannot drive
+// disproportionate downstream tokenization/embedding work (M6 DoS hardening).
+func parseSearchRequest(q url.Values, maxQueryChars int) (*queryv1.SearchRequest, error) {
+	query := q.Get("q")
+	if maxQueryChars > 0 && len([]rune(query)) > maxQueryChars {
+		return nil, fmt.Errorf("query too long: %d characters exceeds the %d limit", len([]rune(query)), maxQueryChars)
+	}
 	req := &queryv1.SearchRequest{
-		Query:       q.Get("q"),
+		Query:       query,
 		Participant: q.Get("participant"),
 	}
 

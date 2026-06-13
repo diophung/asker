@@ -211,3 +211,23 @@ func TestSearchRequiresAuth(t *testing.T) {
 		t.Errorf("QueryService was reached without auth (tenant %q)", gotTenant)
 	}
 }
+
+func TestSearchQueryLengthCap(t *testing.T) {
+	env := newTestEnv(t, func(cfg *gatewayConfig, d *deps) {
+		cfg.MaxQueryChars = 10
+		d.maxQueryChars = 10
+	})
+	// 11-char query exceeds the 10-char cap -> 400, never reaching the backend.
+	rec := env.do(http.MethodGet, "/v1/search?q=abcdefghijk", nil, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("over-cap query: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if gotTenant, _ := env.query.captured(); gotTenant != "" {
+		t.Errorf("QueryService reached despite over-cap query (tenant %q)", gotTenant)
+	}
+	// A query within the cap passes through.
+	rec = env.do(http.MethodGet, "/v1/search?q=short", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("within-cap query: status = %d, want 200", rec.Code)
+	}
+}

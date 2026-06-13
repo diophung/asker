@@ -20,6 +20,7 @@ import (
 type deps struct {
 	query   queryv1.QueryServiceClient
 	control controlplanev1.ControlPlaneServiceClient
+	admin   controlplanev1.AdminServiceClient
 	// hubURL is the connector-hub base URL (no trailing slash).
 	hubURL    string
 	hubClient *http.Client
@@ -30,7 +31,12 @@ type deps struct {
 	counter        rateCounter
 	maxUploadBytes int64
 	maxMediaBytes  int64
-	logger         *slog.Logger
+	// oidcAudience is the token audience; admin client-role claims live under
+	// resource_access.<oidcAudience>.roles.
+	oidcAudience string
+	// maxQueryChars caps the /v1/search q= length; <= 0 disables the cap.
+	maxQueryChars int
+	logger        *slog.Logger
 }
 
 // newDeps builds the production dependency set. Both gRPC clients use lazy,
@@ -61,7 +67,10 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 	return &deps{
 		query:   queryv1.NewQueryServiceClient(queryConn),
 		control: controlplanev1.NewControlPlaneServiceClient(controlConn),
-		hubURL:  strings.TrimRight(cfg.HubHTTPURL, "/"),
+		// AdminService shares the control-plane connection (same target). Admin
+		// authorization is enforced at the gateway BEFORE these RPCs are dialed.
+		admin:  controlplanev1.NewAdminServiceClient(controlConn),
+		hubURL: strings.TrimRight(cfg.HubHTTPURL, "/"),
 		// Generous timeout: uploads stream through this client.
 		hubClient: &http.Client{Timeout: 2 * time.Minute},
 		// Media fetches are small (thumbnails/keyframes): a tighter timeout.
@@ -69,6 +78,8 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 		counter:        counter,
 		maxUploadBytes: cfg.MaxUploadMB << 20,
 		maxMediaBytes:  cfg.MaxMediaMB << 20,
+		oidcAudience:   cfg.OIDCAudience,
+		maxQueryChars:  cfg.MaxQueryChars,
 		logger:         logger,
 	}, cleanup, nil
 }

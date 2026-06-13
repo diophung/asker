@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/asker/asker/platform/safehttp"
 )
 
 // Drive v3 resource shapes — only the fields this connector reads. JSON tags
@@ -124,7 +126,10 @@ func (c *Connector) newClient(conf instanceConfig, token []byte) (*client, error
 	base = strings.TrimRight(base, "/")
 	return &client{
 		http: &http.Client{
-			Transport: &bearerTransport{token: string(token), base: http.DefaultTransport},
+			// base_url is tenant-supplied; the SSRF-guarded base refuses
+			// loopback/metadata/private/cluster IPs at connect time so the bearer
+			// token is never sent to an internal host.
+			Transport: &bearerTransport{token: string(token), base: safehttp.GuardedBase()},
 			Timeout:   clientTimeout,
 		},
 		baseURL: base,

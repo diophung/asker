@@ -217,6 +217,143 @@ func (m *memStore) ListAll(ctx context.Context) ([]ConnectorInstance, error) {
 	return out, nil
 }
 
+func (m *memStore) CountConnectorInstances(ctx context.Context, tenantID tenancy.TenantID) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	for _, inst := range m.instances {
+		if inst.TenantID == tenantID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (m *memStore) PurgeTenant(ctx context.Context, tenantID tenancy.TenantID) (PurgeCounts, error) {
+	if err := ctx.Err(); err != nil {
+		return PurgeCounts{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var counts PurgeCounts
+	for id, inst := range m.instances {
+		if inst.TenantID != tenantID {
+			continue
+		}
+		counts.ConnectorInstances++
+		if tok, ok := m.tokens[id]; ok && tok.tenantID == tenantID {
+			counts.Tokens++
+			delete(m.tokens, id)
+		}
+		delete(m.instances, id)
+		delete(m.syncs, id)
+	}
+	delete(m.tenants, tenantID)
+	return counts, nil
+}
+
+func (m *memStore) TenantResidue(ctx context.Context, tenantID tenancy.TenantID) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.tenants[tenantID]; ok {
+		return false, nil
+	}
+	for _, inst := range m.instances {
+		if inst.TenantID == tenantID {
+			return false, nil
+		}
+	}
+	for _, tok := range m.tokens {
+		if tok.tenantID == tenantID {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (m *memStore) usageLocked(tenantID tenancy.TenantID, created time.Time) TenantUsage {
+	var instances, paused, docs int64
+	for id, inst := range m.instances {
+		if inst.TenantID != tenantID {
+			continue
+		}
+		instances++
+		if inst.Status == "PAUSED" {
+			paused++
+		}
+		if st, ok := m.syncs[id]; ok {
+			docs += st.DocsEmitted
+		}
+	}
+	return TenantUsage{
+		TenantID:           tenantID,
+		CreatedAt:          created,
+		ConnectorInstances: instances,
+		DocsEmitted:        docs,
+		Suspended:          instances > 0 && paused == instances,
+	}
+}
+
+func (m *memStore) ListTenants(ctx context.Context, afterTenantID string, limit int) ([]TenantUsage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]tenancy.TenantID, 0, len(m.tenants))
+	for id := range m.tenants {
+		if string(id) > afterTenantID {
+			ids = append(ids, id)
+		}
+	}
+	slices.SortFunc(ids, func(a, b tenancy.TenantID) int { return strings.Compare(string(a), string(b)) })
+	out := make([]TenantUsage, 0, len(ids))
+	for _, id := range ids {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		out = append(out, m.usageLocked(id, m.tenants[id]))
+	}
+	return out, nil
+}
+
+func (m *memStore) GetTenantUsage(ctx context.Context, tenantID tenancy.TenantID) (TenantUsage, error) {
+	if err := ctx.Err(); err != nil {
+		return TenantUsage{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	created, ok := m.tenants[tenantID]
+	if !ok {
+		return TenantUsage{}, ErrNotFound
+	}
+	return m.usageLocked(tenantID, created), nil
+}
+
+func (m *memStore) SetTenantConnectorStatus(ctx context.Context, tenantID tenancy.TenantID, status string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var changed int64
+	for id, inst := range m.instances {
+		if inst.TenantID == tenantID && inst.Status != status {
+			inst.Status = status
+			inst.UpdatedAt = time.Now().UTC()
+			m.instances[id] = inst
+			changed++
+		}
+	}
+	return changed, nil
+}
+
 // ownedInstance returns the instance only when it exists AND belongs to the
 // tenant; both misses collapse into a single "not ok". Callers must hold m.mu.
 func (m *memStore) ownedInstance(tenantID tenancy.TenantID, id string) (ConnectorInstance, bool) {

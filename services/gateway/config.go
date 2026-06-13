@@ -22,6 +22,20 @@ type gatewayConfig struct {
 	RedisAddr            string `env:"REDIS_ADDR" envDefault:"redis:6379"`
 	// Per-tenant fixed-window limit; <= 0 disables limiting entirely.
 	RateLimitPerMinute int `env:"RATE_LIMIT_PER_MINUTE" envDefault:"600"`
+
+	// Pre-auth throttle (M6 DoS hardening): a per-source-IP limit plus a global
+	// ceiling that run IN FRONT of JWT verification, so unauthenticated floods
+	// cannot hammer JWKS/crypto. <= 0 disables that dimension.
+	PreAuthPerIPPerMinute int `env:"PREAUTH_PER_IP_PER_MINUTE" envDefault:"120"`
+	PreAuthGlobalPerSec   int `env:"PREAUTH_GLOBAL_PER_SEC" envDefault:"500"`
+	PreAuthGlobalBurst    int `env:"PREAUTH_GLOBAL_BURST" envDefault:"1000"`
+	// TrustProxyHeaders uses X-Forwarded-For for the client IP. Only enable
+	// behind a trusted proxy that sets it (otherwise a client spoofs its IP).
+	TrustProxyHeaders bool `env:"TRUST_PROXY_HEADERS" envDefault:"false"`
+
+	// MaxQueryChars caps the /v1/search q= length so a giant query string
+	// cannot drive disproportionate downstream work. <= 0 disables the cap.
+	MaxQueryChars int `env:"MAX_QUERY_CHARS" envDefault:"1024"`
 	// Comma-separated exact-match origins. Never "*": the allowed origin is
 	// echoed back verbatim.
 	CORSAllowedOrigins string `env:"CORS_ALLOWED_ORIGINS" envDefault:"http://localhost:3000"`

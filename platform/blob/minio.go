@@ -88,3 +88,57 @@ func (c *minioClient) getObject(ctx context.Context, bucket, key string) ([]byte
 	}
 	return data, contentType, nil
 }
+
+// removePrefix lists and deletes every object under bucket/prefix, returning
+// the number removed. Empty prefix removes nothing (the caller never passes
+// one; defensive belt-and-braces). Listing is recursive so nested keys
+// (originals + thumbnails/keyframes) are all reached.
+func (c *minioClient) removePrefix(ctx context.Context, bucket, prefix string) (int, error) {
+	if prefix == "" {
+		// Refuse a bucket-wide wipe: callers always scope to a tenant prefix.
+		return 0, fmt.Errorf("remove prefix: refusing empty prefix for bucket %q", bucket)
+	}
+	objCh := c.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	})
+	// RemoveObjects consumes a channel of keys and streams back any per-object
+	// errors. We re-fan the listing into the removal channel and count as we go.
+	removeCh := make(chan minio.ObjectInfo)
+	errCh := c.mc.RemoveObjects(ctx, bucket, removeCh, minio.RemoveObjectsOptions{})
+
+	var count int
+	var listErr error
+	go func() {
+		defer close(removeCh)
+		for obj := range objCh {
+			if obj.Err != nil {
+				listErr = obj.Err
+				return
+			}
+			select {
+			case removeCh <- obj:
+				count++
+			case <-ctx.Done():
+				listErr = ctx.Err()
+				return
+			}
+		}
+	}()
+
+	// Drain removal errors; the first one fails the operation (the caller's
+	// verification step re-checks emptiness, so a partial delete is detected).
+	var rmErr error
+	for e := range errCh {
+		if e.Err != nil && rmErr == nil {
+			rmErr = fmt.Errorf("remove object %q: %w", e.ObjectName, e.Err)
+		}
+	}
+	if listErr != nil {
+		return count, fmt.Errorf("list objects under %q: %w", prefix, listErr)
+	}
+	if rmErr != nil {
+		return count, rmErr
+	}
+	return count, nil
+}

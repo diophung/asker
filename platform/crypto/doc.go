@@ -38,6 +38,17 @@
 // Unwrapped DEKs are cached in memory after first use; Decrypt never creates
 // a DEK and returns ErrDEKNotFound for an unprovisioned tenant.
 //
+// # GDPR crypto-shred (M6)
+//
+// DEKStore.Delete destroys a tenant's wrapped DEK. Because the unwrapped DEK is
+// never persisted (only the wrapped form is, and the KEK lives in Vault/file),
+// destroying the wrapped DEK makes EVERY blob/token ciphertext sealed under it
+// permanently unrecoverable — the fast, auditable erasure primitive behind the
+// control plane's DeleteTenant cascade. Callers MUST also TenantCipher.Forget
+// the tenant so a cached AEAD cannot keep serving after the shred. A subsequent
+// Encrypt provisions a brand-new, unrelated DEK; pre-shred ciphertext stays
+// unreadable.
+//
 // # Dev shim vs. production (M4 Vault path)
 //
 // NewFileKEK is the development KEK: a single 32-byte key stored at a local

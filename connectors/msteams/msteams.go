@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/safehttp"
 )
 
 // connectorID is the stable connector identifier baked into every doc_id via
@@ -187,9 +188,12 @@ type graphClient struct {
 // newGraphClient builds a graphClient for one instance run.
 func newGraphClient(conf instanceConfig, token []byte) *graphClient {
 	return &graphClient{
-		base:   conf.baseURL(),
-		token:  string(token),
-		client: &http.Client{Timeout: httpTimeout},
+		base:  conf.baseURL(),
+		token: string(token),
+		// base_url is tenant-supplied; the SSRF-guarded client refuses
+		// loopback/metadata/private/cluster IPs at connect time so the bearer
+		// token (added per-request in getJSON) is never sent to an internal host.
+		client: safehttp.NewClientOrDefault(safehttp.WithTimeout(httpTimeout)),
 	}
 }
 

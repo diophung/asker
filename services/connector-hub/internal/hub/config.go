@@ -43,6 +43,22 @@ type Config struct {
 	// connector wiring that needs envelope encryption (blob store).
 	KEKFile string `env:"KEK_FILE" envDefault:"/keys/kek.bin"`
 
+	// Vault KEK selection (ADR-015 §3), MUST match the control plane's choice
+	// and key name so wrapped DEKs interoperate. VAULT_ADDR set -> Vault Transit;
+	// else the dev file KEK. In production (ASKER_ENV=production) an empty
+	// VAULT_ADDR fails closed at startup (never an ephemeral dev KEK).
+	VaultAddr       string `env:"VAULT_ADDR" envDefault:""`
+	VaultToken      string `env:"VAULT_TOKEN" envDefault:""`
+	VaultKEKKeyName string `env:"VAULT_KEK_KEY_NAME" envDefault:"asker-kek"`
+	// Env is the deployment marker (the KEK prod fail-closed guard).
+	Env string `env:"ASKER_ENV" envDefault:""`
+
+	// MaxInstancesPerTenant bounds how many sync workers (goroutines) one tenant
+	// can occupy in the scheduler — defense in depth alongside the control
+	// plane's per-tenant connector-instance create cap, in case stale rows or a
+	// misconfigured cap let a tenant accumulate instances. <= 0 disables the cap.
+	MaxInstancesPerTenant int `env:"HUB_MAX_INSTANCES_PER_TENANT" envDefault:"50"`
+
 	// MinIO settings are consumed by the upload connector's blob store
 	// (platform/blob), wired in package main; the hub only loads and
 	// forwards them. The env names match platform/blob.Config so either
@@ -82,4 +98,10 @@ func (c Config) validate() error {
 		return errors.New("hub: HUB_WEBHOOK_BASE must not be empty")
 	}
 	return nil
+}
+
+// IsProd reports whether the deployment is marked production (the KEK
+// fail-closed guard, ADR-015).
+func (c Config) IsProd() bool {
+	return c.Env == "production" || c.Env == "prod"
 }

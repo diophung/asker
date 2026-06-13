@@ -479,6 +479,52 @@ func TestReconcileSkipsInvalidTenant(t *testing.T) {
 	}
 }
 
+func TestPerTenantWorkerCap(t *testing.T) {
+	conn := &fakeConnector{id: "gmail"}
+	r := newRig(t, conn, func(o *schedulerOpts) { o.maxInstancesPerTenant = 2 })
+
+	// One tenant with THREE active instances; cap is 2.
+	ids := []string{
+		"aaaaaaaa-0000-0000-0000-000000000001",
+		"aaaaaaaa-0000-0000-0000-000000000002",
+		"aaaaaaaa-0000-0000-0000-000000000003",
+	}
+	for _, id := range ids {
+		r.cpFake.addInstance(id, "tenant-a", "gmail", nil, controlplanev1.ConnectorStatus_ACTIVE)
+	}
+	// A different tenant with one instance is unaffected by tenant-a's cap.
+	otherID := "bbbbbbbb-0000-0000-0000-000000000001"
+	r.cpFake.addInstance(otherID, "tenant-b", "gmail", nil, controlplanev1.ConnectorStatus_ACTIVE)
+
+	// Reconcile synchronously (no running loop): the cap is applied during it.
+	// Use a cancelable context and stop the spawned workers at cleanup so the
+	// goroutines drain.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		r.sch.stopAll()
+		r.sch.wg.Wait()
+	})
+	r.sch.reconcile(ctx)
+
+	r.sch.mu.Lock()
+	defer r.sch.mu.Unlock()
+	// tenant-a: exactly the two LOWEST ids run (deterministic), the third is dropped.
+	if _, ok := r.sch.workers[ids[0]]; !ok {
+		t.Errorf("instance %s (lowest id) not scheduled", ids[0])
+	}
+	if _, ok := r.sch.workers[ids[1]]; !ok {
+		t.Errorf("instance %s not scheduled", ids[1])
+	}
+	if _, ok := r.sch.workers[ids[2]]; ok {
+		t.Errorf("instance %s (over cap) scheduled despite per-tenant cap", ids[2])
+	}
+	// tenant-b's instance is scheduled (its own cap budget).
+	if _, ok := r.sch.workers[otherID]; !ok {
+		t.Error("tenant-b instance not scheduled (a's cap leaked across tenants)")
+	}
+}
+
 func TestBackoffDelay(t *testing.T) {
 	base, limit := 5*time.Second, 5*time.Minute
 	cases := []struct {

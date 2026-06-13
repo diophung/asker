@@ -66,6 +66,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/safehttp"
 )
 
 const (
@@ -222,10 +223,20 @@ func (c *Connector) newClient(conf instanceConfig, token []byte) (*client, error
 		// location interaction. Real callers should set their bucket's region.
 		region = "us-east-1"
 	}
+	// endpoint is tenant-supplied and dialed server-side; route minio-go through
+	// the SSRF-guarded transport so a hostile endpoint cannot reach loopback,
+	// the cloud metadata IP, RFC1918, or cluster-internal services. The guard
+	// runs at connect time (defeating DNS rebinding); dev/CI loopback is allowed
+	// via the safehttp env/test seam.
+	guarded, err := safehttp.NewTransport()
+	if err != nil {
+		return nil, fmt.Errorf("s3: build guarded transport: %w", err)
+	}
 	mc, err := minio.New(conf.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: conf.UseSSL,
-		Region: region,
+		Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure:    conf.UseSSL,
+		Region:    region,
+		Transport: guarded,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("s3: build client for endpoint: %w", err)

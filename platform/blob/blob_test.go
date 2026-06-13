@@ -51,6 +51,7 @@ type fakeAPI struct {
 	ensureErr error
 	putErr    error
 	getErr    error
+	removeErr error
 }
 
 func newFakeAPI() *fakeAPI {
@@ -87,6 +88,27 @@ func (f *fakeAPI) getObject(_ context.Context, bucket, key string) ([]byte, stri
 		return nil, "", fmt.Errorf("get object %q: %w", key, ErrNotFound)
 	}
 	return bytes.Clone(data), f.contentTypes[bucket+"/"+key], nil
+}
+
+func (f *fakeAPI) removePrefix(_ context.Context, bucket, prefix string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.removeErr != nil {
+		return 0, f.removeErr
+	}
+	if prefix == "" {
+		return 0, fmt.Errorf("refusing empty prefix")
+	}
+	full := bucket + "/" + prefix
+	var removed int
+	for k := range f.objects {
+		if strings.HasPrefix(k, full) {
+			delete(f.objects, k)
+			delete(f.contentTypes, k)
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 // stored returns the raw bytes the fake holds for bucket/key.
@@ -562,5 +584,89 @@ func TestConfigEnvValues(t *testing.T) {
 	want := Config{Endpoint: "minio.internal:9123", AccessKey: "ak", SecretKey: "sk", Bucket: "custom-bucket", UseSSL: true}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestDeletePrefixScopedToTenant(t *testing.T) {
+	api := newFakeAPI()
+	s := newTestStore(t, api)
+	ctx := context.Background()
+	alice := testTenant(t, "tenant-alice")
+	bob := testTenant(t, "tenant-bob")
+
+	// Seed alice (original + thumbnail nested key) and bob.
+	if _, err := s.Put(ctx, alice, "doc-1", "text/plain", []byte("a1")); err != nil {
+		t.Fatalf("put alice doc-1: %v", err)
+	}
+	if _, err := s.Put(ctx, alice, "media/thumb.jpg", "image/jpeg", []byte("athumb")); err != nil {
+		t.Fatalf("put alice thumb: %v", err)
+	}
+	if _, err := s.Put(ctx, bob, "doc-1", "text/plain", []byte("b1")); err != nil {
+		t.Fatalf("put bob doc-1: %v", err)
+	}
+
+	n, err := s.DeletePrefix(ctx, alice)
+	if err != nil {
+		t.Fatalf("DeletePrefix(alice): %v", err)
+	}
+	if n != 2 {
+		t.Errorf("removed = %d, want 2 (alice's original + thumbnail)", n)
+	}
+	if _, ok := api.stored("test-bucket", "tenant-alice/doc-1"); ok {
+		t.Error("alice doc-1 survived DeletePrefix")
+	}
+	if _, ok := api.stored("test-bucket", "tenant-alice/media/thumb.jpg"); ok {
+		t.Error("alice thumbnail survived DeletePrefix")
+	}
+	// Bob is untouched (isolation).
+	if _, ok := api.stored("test-bucket", "tenant-bob/doc-1"); !ok {
+		t.Error("bob doc-1 wrongly deleted by alice's DeletePrefix")
+	}
+
+	// Idempotent re-delete on an empty prefix.
+	n, err = s.DeletePrefix(ctx, alice)
+	if err != nil {
+		t.Fatalf("DeletePrefix(alice) again: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("re-delete removed = %d, want 0", n)
+	}
+}
+
+func TestDeletePrefixDoesNotMatchSiblingPrefix(t *testing.T) {
+	api := newFakeAPI()
+	s := newTestStore(t, api)
+	ctx := context.Background()
+	// "tenant-a" and "tenant-a-2" share the bare-string prefix "tenant-a" but
+	// the trailing slash ("tenant-a/") must not match "tenant-a-2/...".
+	a := testTenant(t, "tenant-a")
+	a2 := testTenant(t, "tenant-a-2")
+	if _, err := s.Put(ctx, a, "x", "text/plain", []byte("ax")); err != nil {
+		t.Fatalf("put a: %v", err)
+	}
+	if _, err := s.Put(ctx, a2, "x", "text/plain", []byte("a2x")); err != nil {
+		t.Fatalf("put a2: %v", err)
+	}
+	if _, err := s.DeletePrefix(ctx, a); err != nil {
+		t.Fatalf("DeletePrefix(a): %v", err)
+	}
+	if _, ok := api.stored("test-bucket", "tenant-a-2/x"); !ok {
+		t.Error("sibling tenant-a-2 wrongly deleted by tenant-a DeletePrefix")
+	}
+}
+
+func TestDeletePrefixRejectsBlankTenant(t *testing.T) {
+	s := newTestStore(t, newFakeAPI())
+	if _, err := s.DeletePrefix(context.Background(), tenancy.Context{}); !errors.Is(err, tenancy.ErrNoTenant) {
+		t.Errorf("DeletePrefix blank tenant: err = %v, want ErrNoTenant", err)
+	}
+}
+
+func TestDeletePrefixPropagatesError(t *testing.T) {
+	api := newFakeAPI()
+	api.removeErr = errors.New("minio down")
+	s := newTestStore(t, api)
+	if _, err := s.DeletePrefix(context.Background(), testTenant(t, "tenant-a")); err == nil {
+		t.Error("DeletePrefix succeeded despite remove error")
 	}
 }

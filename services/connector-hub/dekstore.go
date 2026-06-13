@@ -94,3 +94,20 @@ func (s *fileDEKStore) PutWrappedDEK(ctx context.Context, tenantID tenancy.Tenan
 	}
 	return nil
 }
+
+// Delete crypto-shreds the tenant's wrapped DEK file (the GDPR primitive).
+// Idempotent: removing an absent file returns nil so a retried erasure
+// converges. The control plane owns the durable Postgres DEK store; this hub
+// shim mirrors the same Delete semantics for blob DEKs the hub wraps locally.
+func (s *fileDEKStore) Delete(ctx context.Context, tenantID tenancy.TenantID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if tenantID == "" {
+		return tenancy.ErrNoTenant
+	}
+	if err := os.Remove(s.path(tenantID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("connector-hub: delete wrapped DEK: %w", err)
+	}
+	return nil
+}

@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/safehttp"
 )
 
 const (
@@ -103,9 +104,13 @@ func WithLogger(l *slog.Logger) Option {
 // New returns a ready-to-register iCalendar feed connector.
 func New(opts ...Option) sdk.Connector {
 	c := &Connector{
-		log:  slog.Default(),
-		now:  time.Now,
-		http: &http.Client{Timeout: httpTimeout},
+		log: slog.Default(),
+		now: time.Now,
+		// feed_url is tenant-supplied and fetched server-side; the SSRF-guarded
+		// client refuses loopback/metadata/private/cluster IPs at connect time
+		// (secure by default; dev/CI loopback is allowed via the safehttp env/
+		// test seam). See platform/safehttp.
+		http: safehttp.NewClientOrDefault(safehttp.WithTimeout(httpTimeout)),
 	}
 	for _, opt := range opts {
 		opt(c)

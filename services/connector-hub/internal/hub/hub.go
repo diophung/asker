@@ -145,14 +145,15 @@ func Run(ctx context.Context, cfg Config, deps Deps, logger *slog.Logger) error 
 
 	em := newEmitter(producer, kafkautil.TopicDocsRaw, time.Now)
 	sch := newScheduler(schedulerOpts{
-		cp:           cp,
-		sched:        schedClient,
-		registry:     deps.Registry,
-		emit:         em,
-		logger:       logger,
-		webhookBase:  cfg.WebhookBase,
-		syncInterval: cfg.SyncInterval,
-		tick:         cfg.SchedulerTick,
+		cp:                    cp,
+		sched:                 schedClient,
+		registry:              deps.Registry,
+		emit:                  em,
+		logger:                logger,
+		webhookBase:           cfg.WebhookBase,
+		syncInterval:          cfg.SyncInterval,
+		tick:                  cfg.SchedulerTick,
+		maxInstancesPerTenant: cfg.MaxInstancesPerTenant,
 	})
 
 	api := &httpAPI{

@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/safehttp"
 )
 
 const (
@@ -98,8 +99,10 @@ func WithLogger(l *slog.Logger) Option {
 // New returns a ready-to-register WhatsApp export connector.
 func New(opts ...Option) sdk.Connector {
 	c := &Connector{
-		log:  slog.Default(),
-		http: &http.Client{Timeout: httpTimeout},
+		log: slog.Default(),
+		// export_url is tenant-supplied and fetched server-side; the SSRF-guarded
+		// client refuses loopback/metadata/private/cluster IPs at connect time.
+		http: safehttp.NewClientOrDefault(safehttp.WithTimeout(httpTimeout)),
 	}
 	for _, opt := range opts {
 		opt(c)

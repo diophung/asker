@@ -31,6 +31,17 @@ service ControlPlaneService {
   rpc PutToken(PutTokenRequest) returns (PutTokenResponse);
   rpc GetToken(GetTokenRequest) returns (GetTokenResponse);
   rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
+
+  // DeleteTenant erases the CALLER's own tenant across every store (the GDPR
+  // right-to-erasure cascade, M6). The tenant is taken from the verified caller
+  // context (x-asker-tenant) — NEVER from the request — so a user can only ever
+  // delete their OWN data here; cross-tenant admin erasure is AdminService.
+  // AdminDeleteTenant. The request carries an explicit confirmation token equal
+  // to the caller's tenant id, a defense-in-depth guard against an accidental
+  // call (the server still ignores it for tenant SELECTION). Irreversible: it
+  // crypto-shreds the tenant DEK, purges Postgres/Vespa/MinIO/Redis, and
+  // verifies emptiness before reporting done.
+  rpc DeleteTenant(DeleteTenantRequest) returns (DeleteTenantResponse);
 }
 
 message Tenant {
@@ -154,6 +165,32 @@ message DeleteTokenRequest {
 
 message DeleteTokenResponse {}
 
+message DeleteTenantRequest {
+  // confirm MUST equal the caller's own tenant id (the value /v1/me reports).
+  // It is a typo/accident guard ONLY — the tenant being deleted is ALWAYS the
+  // verified caller context, never this field. A mismatch is InvalidArgument.
+  string confirm = 1;
+}
+
+// DeleteReport is the per-store erasure tally returned by a delete cascade and
+// reused by the admin path. Counts are best-effort observability, not a
+// correctness contract; the cascade additionally runs a verification pass that
+// re-reads every store and fails the RPC if anything residual remains.
+message DeleteReport {
+  string tenant_id = 1;
+  int64 connector_instances_deleted = 2;
+  int64 tokens_deleted = 3;
+  bool dek_destroyed = 4;
+  bool vespa_group_purged = 5;
+  int64 blobs_deleted = 6;
+  bool redis_purged = 7;
+  bool verified_empty = 8;
+}
+
+message DeleteTenantResponse {
+  DeleteReport report = 1;
+}
+
 // SchedulerService is the INTERNAL-ONLY cross-tenant enumeration surface for
 // the connector-hub scheduler, which must discover every tenant's connector
 // instances to schedule syncs. It is exempt from the per-tenant metadata
@@ -176,4 +213,84 @@ message ListAllInstancesResponse {
 message TenantInstance {
   string tenant_id = 1;
   ConnectorInstance instance = 2;
+}
+
+// AdminService is the privileged, DELIBERATELY cross-tenant operator surface
+// (M6). Unlike every ControlPlaneService RPC (scoped to the verified caller's
+// own tenant), admin RPCs act on an arbitrary tenant_id in the REQUEST. That is
+// safe ONLY because:
+//   1. authorization is a DISTINCT admin check, not mere authentication: the
+//      gateway requires an "admin" role/scope claim in the verified token
+//      before it will dial these RPCs (see docs; the claim is set via a
+//      Keycloak realm/client role mapper, NOT self-asserted);
+//   2. like SchedulerService, this service is exempt from the per-tenant
+//      x-asker-tenant metadata requirement by EXACT full-method name (never a
+//      prefix), and is never reachable outside the cluster-internal network
+//      (ADR-009; M4 NetworkPolicy + mTLS enforce it);
+//   3. every admin call is audit-logged (actor + target tenant + action), no
+//      secrets.
+// The cross-tenant exemption pattern mirrors
+// SchedulerService.ListAllInstances exactly.
+service AdminService {
+  // ListTenants enumerates registered tenants (paged) with summary usage.
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+  // GetTenantUsage returns one tenant's resource counts (quota/abuse triage).
+  rpc GetTenantUsage(GetTenantUsageRequest) returns (GetTenantUsageResponse);
+  // SuspendTenant flips every connector instance to PAUSED (and back), halting
+  // sync without destroying data — the reversible abuse control.
+  rpc SuspendTenant(SuspendTenantRequest) returns (SuspendTenantResponse);
+  // AdminDeleteTenant runs the full GDPR erasure cascade for an ARBITRARY
+  // tenant (operator-initiated erasure / abuse takedown). Same cascade as
+  // ControlPlaneService.DeleteTenant, but the target is the request tenant_id.
+  rpc AdminDeleteTenant(AdminDeleteTenantRequest) returns (AdminDeleteTenantResponse);
+}
+
+// TenantUsage is one tenant's resource footprint, for quota/abuse triage.
+message TenantUsage {
+  string tenant_id = 1;
+  google.protobuf.Timestamp created = 2;
+  int64 connector_instances = 3;
+  // Sum of docs_emitted across the tenant's connector instances (a proxy for
+  // indexed document volume; the authoritative count lives in Vespa).
+  int64 docs_emitted = 4;
+  bool suspended = 5;
+}
+
+message ListTenantsRequest {
+  // Page size; server clamps to a sane maximum. 0 means the server default.
+  int32 limit = 1;
+  // Opaque page cursor (the last tenant_id of the previous page); empty starts.
+  string page_token = 2;
+}
+
+message ListTenantsResponse {
+  repeated TenantUsage tenants = 1;
+  // Empty when there are no further pages.
+  string next_page_token = 2;
+}
+
+message GetTenantUsageRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantUsageResponse {
+  TenantUsage usage = 1;
+}
+
+message SuspendTenantRequest {
+  string tenant_id = 1;
+  // true suspends (PAUSE all instances); false resumes (ACTIVE).
+  bool suspended = 2;
+}
+
+message SuspendTenantResponse {
+  int64 instances_changed = 1;
+}
+
+message AdminDeleteTenantRequest {
+  string tenant_id = 1;
+}
+
+message AdminDeleteTenantResponse {
+  DeleteReport report = 1;
 }

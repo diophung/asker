@@ -90,6 +90,17 @@ func (c *TenantCipher) Decrypt(ctx context.Context, tc tenancy.Context, cipherte
 	return plaintext, nil
 }
 
+// Forget drops the tenant's cached unwrapped DEK/AEAD from memory. It is part
+// of the GDPR crypto-shred (M6): after DEKStore.Delete destroys the wrapped DEK,
+// Forget ensures no in-memory AEAD can keep decrypting the tenant's stragglers.
+// A subsequent Encrypt provisions a brand-new DEK. Safe to call for a tenant
+// with no cached DEK (no-op).
+func (c *TenantCipher) Forget(tenantID tenancy.TenantID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.aeads, tenantID)
+}
+
 // aeadFor returns the tenant's cached AEAD, loading (and, when create is
 // true, provisioning) the DEK as needed.
 func (c *TenantCipher) aeadFor(ctx context.Context, tenantID tenancy.TenantID, create bool) (cipher.AEAD, error) {

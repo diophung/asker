@@ -16,15 +16,22 @@ import (
 const readyzProbeTimeout = 2 * time.Second
 
 // newHandler assembles the middleware chain. Outermost to innermost:
-// CORS (answers preflights pre-auth) -> telemetry -> mux -> auth ->
-// per-tenant rate limit -> handler.
+// CORS (answers preflights pre-auth) -> pre-auth throttle (per-IP + global,
+// IN FRONT of auth so unauth floods can't hammer JWKS/crypto) -> telemetry ->
+// mux -> auth -> per-tenant rate limit -> handler. Admin routes add a distinct
+// admin-claim authorization check after auth.
 func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	limiter := newRateLimiter(d.counter, cfg.RateLimitPerMinute, d.logger)
 	cors := newCORSPolicy(cfg.CORSAllowedOrigins)
+	preAuth := newPreAuthLimiter(cfg.PreAuthPerIPPerMinute, cfg.PreAuthGlobalPerSec, cfg.PreAuthGlobalBurst, cfg.TrustProxyHeaders)
 
 	// authed routes: tenant from the verified token ONLY, then rate limit.
 	authed := func(h http.Handler) http.Handler {
 		return auth.middleware(limiter.middleware(h))
+	}
+	// adminAuthed: authed PLUS a distinct admin-role check (not mere authn).
+	adminAuthed := func(h http.Handler) http.Handler {
+		return authed(d.requireAdmin(h))
 	}
 
 	mux := http.NewServeMux()
@@ -37,6 +44,11 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	// and carries no tenant context, so no isolation concern.
 	mux.Handle("GET /metrics", telemetry.MetricsHandler())
 	mux.Handle("/v1/me", authed(getOnly(handleMe)))
+	// GDPR self-service erasure: the user deletes THEIR OWN tenant. The tenant
+	// is from the verified token only; there is no body field that selects one.
+	mux.Handle("/v1/me/data", authed(methods(map[string]http.HandlerFunc{
+		http.MethodDelete: d.handleDeleteMyData,
+	})))
 	mux.Handle("/v1/search", authed(getOnly(d.handleSearch)))
 	mux.Handle("/v1/media", authed(getOnly(d.handleMedia)))
 	mux.Handle("/v1/connectors", authed(methods(map[string]http.HandlerFunc{
@@ -52,8 +64,21 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	mux.Handle("/v1/upload", authed(methods(map[string]http.HandlerFunc{
 		http.MethodPost: d.handleUpload,
 	})))
+
+	// Admin API (M6): privileged, cross-tenant operator surface, gated by the
+	// admin role/scope claim (admin.go). NOT a web UI — an API; the console is a
+	// follow-up. Audit-logged at the control plane.
+	mux.Handle("/v1/admin/tenants", adminAuthed(getOnly(d.handleAdminListTenants)))
+	mux.Handle("/v1/admin/tenants/{tenant}", adminAuthed(methods(map[string]http.HandlerFunc{
+		http.MethodGet:    d.handleAdminGetTenant,
+		http.MethodDelete: d.handleAdminDeleteTenant,
+	})))
+	mux.Handle("/v1/admin/tenants/{tenant}/suspend", adminAuthed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleAdminSuspendTenant,
+	})))
+
 	mux.HandleFunc("/", handleNotFound)
-	return cors.middleware(telemetry.HTTPMiddleware("gateway")(mux))
+	return cors.middleware(preAuth.middleware(telemetry.HTTPMiddleware("gateway")(mux)))
 }
 
 // methods dispatches by HTTP method with a JSON 405 (and Allow header) for
