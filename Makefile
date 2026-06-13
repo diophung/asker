@@ -81,11 +81,44 @@ e2e-leakage: ## Cross-tenant leakage suite (sacred — must always pass)
 e2e-m3-media: ## M3 media exit test (spoken phrase -> video@timestamp, CLIP text->image, OCR, isolation)
 	bash tools/e2e/m3-media.sh
 
-helm-lint: ## Lint + kubeconform the Helm umbrella chart (default, dev, and CI profiles)
+helm-lint: ## Lint + kubeconform the Helm umbrella chart (default, dev, CI, and observability-on)
 	helm lint deploy/helm/asker
 	@for vals in "" "-f deploy/helm/asker/values-dev.yaml" "-f deploy/helm/asker/values-ci.yaml"; do \
 		helm template asker deploy/helm/asker $$vals | kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.29.0 -summary; \
 	done
+	@echo "== observability.enabled=true =="; \
+	helm template asker deploy/helm/asker --set observability.enabled=true | kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.29.0 -summary
 
 e2e-k8s: ## M4 kind chaos test (needs a local kind cluster with the chart installed via values-ci.yaml)
 	bash tools/e2e/k8s-chaos.sh
+
+# --- M5: scale & SLO verification ---------------------------------------------
+.PHONY: synthgen-dry synthgen-load obs-up obs-down obs-validate load-query load-ingest soak
+
+OBS_COMPOSE := $(COMPOSE) -f deploy/compose/docker-compose.observability.yml
+
+synthgen-dry: ## Plan a synthetic corpus (generates NOTHING; safe on the dev VM)
+	go run ./tools/synthgen --tenants $${TENANTS:-100000} --min-docs $${MIN_DOCS:-10} --max-docs $${MAX_DOCS:-8000} --rare-token-rate $${RARE:-0.001} --dry-run
+
+synthgen-load: ## Generate + load a synthetic corpus (pass SYNTHGEN_ARGS="--tenants N ... --dry-run=false")
+	go run ./tools/synthgen --dry-run=false $${SYNTHGEN_ARGS}
+
+obs-up: ## Start the OPT-IN Prometheus+Grafana overlay (Grafana 127.0.0.1:13000 admin/admin, Prometheus :19090; dev-only)
+	$(OBS_COMPOSE) up -d prometheus grafana
+
+obs-down: ## Stop the observability overlay (the main stack keeps running)
+	$(OBS_COMPOSE) stop prometheus grafana && $(OBS_COMPOSE) rm -f prometheus grafana
+
+obs-validate: ## Validate the committed dashboards (JSON) + alert rules (promtool, if present)
+	@for f in deploy/helm/asker/files/observability/grafana/dashboards/*.json; do python3 -m json.tool "$$f" >/dev/null && echo "OK $$f"; done
+	@if command -v promtool >/dev/null 2>&1; then promtool check rules deploy/helm/asker/files/observability/prometheus/rules/*.rules.yml; \
+	else echo "promtool not on PATH; skipping rule check (CI runs it)"; fi
+
+load-query: ## M5 query load suite (stepped to cluster max; needs k6 + a running stack)
+	RUN_INGEST=false SOAK=false bash tools/load/run-load.sh
+
+load-ingest: ## M5 ingest/freshness load suite (needs k6 + a running stack)
+	RUN_QUERY=false SOAK=false bash tools/load/run-load.sh
+
+soak: ## M5 soak (SOAK_DURATION default 2h; zero failed + zero data loss; needs k6 + a running stack)
+	SOAK=true SEED_CORPUS=$${SEED_CORPUS:-true} bash tools/load/run-load.sh

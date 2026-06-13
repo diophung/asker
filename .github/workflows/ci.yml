@@ -34,15 +34,25 @@ jobs:
           make proto
           git diff --exit-code platform/proto/gen \
             || { echo "::error::platform/proto/gen is stale — run 'make proto' and commit"; exit 1; }
-      - name: Helm lint + kubeconform (M4 chart)
+      - name: Helm lint + kubeconform (chart) + observability artifacts
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           go install github.com/yannh/kubeconform/cmd/kubeconform@latest
           helm lint deploy/helm/asker
+          KC="$(go env GOPATH)/bin/kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.29.0 -summary"
           for vals in "" "-f deploy/helm/asker/values-dev.yaml" "-f deploy/helm/asker/values-ci.yaml"; do
-            helm template asker deploy/helm/asker $vals \
-              | "$(go env GOPATH)/bin/kubeconform" -strict -ignore-missing-schemas -kubernetes-version 1.29.0 -summary
+            helm template asker deploy/helm/asker $vals | $KC
           done
+          # M5: the opt-in observability path must also render + validate.
+          helm template asker deploy/helm/asker --set observability.enabled=true | $KC
+          # M5: the committed Grafana dashboards (JSON) + Prometheus alert rules
+          # ship in the chart; guard against metric-name drift / broken JSON.
+          for f in deploy/helm/asker/files/observability/grafana/dashboards/*.json; do
+            python3 -m json.tool "$f" >/dev/null && echo "dashboard JSON OK: $f"
+          done
+          curl -fsSL https://github.com/prometheus/prometheus/releases/download/v3.1.0/prometheus-3.1.0.linux-amd64.tar.gz \
+            | tar xz --strip-components=1 -C /tmp prometheus-3.1.0.linux-amd64/promtool
+          /tmp/promtool check rules deploy/helm/asker/files/observability/prometheus/rules/*.rules.yml
 
   test:
     name: test

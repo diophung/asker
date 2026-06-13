@@ -86,6 +86,13 @@ All credentials below are **dev-only** and hardcoded in the compose stack. Never
 | PostgreSQL | localhost:15432 | `asker` / `asker`, db `asker` |
 | Redis | localhost:16379 | — |
 | Redpanda (Kafka API) | localhost:19092 | — |
+| Prometheus (opt-in: `make obs-up`) | http://localhost:19090 | — |
+| Grafana SLO dashboards (opt-in: `make obs-up`) | http://localhost:13000 | `admin` / `admin` |
+
+The observability stack (Prometheus + Grafana) is **opt-in** and not part of `make dev-up` (it
+would crowd the dev VM). Start it alongside the running stack with `make obs-up` (stop with
+`make obs-down`); the SLO dashboards (query P90 vs the 5 s line, ingest freshness, cache hit rate,
+degradation ladder, dead-letter / data-loss) provision automatically. See ADR-017 and `docs/capacity.md`.
 
 Dev users in the Keycloak `asker` realm: `alice`, `bob`, and `carol`, all with password
 `password123`. The public client `asker-web` has Direct Access Grants enabled, so a dev token

@@ -1,0 +1,29 @@
+# ==============================================================================
+# Asker — Grafana dashboard PROVIDER provisioning (M5, OPT-IN observability stack).
+#
+# Loads every dashboard JSON from /var/lib/grafana/dashboards (the dashboards
+# builder owns deploy/observability/grafana/dashboards/*.json; the compose file
+# mounts that host dir read-only at this path). `foldersFromFilesStructure: false`
+# keeps them all in the "Asker" folder. updateIntervalSeconds picks up edits to
+# the mounted files without a Grafana restart (handy in dev).
+#
+# Dashboards reference the Prometheus datasource by uid "prometheus" (pinned in
+# ../datasources/datasource.yml), so they import unchanged in compose and K8s.
+#
+# K8s NOTE: the gated Helm chart mounts the same provider config + the dashboard
+# JSONs (via ConfigMaps) at the same paths, so this provider definition is reused
+# verbatim there.
+# ==============================================================================
+apiVersion: 1
+
+providers:
+  - name: asker-dashboards
+    orgId: 1
+    folder: Asker
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

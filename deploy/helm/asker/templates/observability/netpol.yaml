@@ -1,0 +1,61 @@
+{{- /*
+================================================================================
+Prometheus scrape allow — OPT-IN (M5). Gated on observability.enabled AND
+networkPolicy.enabled (both default-respecting): renders NOTHING unless BOTH are
+on, so the default chart output is unchanged.
+
+Under the default-deny-ingress posture (ADR-016), a scraped service accepts only
+the peers its existing allow policy names. Prometheus is a NEW peer, so we add
+ONE additive ingress NetworkPolicy PER scraped service that permits the
+Prometheus pod (selected by this chart's component=prometheus label) to reach
+that service's /metrics (health) port. NetworkPolicies are additive, so these sit
+alongside templates/netpol/allow-app-services.yaml without modifying it:
+
+  gateway       :8080   (main mux serves /metrics)
+  query         :9201   (health server)
+  ingest        :9501   (health server; otherwise ingress-default-denied)
+  index-writer  :9701   (health server; otherwise ingress-default-denied)
+
+Targets are derived from observability.prometheus.scrapeTargets so the policy and
+the scrape config can never diverge on which port is opened. The "prometheus" job
+(self-scrape) is skipped — it is not an Asker app service.
+
+This is the documented complement to the brief's "Prometheus->health-port ingress
+allow per service" requirement; without it, enabling observability under a
+policy-enforcing CNI would silently yield all-DOWN scrape targets.
+================================================================================
+*/ -}}
+{{- if eq (include "asker.obs.netpolEnabled" .) "true" }}
+{{- $root := . -}}
+{{- $targets := (.Values.observability.prometheus | default dict).scrapeTargets | default list -}}
+{{- range $i, $t := $targets }}
+{{- $job := $t.job -}}
+{{- /* derive the port from the "host:port" target string */ -}}
+{{- $parts := splitList ":" $t.target -}}
+{{- $port := last $parts -}}
+{{- if $i }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-%s-prom-scrape-allow" (include "asker.fullname" $root) $job | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root $job) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "asker.obs.selectorLabels" (list $root "prometheus") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $port | int }}
+{{- end }}
+{{- end }}

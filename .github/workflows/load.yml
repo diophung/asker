@@ -1,0 +1,159 @@
+name: load
+
+# M5 load + soak suite (specs/asker-v1-personal-search-engine.md §5):
+#   "k6 load suites for query (stepped to the cluster's max, with documented
+#    extrapolation math to 50K TPS) and ingest (prove 30-min freshness under
+#    load) ... Exit: load report committed showing P90 latency and freshness
+#    SLAs met at test scale ... 2-hour soak with zero data loss."
+#
+# This is a NEW, standalone workflow. It is HEAVY (full compose stack + k6 +
+# synthgen seed + soak), so it is NOT on the PR path: it runs on manual
+# workflow_dispatch and on a nightly schedule only. The integrator may rename
+# the referenced scripts/targets to match the k6 builder's final interface
+# (see the assumed-interface note at the bottom of this file).
+#
+# Triggers + action versions mirror ci.yml; the stack env (TEI bge-small,
+# EMBEDDING_DIM 384, CLIP_DIM 512) mirrors ci.yml's e2e jobs exactly.
+
+on:
+  workflow_dispatch:
+    inputs:
+      soak_duration:
+        description: "Soak duration (e.g. 10m for CI, 2h for the formal exit run)"
+        required: false
+        default: "10m"
+      synthgen_tenants:
+        description: "synthgen tenant count for the seeded corpus"
+        required: false
+        default: "1000"
+      synthgen_docs_per_tenant:
+        description: "synthgen docs per tenant (uniform)"
+        required: false
+        default: "250"
+  schedule:
+    # Nightly at 03:17 UTC. The scheduled run uses the SHORT soak default;
+    # the formal 2-hour soak is run on demand via workflow_dispatch.
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never run two heavy load runs at once; let an in-flight run finish.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  load:
+    name: load + soak
+    runs-on: ubuntu-latest
+    # Full stack bring-up + first-run TEI model download + synthgen seed + the
+    # stepped query/ingest suites + the (short, parameterized) soak. The 2-hour
+    # on-demand soak needs this raised; the dispatch caller bumps it as needed.
+    timeout-minutes: 180
+    env:
+      # Small embedding model for CI speed; dev default stays BAAI/bge-m3.
+      # EMBEDDING_DIM must match the model (ADR-005): bge-small = 384.
+      TEI_MODEL_ID: BAAI/bge-small-en-v1.5
+      EMBEDDING_DIM: "384"
+      CLIP_DIM: "512"
+      # Soak duration: short for CI/nightly; the real 2h soak is on-demand.
+      SOAK_DURATION: ${{ github.event.inputs.soak_duration || '10m' }}
+      # synthgen seed parameters (run-load.sh seeds the corpus deterministically;
+      # these are its SYNTH_* knobs). Same seed => exact rare-token hit counts.
+      SYNTH_SEED: "1"
+      SYNTH_TENANTS: ${{ github.event.inputs.synthgen_tenants || '1000' }}
+      SYNTH_DOCS_PER_TENANT: ${{ github.event.inputs.synthgen_docs_per_tenant || '250' }}
+      # Persisted k6 summaries / synthgen log (run-load.sh's OUTDIR; KEEP_OUTDIR
+      # stops it being cleaned so the artifact upload can collect it).
+      LOAD_OUT_DIR: ${{ github.workspace }}/loadtest-out
+      # Stack endpoints (compose publishes these to localhost; health ports are
+      # NOT published, so the soak's deadletter scrape degrades to a warning —
+      # the zero-failed-requests assertion is the primary gate).
+      GATEWAY_URL: http://localhost:8080
+      VESPA_URL: http://localhost:8082
+      KEYCLOAK_URL: http://localhost:8081
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install k6
+        run: |
+          # Official k6 apt repo (pinned key); run-load.sh invokes `k6` from PATH.
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+          k6 version
+
+      - name: Prepare output directory
+        run: mkdir -p "$LOAD_OUT_DIR"
+
+      - name: Start the dev stack
+        run: make dev-up
+
+      - name: Smoke-check the stack is healthy before loading
+        run: make e2e-smoke
+
+      # run-load.sh (tools/load/) SEEDS the corpus itself via synthgen
+      # (vespa-direct, deterministic) then runs the suites. When SOAK!=true it
+      # runs the stepped query suite + the ingest-freshness suite; the soak is a
+      # separate invocation (SEED_CORPUS=false reuses the corpus).
+      - name: Run the k6 query + ingest suites
+        env:
+          OUTDIR: ${{ env.LOAD_OUT_DIR }}
+          KEEP_OUTDIR: "1"
+          SOAK: "false"
+          RUN_QUERY: "true"
+          RUN_INGEST: "true"
+        run: bash tools/load/run-load.sh
+
+      - name: Run the soak (zero data loss)
+        env:
+          OUTDIR: ${{ env.LOAD_OUT_DIR }}
+          KEEP_OUTDIR: "1"
+          SOAK: "true"
+          SEED_CORPUS: "false" # corpus already seeded by the previous step
+        run: bash tools/load/run-load.sh
+
+      # The k6 summaries + synthgen log are the evidence an operator uses to fill
+      # docs/loadtest-report.md (the committed template). run-load.sh prints the
+      # headline numbers (max sustained RPS at P90<SLO, freshness P90, soak result)
+      # to its step log; the JSON summaries are uploaded here.
+      - name: Upload k6 summaries + synthgen log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loadtest-out-${{ github.run_id }}
+          path: |
+            ${{ env.LOAD_OUT_DIR }}/**
+            docs/loadtest-report.md
+          if-no-files-found: warn
+
+      - name: Dump compose logs
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail=500 || true
+
+# ----------------------------------------------------------------------------
+# INTERFACE (reconciled with tools/load/run-load.sh):
+#   - run-load.sh is the single entrypoint. It SEEDS the corpus (synthgen
+#     vespa-direct, SYNTH_* knobs above), mints an OIDC token, and drives k6.
+#   - OUTDIR + KEEP_OUTDIR=1 persist the k6 summaries for the artifact upload
+#     (run-load.sh removes a mktemp OUTDIR on success otherwise).
+#   - Query+ingest and the soak are SEPARATE invocations (SOAK toggles which run;
+#     the soak passes SEED_CORPUS=false to reuse the already-seeded corpus).
+#   - The soak's deadletter (zero-data-loss) scrape reads index-writer :9701
+#     /metrics, which the compose stack does NOT publish to the host, so it
+#     degrades to a WARNING here; the zero-failed-requests assertion is the hard
+#     gate. The formal 2h soak should run from inside the network (or set
+#     INDEX_WRITER_METRICS to a reachable /metrics) to make it a hard check.
+#   - run-load.sh does NOT auto-fill docs/loadtest-report.md; the operator fills
+#     the committed template from the uploaded summaries + the step log.
+# ----------------------------------------------------------------------------

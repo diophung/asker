@@ -128,3 +128,12 @@ vespa:
   groups: 1
   nodesPerGroup: 1
   storage: { size: 5Gi }
+
+# OPT-IN observability (M5): Prometheus + Grafana SLO stack. Left OFF here so the
+# dev render stays lean (the 8GB dev VM cannot host kind + the stack + monitoring;
+# observability is primarily for the CI load/soak cluster). To watch SLOs on a
+# roomier dev cluster, flip enabled true (or `--set observability.enabled=true`):
+# Grafana is then a ClusterIP Service "grafana":3000 (port-forward to view; the
+# compose overlay is the lighter local option — Grafana at 127.0.0.1:13000).
+observability:
+  enabled: false

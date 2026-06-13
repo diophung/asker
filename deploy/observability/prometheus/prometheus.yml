@@ -1,0 +1,82 @@
+# ==============================================================================
+# Asker — Prometheus scrape config (M5, OPT-IN observability stack).
+#
+# Owned by the obs-stack builder. The COMPOSE form of this file is mounted
+# read-only into prom/prometheus by deploy/compose/docker-compose.observability.yml
+# (run alongside the main compose file). It scrapes the four Asker services that
+# expose Prometheus-format metrics on their HEALTH port (wave-0 instrumentation):
+#
+#   gateway       :8080  (main mux)
+#   query         :9201  (health server)
+#   ingest        :9501  (health server)
+#   index-writer  :9701  (health server)
+#
+# control-plane (:9101) and connector-hub (:9301) do NOT expose /metrics yet and
+# are deliberately omitted (M5 wave-1 scope). Targets are the COMPOSE DNS names
+# (== the bare service name); this file works only when Prometheus shares the
+# `asker` compose network (the observability compose file joins it).
+#
+# Alert/recording RULES live in ./rules/*.rules.yml — written by the dashboards
+# builder, mounted at the same relative path inside the container. rule_files
+# below globs them; an empty rules dir is fine (Prometheus loads zero rules).
+#
+# K8s NOTE: in Kubernetes the equivalent scrape config is rendered by the gated
+# Helm ConfigMap (deploy/helm/asker/templates/observability/prometheus.yaml). It
+# uses the in-namespace release Service DNS as STATIC targets (gateway:8080,
+# query:9201, ingest:9501, index-writer:9701) — same names, same ports — rather
+# than kubernetes_sd, to keep it simple, RBAC-free, and identical to this file.
+# A Prometheus->health-port ingress NetworkPolicy allow is required under the
+# default-deny posture (ADR-016); the chart adds it gated on observability.enabled.
+# ==============================================================================
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    stack: asker-dev
+
+# Alert + recording rules (the dashboards builder owns the file contents). The
+# glob tolerates an empty directory.
+rule_files:
+  - /etc/prometheus/rules/*.rules.yml
+
+scrape_configs:
+  # Prometheus scrapes itself (useful for meta-monitoring + a liveness signal).
+  - job_name: prometheus
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: prometheus
+
+  # --- Asker services exposing OTel/Prometheus metrics on their health port ----
+  # All serve GET /metrics. Labels add a stable `service` for dashboard variables
+  # (low-cardinality; NOT a per-tenant/per-doc label).
+  - job_name: gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8080"]
+        labels:
+          service: gateway
+
+  - job_name: query
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["query:9201"]
+        labels:
+          service: query
+
+  - job_name: ingest
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ingest:9501"]
+        labels:
+          service: ingest
+
+  - job_name: index-writer
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["index-writer:9701"]
+        labels:
+          service: index-writer
