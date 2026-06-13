@@ -160,3 +160,26 @@ jobs:
       - name: Dump compose logs
         if: always()
         run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail=500 || true
+
+  e2e-m3-media:
+    name: e2e-m3-media
+    runs-on: ubuntu-latest
+    needs: [build]
+    # Heavy ML images (clip/torch, enrich/whisper+ffmpeg+tesseract) + first-run
+    # model downloads (CLIP ViT-B/32, whisper-tiny) — allow generous time.
+    timeout-minutes: 75
+    env:
+      TEI_MODEL_ID: BAAI/bge-small-en-v1.5
+      EMBEDDING_DIM: "384"
+      CLIP_DIM: "512"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: docker image prune -af || true
+      - name: Start the dev stack
+        run: make dev-up
+      - name: Run M3 media exit suite
+        run: make e2e-m3-media
+      - name: Dump compose logs
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail=500 || true
