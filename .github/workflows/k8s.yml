@@ -1,0 +1,150 @@
+name: k8s
+
+# M4 exit criterion (specs/asker-v1-personal-search-engine.md):
+#   "full stack deploys to a kind/k3d cluster in CI; chaos test (kill any one
+#    pod) shows no failed queries beyond retry."
+#
+# This is a NEW, standalone workflow (the integrator may fold the job into
+# ci.yml). It stands up a single-node kind cluster, installs the asker Helm
+# chart with the SLIM CI profile (deploy/helm/asker/values-ci.yaml: the query
+# path only — gateway/query/Vespa/TEI/Redis/Keycloak), loads the locally built
+# gateway/query images into kind, then runs tools/e2e/k8s-chaos.sh which kills
+# one query pod and one gateway pod while a retrying query loop runs and asserts
+# no failed queries beyond retry.
+#
+# Triggers + action versions mirror ci.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Dedup superseded PR runs, but let every push to main run to completion.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e-k8s:
+    name: e2e-k8s (kind chaos)
+    runs-on: ubuntu-latest
+    # kind cluster bootstrap + image builds + TEI/Vespa/Keycloak pulls + the
+    # chaos run (with rollout waits). Generous, but bounded.
+    timeout-minutes: 40
+    env:
+      # The chart version is the default image tag (Chart.yaml version), so the
+      # images we build + `kind load` must carry it. Resolved at runtime below.
+      CHART_DIR: deploy/helm/asker
+      NAMESPACE: asker
+      RELEASE: asker
+      # Small embedding model for CI speed (mirrors ci.yml e2e jobs); must match
+      # config.embeddingDim in values-ci.yaml (384) and the Vespa schema.
+      EMBEDDING_DIM: "384"
+      CLIP_DIM: "512"
+    steps:
+      - uses: actions/checkout@v4
+
+      # The ML/search images (TEI cpu, Vespa, Keycloak) are large; reclaim the
+      # runner's preinstalled toolchains/images first (mirrors e2e-m3-media).
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL || true
+          docker image prune -af || true
+          df -h /
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kind + kubectl + helm
+        run: |
+          # kind
+          curl -fsSL -o ./kind \
+            https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+          kind version
+          # kubectl
+          KVER="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+          curl -fsSL -o ./kubectl \
+            "https://dl.k8s.io/release/${KVER}/bin/linux/amd64/kubectl"
+          chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
+          kubectl version --client
+          # helm (preinstalled on ubuntu-latest, but pin a known-good one)
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster --name asker --wait 120s
+          kubectl cluster-info
+          kubectl get nodes -o wide
+
+      - name: Resolve chart version (image tag)
+        id: chart
+        run: |
+          VER="$(grep -E '^version:' "${CHART_DIR}/Chart.yaml" | awk '{print $2}')"
+          echo "version=${VER}" >>"$GITHUB_OUTPUT"
+          echo "Chart version / image tag = ${VER}"
+
+      # Build the locally referenced app images from their committed Dockerfiles
+      # (build context is the repo root, per each Dockerfile header) and tag them
+      # with the chart version so values-ci.yaml's `asker/<svc>:<version>` refs
+      # resolve. control-plane is built per the M4 brief even though the SLIM CI
+      # profile disables it (the query path does not need it).
+      - name: Build app images
+        env:
+          TAG: ${{ steps.chart.outputs.version }}
+        run: |
+          docker build -f services/gateway/Dockerfile -t "asker/gateway:${TAG}" .
+          docker build -f services/query/Dockerfile -t "asker/query:${TAG}" .
+          docker build -f services/control-plane/Dockerfile -t "asker/control-plane:${TAG}" .
+
+      # Load the built images into the kind node's containerd store so the
+      # imagePullPolicy: Never pods (values-ci.yaml) can start without a registry.
+      - name: kind load images
+        env:
+          TAG: ${{ steps.chart.outputs.version }}
+        run: |
+          kind load docker-image --name asker "asker/gateway:${TAG}"
+          kind load docker-image --name asker "asker/query:${TAG}"
+          kind load docker-image --name asker "asker/control-plane:${TAG}"
+
+      - name: helm install (slim CI profile)
+        run: |
+          helm install "${RELEASE}" "${CHART_DIR}" \
+            --namespace "${NAMESPACE}" --create-namespace \
+            -f "${CHART_DIR}/values-ci.yaml" \
+            --wait --timeout 15m
+
+      - name: Run kind chaos test
+        run: bash tools/e2e/k8s-chaos.sh
+
+      # Always dump cluster state for triage (mirrors ci.yml's `if: always()`
+      # compose-logs step).
+      - name: Dump cluster state
+        if: always()
+        run: |
+          echo "===== pods (all namespaces) ====="
+          kubectl get pods -A -o wide || true
+          echo "===== events (asker ns) ====="
+          kubectl -n "${NAMESPACE}" get events --sort-by=.lastTimestamp || true
+          echo "===== describe asker workloads ====="
+          kubectl -n "${NAMESPACE}" describe deploy,statefulset,pods || true
+          echo "===== gateway logs ====="
+          kubectl -n "${NAMESPACE}" logs -l app.kubernetes.io/component=gateway \
+            --tail=200 --all-containers --prefix || true
+          echo "===== query logs ====="
+          kubectl -n "${NAMESPACE}" logs -l app.kubernetes.io/component=query \
+            --tail=200 --all-containers --prefix || true
+          echo "===== vespa logs ====="
+          kubectl -n "${NAMESPACE}" logs "statefulset/${RELEASE}-vespa" \
+            --tail=200 --prefix || true
+
+      - name: Teardown kind cluster
+        if: always()
+        run: kind delete cluster --name asker || true

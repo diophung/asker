@@ -80,3 +80,12 @@ e2e-leakage: ## Cross-tenant leakage suite (sacred — must always pass)
 
 e2e-m3-media: ## M3 media exit test (spoken phrase -> video@timestamp, CLIP text->image, OCR, isolation)
 	bash tools/e2e/m3-media.sh
+
+helm-lint: ## Lint + kubeconform the Helm umbrella chart (default, dev, and CI profiles)
+	helm lint deploy/helm/asker
+	@for vals in "" "-f deploy/helm/asker/values-dev.yaml" "-f deploy/helm/asker/values-ci.yaml"; do \
+		helm template asker deploy/helm/asker $$vals | kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.29.0 -summary; \
+	done
+
+e2e-k8s: ## M4 kind chaos test (needs a local kind cluster with the chart installed via values-ci.yaml)
+	bash tools/e2e/k8s-chaos.sh

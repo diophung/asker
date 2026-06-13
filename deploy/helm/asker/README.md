@@ -220,3 +220,67 @@ The **map key is the Service name and the dialable DNS name** (== compose name).
 Overrides for a single-node cluster: `config.embeddingDim: 384` (bge-small, ADR-005),
 `global.imageRegistry: ""` (locally built images), one replica per service, and
 `autoscaling`/`pdb` disabled (a 1-node cluster cannot satisfy a PDB during drain).
+
+---
+
+## Deploying to Kubernetes
+
+> Full step-by-step guide (prerequisites, operator ordering, post-install wiring, verification,
+> dev-vs-prod gap): **`deploy/k8s-docs.md`**. Operations: blue/green + canary rollouts
+> (`docs/runbooks/blue-green-deploy.md`) and backup/restore for Postgres, Vespa, MinIO
+> (`docs/runbooks/backup-restore-*.md`). This section is the quick map.
+
+### Order of operations
+
+The umbrella chart deploys the **stateless app tier** and (gated) self-hosted stateful deps; it does
+**not** install operators. Stand things up in this order (ADR-014 §4):
+
+1. **Cluster prerequisites** — a default `StorageClass`, an `IngressClass` + controller, and a
+   **policy-enforcing CNI** (Calico/Cilium) so the default-deny `NetworkPolicies` actually bite
+   (ADR-016; they are silent no-ops on a non-enforcing CNI such as kind's default kindnet).
+2. **Operators** — the **Strimzi** Kafka operator when `kafka.strimzi.enabled=true`
+   (`helm install strimzi/strimzi-kafka-operator`); optionally **cert-manager** (edge TLS + the
+   `tls.internal` Certificate CRs); a HA **Vault** out-of-band for the prod KEK (ADR-015).
+3. **App chart + stateful deps** — `helm install asker deploy/helm/asker -n asker -f <values>`.
+4. **Post-install wiring** — wait for Strimzi (`kubectl wait kafka/asker-kafka`), set
+   `config.kafkaBrokers=asker-kafka-kafka-bootstrap:9092`; **deploy the Vespa application package**
+   against the in-cluster config server (the `vespa/deploy.sh` flow — the query port `:8080` only
+   serves after activation); set `VAULT_ADDR` for control-plane/connector-hub to select the Vault
+   KEK (ADR-015).
+
+### Values profiles
+
+| File | Use | Shape |
+| :--- | :--- | :--- |
+| `values.yaml` | authoritative defaults (prod-leaning) | 9 services, HPA+PDB on, deps `deploy:true`, Strimzi/Vespa/Vault gated off |
+| `values-dev.yaml` | single-node kind/k3d dev | embeddingDim 384, 1 replica, HPA/PDB off, dev Secret |
+| `values-ci.yaml` | **CI / kind SLIM** — the M4 chaos exit criterion | only the synchronous **query path** (gateway + query, each `replicaCount: 2` + `pdb.minAvailable: 1`) + Vespa/TEI/Redis/Keycloak; clip/enrich/ingest/index-writer/connector-hub/control-plane/Postgres/MinIO/Kafka/Vault disabled to fit a ~7GB/2-CPU runner |
+
+The CI profile proves the M4 exit criterion — *"full stack deploys to a kind/k3d cluster in CI;
+chaos test (kill any one pod) shows no failed queries beyond retry"* — for the **query path**: kill a
+`query`/`gateway` replica and the PDB-protected survivor keeps serving. It feeds + queries a
+tenant-scoped doc directly via the Vespa `document/v1` API + `streaming.groupname` (as
+`tools/e2e/smoke.sh` does), so no Kafka ingest pipeline is needed.
+
+```sh
+# Validate (no cluster):
+helm lint deploy/helm/asker -f deploy/helm/asker/values-ci.yaml
+helm template asker deploy/helm/asker -f deploy/helm/asker/values-ci.yaml \
+  | kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.29.0 -summary
+# Observed: helm lint clean; kubeconform 24/24 valid (default profile 68, dev/CI ~51/24).
+
+# Install on the CI kind cluster:
+helm install asker deploy/helm/asker -f deploy/helm/asker/values-ci.yaml --wait
+```
+
+### Deploy-time invariants (do not get these wrong)
+
+- **`config.embeddingDim`/`clipDim` MUST equal** the TEI/CLIP model output dims **and** the deployed
+  Vespa schema tensor types (ADR-005/013) — the same value passed to `vespa/deploy.sh`. A mismatch
+  rejects vectors.
+- **App `Service` names are bare** (`query`, `connector-hub`, … == compose DNS, ADR-014 §3); workload
+  objects are release-prefixed (`<release>-query`). Two releases in one namespace collide on Service
+  names — for blue/green use separate namespaces (see `docs/runbooks/blue-green-deploy.md`).
+- **Back up the KEK with the data.** Postgres `tenant_deks` (wrapped DEKs) + MinIO blobs are
+  envelope-encrypted (ADR-015); a data backup without the matching Vault/file KEK is unrecoverable.
+  Each backup runbook calls this out.

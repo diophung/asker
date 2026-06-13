@@ -1,0 +1,271 @@
+# ==============================================================================
+# Asker umbrella chart — CI / kind SLIM profile (M4 wave 2, the exit criterion).
+#   helm install asker deploy/helm/asker -f deploy/helm/asker/values-ci.yaml --wait
+#
+# The M4 EXIT CRITERION (specs/asker-v1-personal-search-engine.md, M4):
+#   "full stack deploys to a kind/k3d cluster in CI; chaos test (kill any one
+#    pod) shows no failed queries beyond retry."
+#
+# This profile brings up ONLY the synchronous QUERY PATH the chaos test needs,
+# sized for a SINGLE-NODE kind cluster on a GitHub runner (~7GB RAM / 2 CPU):
+#
+#     gateway (REST edge, OIDC) -> query (gRPC) -> Vespa (streaming search)
+#                                         |-> TEI (text embeddings, hybrid arm)
+#                                         |-> Redis (result cache)
+#                       Keycloak (issues the OIDC token the gateway verifies)
+#
+# The chaos smoke (tools/e2e/k8s-chaos.sh) feeds a tenant-scoped doc DIRECTLY via
+# the Vespa document/v1 API (exactly like tools/e2e/smoke.sh), then queries the
+# rare token through the gateway while one query pod and one gateway pod are
+# killed — so NO Kafka ingest pipeline is required. Everything not on that path
+# is disabled to fit the runner.
+#
+# DISABLED for the chaos test (rationale in-line):
+#   - clip / enrich / ingest / index-writer / connector-hub / web  (not on the
+#     query path; clip off -> query degrades its CLIP arm gracefully, ADR-006).
+#   - control-plane + Postgres (the query path does not touch them; the gateway
+#     dials control-plane LAZILY (services/gateway/clients.go) so it boots fine
+#     without it — /v1/search needs only query+Vespa+TEI+Redis).
+#   - kafka.strimzi (the smoke feeds Vespa directly; no event pipeline needed).
+#   - vault (no envelope crypto on the query path; query has no KEK).
+#   - HPA on every service (single node has nothing to spread onto).
+#   - networkPolicy (kind's default kindnet CNI does NOT enforce
+#     NetworkPolicy — see the note on networkPolicy below).
+#
+# IMAGES: imageRegistry "" + per-service image.pullPolicy Never so the locally
+# built, `kind load docker-image`'d gateway/query images are used verbatim; the
+# upstream deps (Vespa/TEI/Redis/Keycloak) keep the chart-default pull policy and
+# ARE pulled by kind from their registries.
+# ==============================================================================
+
+global:
+  # Locally built app images, loaded into kind via `kind load docker-image`;
+  # no registry prefix so services.<svc>.image.repository is used verbatim.
+  imageRegistry: ""
+  # Chart-wide default for the stateful deps (Vespa/TEI/Redis/Keycloak): pull
+  # from upstream registries. The two APP services that are kind-loaded
+  # (gateway, query) override this to Never via their own image.pullPolicy.
+  imagePullPolicy: IfNotPresent
+
+# --- Shared config: CI embedding dim + in-cluster dependency addresses --------
+config:
+  # bge-small-en-v1.5 on the CI TEI; MUST match the deployed Vespa schema tensor
+  # type (ADR-005) and the value the chaos script passes to deploy.sh.
+  embeddingDim: 384
+  clipDim: 512
+  # No Kafka pipeline in this profile; left at the chart default but unused
+  # (ingest/index-writer/enrich/connector-hub are all disabled).
+  kafkaBrokers: "redpanda:9092"
+  # Query-path deps, dialed by their bare Service names (compose-identical DNS).
+  vespaUrl: "http://vespa:8080"
+  teiUrl: "http://tei:80"
+  redisAddr: "redis:6379"
+  # Off-path deps (services disabled); addresses kept so render is complete.
+  clipUrl: "http://clip:9800"
+  hubHttpUrl: "http://connector-hub:9300"
+  queryGrpcAddr: "dns:///query:9200"
+  controlPlaneGrpcAddr: "dns:///control-plane:9100"
+  postgresHost: "postgres"
+  postgresPort: 5432
+  postgresDb: "asker"
+  minioEndpoint: "minio:9000"
+  minioUseSsl: "false"
+  blobBucket: "asker-blobs"
+  otelExporterOtlpEndpoint: ""
+
+# --- Dev Secret (chart-rendered; CI only) -------------------------------------
+# Keycloak admin bootstrap creds come from here. MinIO/Postgres creds are unused
+# in this profile (those deps are disabled) but kept so the Secret renders whole.
+secrets:
+  strategy: chart
+  dev:
+    minioAccessKey: "asker-minio"
+    minioSecretKey: "asker-minio-secret"
+    postgresUser: "asker"
+    postgresPassword: "asker"
+    keycloakAdminUser: "admin"
+    keycloakAdminPassword: "admin"
+
+# --- Ingress: off -------------------------------------------------------------
+# The chaos script reaches the gateway via `kubectl port-forward` (env-overridable
+# to a NodePort), so no Ingress controller is installed in the kind cluster.
+ingress:
+  enabled: false
+
+# ==============================================================================
+# services — SLIM set. Only gateway + query render; everything else is
+# enabled:false so its Deployment/Service/HPA/PDB are skipped entirely
+# (asker.workload.all / the edge templates short-circuit on enabled=false).
+# ==============================================================================
+services:
+
+  # --- gateway: REST edge + sole OIDC verifier. 2 replicas + PDB minAvailable 1
+  #     so a `kubectl delete pod` on one replica leaves one serving (the chaos
+  #     test's gateway-kill arm). HPA off (single node). ---------------------
+  gateway:
+    enabled: true
+    replicaCount: 2
+    image:
+      pullPolicy: Never   # locally built + kind-loaded; never reach a registry
+    autoscaling:
+      enabled: false
+    pdb:
+      enabled: true
+      minAvailable: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+    config:
+      # ISSUER ALIGNMENT (the crux of getting a token accepted in-cluster):
+      # the gateway verifies the token's `iss` against OIDC_ISSUER. Keycloak
+      # stamps `iss` from its KC_HOSTNAME (set to http://keycloak:8080 below),
+      # so both MUST be http://keycloak:8080/realms/asker. JWKS is fetched over
+      # the in-cluster Service DNS (keycloak:8080), reachable from the gateway.
+      # The chaos script port-forwards Keycloak locally to MINT the token; the
+      # fixed KC_HOSTNAME means the issuer is keycloak:8080 regardless of the
+      # local forward port, so the gateway accepts it.
+      oidcIssuer: "http://keycloak:8080/realms/asker"
+      oidcJwksUrl: "http://keycloak:8080/realms/asker/protocol/openid-connect/certs"
+      oidcAudience: "asker-web"
+      rateLimitPerMinute: 600
+      corsAllowedOrigins: "http://localhost:3000"
+      maxUploadMb: 32
+      maxMediaMb: 25
+
+  # --- query: hybrid search gRPC server. 2 replicas + PDB minAvailable 1 (the
+  #     query-kill arm of the chaos test). Talks to Vespa/TEI/Redis; clip is
+  #     disabled, so its CLIP arm degrades gracefully (ADR-006). HPA off. -----
+  query:
+    enabled: true
+    replicaCount: 2
+    image:
+      pullPolicy: Never
+    autoscaling:
+      enabled: false
+    pdb:
+      enabled: true
+      minAvailable: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 384Mi
+
+  # --- Everything below is OFF for the chaos test (not on the query path). ----
+  ingest:
+    enabled: false
+  enrich:
+    enabled: false
+  index-writer:
+    enabled: false
+  connector-hub:
+    enabled: false
+  # control-plane + its Postgres are NOT needed by /v1/search (the gateway dials
+  # control-plane lazily; query never touches it). Disabling both saves ~1 pod +
+  # a StatefulSet on the single node.
+  control-plane:
+    enabled: false
+  clip:
+    enabled: false
+  # web: the edge templates (templates/edge/web-*.yaml) render UNCONDITIONALLY —
+  # they have no `enabled` guard (gateway/web are the always-on public edge in
+  # the edge wave's design, a path this wave does not own). So `enabled: false`
+  # is a no-op for web. Instead, scale it to ZERO replicas and turn off its
+  # HPA/PDB: the Deployment/Service still render but schedule NO pod (so the
+  # asker/web image is never pulled and the runner carries no web load), and
+  # replicas:0 satisfies `helm --wait` immediately. INTEGRATOR: an `enabled`
+  # guard on the web edge templates would let this profile drop web entirely.
+  web:
+    replicaCount: 0
+    autoscaling:
+      enabled: false
+    pdb:
+      enabled: false
+
+# ==============================================================================
+# Stateful deps — bring up ONLY Vespa + TEI + Redis + Keycloak; tiny everything.
+# Postgres/MinIO are deploy:false (no enabled service in this profile uses them).
+# ==============================================================================
+stateful:
+  postgres:
+    deploy: false
+  minio:
+    deploy: false
+  redis:
+    deploy: true
+    resources:
+      requests: { cpu: 25m, memory: 32Mi }
+      limits: { cpu: 250m, memory: 128Mi }
+    storage: { size: 1Gi }
+  keycloak:
+    deploy: true
+    # Pin the token issuer to the in-cluster Service URL so it matches the
+    # gateway's oidcIssuer above (see the gateway.config comment). Without this,
+    # Keycloak would stamp `iss` from the request Host (the port-forward), which
+    # the gateway would reject.
+    hostname: "http://keycloak:8080"
+    importRealm: true            # embedded dev realm: users alice/bob, password123
+    javaOptsHeap: "-Xms64m -Xmx512m"
+    replicaCount: 1
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { cpu: "1", memory: 768Mi }
+  tei:
+    deploy: true
+    # Small CPU model; output dim 384 MUST equal config.embeddingDim above and
+    # the EMBEDDING_DIM the chaos script feeds to the Vespa schema.
+    modelId: BAAI/bge-small-en-v1.5
+    replicaCount: 1
+    storage: { size: 2Gi, enabled: true }
+    resources:
+      requests: { cpu: 250m, memory: 768Mi }
+      limits: { cpu: "2", memory: 2Gi }
+
+# ==============================================================================
+# Vespa — deploy a single-node, single-group streaming content cluster. Tiny
+# heap + storage to fit the runner. The chaos smoke feeds + queries one
+# tenant-scoped doc directly via the document/v1 API after the app package is
+# activated against the in-cluster config server (the script runs the
+# vespa/deploy.sh flow via kubectl exec/port-forward).
+# ==============================================================================
+vespa:
+  deploy: true
+  groups: 1
+  nodesPerGroup: 1
+  redundancy: 1
+  image: { repository: vespaengine/vespa, tag: "8" }
+  # Single small VM: let Vespa boot below its 4GB memory floor.
+  ignoreNotEnoughMemory: "true"
+  containerJvmOptions: "-Xms256m -Xmx512m"
+  storage: { size: 4Gi, storageClass: "" }
+  resources:
+    requests: { cpu: 250m, memory: 1Gi }
+    limits: { cpu: "2", memory: 2500Mi }
+
+# --- Kafka: OFF. The chaos smoke needs no ingest pipeline (feeds Vespa direct).
+kafka:
+  strimzi:
+    enabled: false
+
+# --- Vault: OFF. No envelope crypto on the query path (no KEK for query). -----
+vault:
+  deploy: false
+  enabled: false
+
+# --- NetworkPolicy: OFF. kind's default CNI (kindnet) does NOT enforce
+#     NetworkPolicy, so a default-deny policy would either be a silent no-op
+#     (kindnet ignores it) or, with a policy-enforcing CNI, could block the
+#     query path before pods are Ready. Disable it here; NetworkPolicy
+#     enforcement is validated on a Calico/Cilium cluster, not in this CI job.
+networkPolicy:
+  enabled: false
+
+# --- Internal TLS: OFF (no cert-manager in the kind CI cluster). --------------
+tls:
+  internal: { enabled: false }
