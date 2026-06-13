@@ -1,0 +1,59 @@
+Asker {{ .Chart.AppVersion }} — release {{ .Release.Name }} deployed to namespace {{ .Release.Namespace }}.
+
+Chart: {{ include "asker.chart" . }}
+
+Stateless application services (Deployments, autoscaled where enabled):
+{{- range $svc, $cfg := .Values.services }}
+{{- if (default true $cfg.enabled) }}
+  - {{ $svc }}{{- if $cfg.ports }} (ports:
+    {{- range $cfg.ports }} {{ .name }}={{ .port }}{{ end }}){{- end }}
+{{- end }}
+{{- end }}
+
+These dial each other and the stateful dependencies by Kubernetes Service DNS
+(names mirror the compose stack), e.g.:
+  - query gRPC          : dns:///query:9200
+  - control-plane gRPC  : dns:///control-plane:9100
+  - connector-hub HTTP  : http://connector-hub:9300
+  - clip HTTP           : http://clip:9800
+Dependency addresses (configurable):
+  - Kafka brokers : {{ .Values.config.kafkaBrokers }}
+  - Vespa         : {{ .Values.config.vespaUrl }}
+  - TEI           : {{ .Values.config.teiUrl }}
+  - Redis         : {{ .Values.config.redisAddr }}
+  - Postgres      : {{ .Values.config.postgresHost }}:{{ .Values.config.postgresPort }}/{{ .Values.config.postgresDb }}
+  - MinIO/S3      : {{ .Values.config.minioEndpoint }}
+
+Embedding spaces (ADR-005 / ADR-013 — must match the serving models + Vespa schema):
+  - EMBEDDING_DIM : {{ .Values.config.embeddingDim }}
+  - CLIP_DIM      : {{ .Values.config.clipDim }}
+
+{{- if .Values.ingress.enabled }}
+
+Public edge (Ingress{{ with .Values.ingress.className }}, class "{{ . }}"{{ end }}{{ if not .Values.ingress.className }}, cluster default class{{ end }}):
+  - Web UI  : http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.webHost }}/
+  - API     : http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.gatewayHost }}/
+{{- if not .Values.ingress.tls.enabled }}
+  (TLS is disabled — enable ingress.tls.enabled and provision a cert Secret for production.)
+{{- end }}
+{{- else }}
+
+Ingress is disabled. Expose the gateway/web Services yourself (port-forward or a LoadBalancer).
+{{- end }}
+
+Secrets strategy: {{ .Values.secrets.strategy }}
+{{- if eq .Values.secrets.strategy "chart" }}
+
+  WARNING: secrets.strategy=chart renders DEV-ONLY credentials into a Secret
+  ({{ include "asker.secretName" . }}). This is for kind/k3d/CI only. For
+  PRODUCTION set secrets.strategy=vault (or external) and provision that Secret
+  out-of-band (ADR-014). NEVER ship the dev literals to a real cluster.
+{{- else }}
+
+  Expecting an out-of-band Secret named "{{ include "asker.secretName" . }}"
+  ({{ .Values.secrets.strategy }}-managed). The chart does not render credentials.
+{{- end }}
+
+Verify the rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/part-of=asker

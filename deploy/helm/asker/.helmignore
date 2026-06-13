@@ -1,0 +1,26 @@
+# Patterns to ignore when building Helm packages.
+# Mirrors the default `helm create` .helmignore plus repo-specific noise.
+.DS_Store
+# Common VCS dirs
+.git/
+.gitignore
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+# Common backup files
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Various IDEs
+.project
+.idea/
+*.tmproj
+.vscode/
+# CI / throwaway render artifacts
+*.local.yaml
+*.local.yml
+__rendered/

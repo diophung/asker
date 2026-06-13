@@ -1,0 +1,895 @@
+# ==============================================================================
+# Asker umbrella chart — DEFAULT VALUES. THE AUTHORITATIVE INTERFACE.
+#
+# This file is the contract the three M4 wave-0 builders code against:
+#   - chart skeleton + helpers + values + ADR-014 (this wave) — owns this file,
+#     Chart.yaml, _helpers.tpl, NOTES.txt, README.md, .helmignore, values-dev.yaml.
+#   - stateless-workloads — owns Deployment/Service/HPA/PDB/ServiceAccount for the
+#     7 backend services (query, ingest, enrich, index-writer, connector-hub,
+#     control-plane, clip); reads services.<svc>.* below.
+#   - edge — owns gateway + web Deployment/Service, the shared ConfigMap, the dev
+#     Secret, and the Ingress; reads services.gateway / services.web / config.* /
+#     secrets.* / ingress.* below.
+#
+# Every key is documented in deploy/helm/asker/README.md. All values mirror
+# deploy/compose/docker-compose.yml (the SOURCE OF TRUTH) in shape and naming.
+# Defaults preserve the compose dependency addresses so the chart renders a
+# complete kind/k3d stack (M4 exit criteria); values-dev.yaml drops the embedding
+# dim to 384 (bge-small). Cloud-agnostic: NO provider-specific resources,
+# annotations, or StorageClass names anywhere (ADR-014).
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# global — shared by every service (consumed by _helpers.tpl: asker.image,
+# asker.imagePullPolicy). Subcharts, if added later, inherit `global` for free.
+# ------------------------------------------------------------------------------
+global:
+  # Registry prefix prepended to every services.<svc>.image.repository. ""
+  # means repositories are used verbatim (already fully qualified). CI builds and
+  # pushes images to this registry tagged with the chart version (or an explicit
+  # services.<svc>.image.tag). e.g. "ghcr.io" + "asker/query" -> "ghcr.io/asker/query".
+  imageRegistry: "ghcr.io"
+  # Default imagePullPolicy when a service does not set its own.
+  imagePullPolicy: IfNotPresent
+  # imagePullSecrets (names of pre-created dockerconfigjson Secrets) applied to
+  # every workload pod spec. Empty by default.
+  imagePullSecrets: []
+  # Cluster-internal DNS suffix; available for fully-qualified cross-namespace
+  # addresses. Services dial each other by bare Service name within a namespace.
+  clusterDomain: cluster.local
+
+# nameOverride / fullnameOverride feed asker.name / asker.fullname.
+nameOverride: ""
+fullnameOverride: ""
+
+# ------------------------------------------------------------------------------
+# serviceAccount — chart-wide ServiceAccount toggle (consumed by
+# asker.serviceAccountName and the per-service asker.serviceAccountNameFor in
+# _helpers.tpl). When create is true, the workload waves render one
+# ServiceAccount per app service; per-service overrides via
+# services.<svc>.serviceAccount.name. Set create false to reuse an existing SA.
+# ------------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  # Annotations applied to every rendered ServiceAccount (e.g. workload-identity
+  # bindings in prod — left empty here to stay cloud-agnostic).
+  annotations: {}
+  # Distroless services do not need the SA token mounted.
+  automountServiceAccountToken: false
+
+# ==============================================================================
+# config — SHARED, NON-SECRET configuration rendered into one ConfigMap that
+# every app workload `envFrom`s. Keys are the EXACT env var names the binaries
+# read (see compose, the source of truth) so envFrom needs no per-key mapping.
+# Dependency addresses are Service DNS names == compose service names, so
+# in-cluster dialing (query:9200, connector-hub:9300, clip:9800, ...) is unchanged.
+#
+# EMBEDDING_DIM / CLIP_DIM are deploy-time config (ADR-005, ADR-013) and MUST
+# match the models TEI / clip serve and the deployed Vespa schema tensor types.
+# ==============================================================================
+config:
+  # Two embedding spaces (ADR-005 / ADR-013). Prod defaults: bge-m3 (1024) +
+  # ViT-B/32 (512). values-dev.yaml drops embeddingDim to 384 (bge-small).
+  embeddingDim: 1024
+  clipDim: 512
+  # Event backbone. Strimzi Kafka bootstrap Service in M4 wave 1 (ADR-003 §1);
+  # compose dev = redpanda:9092. Configurable broker string (host:port[,host:port]).
+  kafkaBrokers: "redpanda:9092"
+  # Dependency Service DNS (host:port or URL; names mirror compose service names).
+  vespaUrl: "http://vespa:8080"
+  teiUrl: "http://tei:80"
+  redisAddr: "redis:6379"
+  clipUrl: "http://clip:9800"
+  hubHttpUrl: "http://connector-hub:9300"
+  queryGrpcAddr: "dns:///query:9200"
+  controlPlaneGrpcAddr: "dns:///control-plane:9100"
+  # Postgres connection components (the control-plane DATABASE_URL is composed
+  # from these + the dev Secret password — see templates/config/secret.yaml).
+  postgresHost: "postgres"
+  postgresPort: 5432
+  postgresDb: "asker"
+  # Blob store (MinIO/S3). Credentials live in the Secret, not here.
+  minioEndpoint: "minio:9000"
+  minioUseSsl: "false"
+  blobBucket: "asker-blobs"
+  # Telemetry. Empty disables OTLP export (compose default); prod points it at a
+  # collector Service (OpenTelemetry).
+  otelExporterOtlpEndpoint: ""
+
+# ------------------------------------------------------------------------------
+# sharedEnv — names of the shared ConfigMap/Secret the EDGE wave's config
+# templates render and that EVERY workload `envFrom`s. Added by the edge wave as
+# the cross-wave contract between templates/config/** (which renders these
+# objects) and templates/workloads/** (which mounts them). Leave both ""
+# to use the chart defaults: ConfigMap "<fullname>-env" and Secret
+# "<fullname>-secrets" (asker.secretName). INTEGRATOR: keep this block — the
+# stateless-workloads templates dereference .Values.sharedEnv.configMapName.
+# ------------------------------------------------------------------------------
+sharedEnv:
+  configMapName: ""
+  secretName: ""
+
+# ==============================================================================
+# services — per-service configuration for the 9 stateless app services.
+#
+# CONTRACT for the workload waves:
+#   - The KEY (gateway/query/...) is the Service metadata.name AND the in-cluster
+#     DNS name other services dial; it equals the compose service name. DO NOT
+#     release-prefix the Service name (helper: asker.serviceName). Deployment/HPA/
+#     PDB names ARE release-prefixed (helper: asker.serviceFullname).
+#   - image.repository / image.tag -> asker.image helper (tag "" => chart version);
+#     image.pullPolicy "" => global.imagePullPolicy.
+#   - replicaCount is the Deployment baseline / the value when autoscaling is off
+#     and the floor before autoscaling kicks in.
+#   - ports: list of named container ports { name, port, protocol, appProtocol? }.
+#     The Service exposes the same. `grpc` ports are dialled with the gRPC scheme.
+#     The `health` port hosts /healthz + /readyz (Go services) and is the probe
+#     target; services with a single public port self-serve health on it.
+#   - health: liveness/readiness probe descriptors { type(httpGet|exec|grpc),
+#     port(name), path? }. Go services additionally support an exec
+#     `-healthcheck` binary flag; Python services use HTTP only.
+#   - resources: requests/limits. autoscaling: { enabled, minReplicas, maxReplicas,
+#     targetCPUUtilizationPercentage, targetMemoryUtilizationPercentage }.
+#     pdb: { enabled, minAvailable }.
+#   - podSecurityContext / securityContext / nodeSelector / tolerations / affinity
+#     / podAnnotations are per-service (sensible secure defaults below).
+#   - config: per-service literal env beyond what the shared ConfigMap supplies.
+#
+# Documented health endpoints / ports (from compose + the topology brief):
+#   gateway       HTTP :8080 (public via Ingress); /healthz + /readyz on :8080;
+#                 Go -healthcheck flag.
+#   query         gRPC :9200 + health HTTP :9201 (/healthz, /readyz); Go -healthcheck.
+#   ingest        health HTTP :9501 (/healthz, /readyz); Go -healthcheck.
+#   enrich        health HTTP :9601 (/healthz); Python worker (no -healthcheck).
+#   index-writer  health HTTP :9701 (/healthz, /readyz); Go -healthcheck.
+#   connector-hub HTTP :9300 + health HTTP :9301 (/healthz, /readyz); Go -healthcheck.
+#   control-plane gRPC :9100 + health HTTP :9101 (/healthz, /readyz); Go -healthcheck.
+#   clip          HTTP :9800 (/health); Python model service.
+#   web           HTTP :80 (/healthz); nginx-served React app (public via Ingress).
+# ==============================================================================
+services:
+
+  # --- gateway: public REST edge, sole JWT verifier (ADR-002/009) [EDGE wave] ---
+  gateway:
+    enabled: true
+    image:
+      repository: asker/gateway
+      tag: ""            # defaults to .Chart.Version via asker.image
+      pullPolicy: ""     # "" => global.imagePullPolicy
+    replicaCount: 2
+    # Public HTTP + health/ready all on one port (compose: GATEWAY_ADDR ":8080";
+    # /healthz and /readyz are served on the same port — see services/gateway).
+    port: 8080
+    ports:
+      - name: http
+        port: 8080
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      liveness:
+        type: httpGet
+        port: http
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: http
+        path: /readyz
+    serviceAccount:
+      name: ""           # per-service override; "" -> chart-wide SA
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532   # distroless nonroot
+      runAsGroup: 65532
+      fsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    # Edge-specific literal config. OIDC issuer/JWKS and CORS origins are VALUES:
+    # dev defaults mirror compose; prod overrides with real ingress hostnames.
+    config:
+      # In K8s with real DNS/ingress, issuer and JWKS can both point at the same
+      # canonical URL (ADR-003 §3). Default mirrors the compose split.
+      oidcIssuer: "http://localhost:8081/realms/asker"
+      oidcJwksUrl: "http://keycloak:8080/realms/asker/protocol/openid-connect/certs"
+      oidcAudience: "asker-web"
+      rateLimitPerMinute: 600
+      # Comma-separated allowed origins; prod = the web ingress origin(s).
+      corsAllowedOrigins: "http://localhost:3000"
+      maxUploadMb: 32
+      maxMediaMb: 25
+
+  # --- query: hybrid search, gRPC server (ADR-006/009/013) [WORKLOADS wave] -----
+  query:
+    enabled: true
+    image:
+      repository: asker/query
+      tag: ""
+      pullPolicy: ""
+    replicaCount: 2
+    ports:
+      - name: grpc
+        port: 9200
+        protocol: TCP
+        appProtocol: grpc
+      - name: health
+        port: 9201
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      liveness:
+        type: httpGet
+        port: health
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: health
+        path: /readyz
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      fsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    config:
+      queryAddr: ":9200"
+      queryHealthAddr: ":9201"
+
+  # --- ingest: parse/chunk worker (Kafka consumer) [WORKLOADS wave] -------------
+  ingest:
+    enabled: true
+    image:
+      repository: asker/ingest
+      tag: ""
+      pullPolicy: ""
+    replicaCount: 2
+    ports:
+      - name: health
+        port: 9501
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      liveness:
+        type: httpGet
+        port: health
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: health
+        path: /readyz
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      fsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    config:
+      ingestHealthAddr: ":9501"
+
+  # --- enrich: Python ML worker (TEI/CLIP/OCR/ASR) (ADR-007/013) [WORKLOADS] ----
+  enrich:
+    enabled: true
+    image:
+      repository: asker/enrich
+      tag: ""
+      pullPolicy: ""
+    replicaCount: 2
+    ports:
+      - name: health
+        port: 9601
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      # Python worker: HTTP /healthz only (no Go -healthcheck binary flag).
+      liveness:
+        type: httpGet
+        port: health
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: health
+        path: /healthz
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 30
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      # Python image runs as nonroot uid 65532 (distroless-style); enrich writes
+      # an HF model cache, so readOnlyRootFilesystem is left false below.
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    config:
+      enrichHealthAddr: ":9601"
+    # [WORKLOADS wave] Model weights (whisper-tiny, ADR-013) load on first boot.
+    # A startupProbe gives up to 5 minutes (30 * 10s) before liveness/readiness
+    # apply, so a still-loading pod is not killed; liveness/readiness then run on
+    # a 15s period (compose uses interval 15s for enrich).
+    startupProbe:
+      health:
+        type: httpGet
+        port: health
+        path: /healthz
+      timing:
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 30
+    probeTiming:
+      liveness:
+        initialDelaySeconds: 15
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 3
+      readiness:
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 3
+    # [WORKLOADS wave] HF model cache (whisper-tiny). Ephemeral emptyDir in wave
+    # 0; a PVC can replace it later to avoid re-download on reschedule. Mirrors
+    # the compose `enrich-hf-cache` volume mount path.
+    volumes:
+      - name: hf-cache
+        emptyDir: {}
+    volumeMounts:
+      - name: hf-cache
+        mountPath: /home/nonroot/.cache/huggingface
+
+  # --- index-writer: Vespa feed worker (Kafka consumer) [WORKLOADS wave] --------
+  index-writer:
+    enabled: true
+    image:
+      repository: asker/index-writer
+      tag: ""
+      pullPolicy: ""
+    replicaCount: 2
+    ports:
+      - name: health
+        port: 9701
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      liveness:
+        type: httpGet
+        port: health
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: health
+        path: /readyz
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      fsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    config:
+      indexWriterHealthAddr: ":9701"
+
+  # --- connector-hub: connector orchestration + blob crypto [WORKLOADS wave] ----
+  connector-hub:
+    enabled: true
+    image:
+      repository: asker/connector-hub
+      tag: ""
+      pullPolicy: ""
+    replicaCount: 2
+    ports:
+      - name: http
+        port: 9300
+        protocol: TCP
+        appProtocol: http
+      - name: health
+        port: 9301
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      liveness:
+        type: httpGet
+        port: health
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: health
+        path: /readyz
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 15
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      fsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    config:
+      hubAddr: ":9300"
+      hubHealthAddr: ":9301"
+      connectorSyncInterval: "30s"
+      schedulerTick: "10s"
+    # [WORKLOADS wave] connector-hub needs MinIO creds (blob store) -> pull the
+    # shared Secret via envFrom (MINIO_ACCESS_KEY / MINIO_SECRET_KEY).
+    useSecret: true
+    # [WORKLOADS wave] Shared KEK for envelope crypto (ADR-013). Mounted read-only
+    # at /keys; the Deployment sets KEK_FILE=<mountPath>/<fileKey> automatically.
+    # Dev: a Secret "<fullname>-kek"; prod: Vault CSI (wave 1). The volume is
+    # `optional` so render/validate + first boot succeed before the Secret exists.
+    # INTEGRATOR: provision the KEK Secret (same key bytes as control-plane), or
+    # wire Vault, in wave 1 — this chart does not render the KEK Secret object.
+    kek:
+      enabled: true
+      mountPath: /keys
+      fileKey: kek.bin
+      secretName: ""   # "" -> "<fullname>-kek"
+
+  # --- control-plane: tenants/config/cursors/tokens, gRPC [WORKLOADS wave] ------
+  control-plane:
+    enabled: true
+    image:
+      repository: asker/control-plane
+      tag: ""
+      pullPolicy: ""
+    replicaCount: 2
+    ports:
+      - name: grpc
+        port: 9100
+        protocol: TCP
+        appProtocol: grpc
+      - name: health
+        port: 9101
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      liveness:
+        type: httpGet
+        port: health
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: health
+        path: /readyz
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 256Mi
+    # [WORKLOADS wave] control-plane is the tenant/connector registry + token
+    # vault (single-writer-ish, Postgres-backed); per the M4 brief it is NOT an
+    # HPA-scaled service (only query/ingest/enrich/index-writer/connector-hub
+    # are). It runs a fixed small replica set and relies on its PDB for
+    # availability during voluntary disruption. INTEGRATOR: the skeleton default
+    # had this true; the workloads wave disables it to match the brief.
+    autoscaling:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      fsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    config:
+      controlPlaneAddr: ":9100"
+      controlPlaneHealthAddr: ":9101"
+    # [WORKLOADS wave] control-plane reads DATABASE_URL (Postgres token vault) ->
+    # pull the shared Secret via envFrom.
+    useSecret: true
+    # [WORKLOADS wave] Shared KEK for the token vault's envelope crypto (ADR-013),
+    # the SAME key bytes connector-hub mounts. Mounted read-only at /keys;
+    # KEK_FILE is set automatically. See connector-hub.kek for the provisioning
+    # note (config/secret wave in dev, Vault CSI in wave 1).
+    kek:
+      enabled: true
+      mountPath: /keys
+      fileKey: kek.bin
+      secretName: ""   # "" -> "<fullname>-kek"
+
+  # --- clip: Python CLIP model service (ADR-013) [WORKLOADS wave] ---------------
+  clip:
+    enabled: true
+    image:
+      repository: asker/clip
+      tag: ""
+      pullPolicy: ""
+    # CLIP loads a model into memory; scale conservatively (the query CLIP arm
+    # degrades gracefully if it is down, ADR-006/013).
+    replicaCount: 1
+    ports:
+      - name: http
+        port: 9800
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      # Python model service: HTTP GET /health.
+      liveness:
+        type: httpGet
+        port: http
+        path: /health
+      readiness:
+        type: httpGet
+        port: http
+        path: /health
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    autoscaling:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      # open_clip writes a model weights cache; root FS not read-only.
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+    config:
+      clipPort: ":9800"
+      clipModel: "ViT-B-32"
+      clipPretrained: "openai"
+    # [WORKLOADS wave] open_clip model load/download on first boot (compose:
+    # start_period 10m). /health returns 503 while loading, so it doubles as the
+    # readiness gate. A startupProbe gives up to 10 minutes (60 * 10s) before
+    # liveness applies; afterwards liveness/readiness poll on a 15s period
+    # (compose interval 15s) with a generous 10s timeout.
+    startupProbe:
+      health:
+        type: httpGet
+        port: http
+        path: /health
+      timing:
+        periodSeconds: 10
+        timeoutSeconds: 10
+        failureThreshold: 60
+    probeTiming:
+      liveness:
+        initialDelaySeconds: 15
+        periodSeconds: 15
+        timeoutSeconds: 10
+        failureThreshold: 3
+      readiness:
+        initialDelaySeconds: 5
+        periodSeconds: 15
+        timeoutSeconds: 10
+        failureThreshold: 3
+    # [WORKLOADS wave] open_clip weights cache. Ephemeral emptyDir in wave 0;
+    # mirrors the compose `clip-cache` mount at /root/.cache.
+    volumes:
+      - name: clip-cache
+        emptyDir: {}
+    volumeMounts:
+      - name: clip-cache
+        mountPath: /root/.cache
+
+  # --- web: React UI served by nginx (HTTP :80, public via Ingress) [EDGE] ------
+  web:
+    image:
+      # nginx serving the prebuilt static bundle. NOTE (M3 limitation): VITE_*
+      # (VITE_API_URL, VITE_KEYCLOAK_URL) are baked into the bundle at IMAGE
+      # BUILD time (web/Dockerfile ARG/ENV), NOT at deploy time. A prod release
+      # therefore needs an image built with prod URLs (CI build-arg), or a
+      # runtime-config shim. This value only selects WHICH prebuilt image to run.
+      repository: asker/web
+      tag: ""
+      pullPolicy: ""
+    replicaCount: 2
+    port: 80           # nginx; GET /healthz served on :80 (web/nginx.conf)
+    ports:
+      - name: http
+        port: 80
+        protocol: TCP
+        appProtocol: http
+    service:
+      type: ClusterIP
+    health:
+      liveness:
+        type: httpGet
+        port: http
+        path: /healthz
+      readiness:
+        type: httpGet
+        port: http
+        path: /healthz
+    serviceAccount:
+      name: ""
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 128Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 80
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+    podSecurityContext:
+      runAsNonRoot: true
+      # nginx:alpine master needs to bind :80 and write pid/cache; run as the
+      # unprivileged nginx user. readOnlyRootFilesystem is left false because the
+      # stock nginx image writes to /var/cache/nginx and /var/run.
+      runAsUser: 101   # nginx user in nginx:alpine
+      runAsGroup: 101
+      fsGroup: 101
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop: ["ALL"]
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    podAnnotations: {}
+
+# ==============================================================================
+# ingress — single public edge (web at "/", gateway API on its own host). The
+# edge wave owns the Ingress template and reads this block. Cloud-agnostic:
+# className is a value, NO provider-specific annotations in defaults. cert-manager
+# / issuer wiring is per-environment config (see annotations + tls).
+# ==============================================================================
+ingress:
+  enabled: true
+  className: ""        # e.g. "nginx", "traefik", or a cloud class — set per env
+  annotations: {}      # provider/cert-manager annotations injected per env, not here
+  # Host-based routing. Dev placeholders; prod sets real hostnames (which must
+  # also become the gateway OIDC issuer origin and the web VITE_API_URL build).
+  gatewayHost: gateway.asker.local
+  webHost: app.asker.local
+  tls:
+    enabled: false
+    # When enabled, references a Secret holding the cert. cert-manager/issuer or
+    # an externally-provisioned cert populates it in prod (not a chart default).
+    secretName: asker-edge-tls
+
+# ==============================================================================
+# persistence — chart-wide storage default. Cloud-agnostic: storageClass is ""
+# by default => the cluster's default StorageClass is used. NEVER hardcode a
+# provider StorageClass name (gp2/standard/premium-lrs/...) here (ADR-014). The 9
+# app services are stateless and declare NO PVCs; this default is the interface
+# the wave-1 stateful-dep charts (Postgres/Vespa/MinIO) consume, fixed now.
+# ==============================================================================
+persistence:
+  storageClass: ""
+
+# ==============================================================================
+# secrets — credential delivery strategy (ADR-014). Three modes; the workloads
+# always consume a Secret named `asker.secretName` (release-prefixed) regardless
+# of strategy, so they need not branch on it for the Secret NAME.
+#
+#   strategy: "chart"    -> this chart RENDERS a Secret from secrets.dev below.
+#                           DEV/kind/k3d ONLY (mirrors compose dev-only creds).
+#   strategy: "external" -> an ExternalSecret (External Secrets Operator) syncs a
+#                           Secret of that name; the chart renders no Secret.
+#   strategy: "vault"    -> Vault Agent / CSI injects credentials (wave 1); chart
+#                           renders no Secret. RECOMMENDED for production.
+#
+# PROD MUST use vault/external — never ship the dev literals to a real cluster.
+# ==============================================================================
+secrets:
+  strategy: chart       # chart | external | vault
+  name: ""              # "" -> "<fullname>-secrets" (asker.secretName)
+  # DEV-ONLY literal values, mirroring compose. Used only when strategy == "chart".
+  dev:
+    minioAccessKey: "asker-minio"
+    minioSecretKey: "asker-minio-secret"
+    postgresUser: "asker"
+    postgresPassword: "asker"
+    # control-plane DATABASE_URL is composed from postgres* + these creds.
+    keycloakAdminUser: "admin"
+    keycloakAdminPassword: "admin"

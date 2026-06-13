@@ -1,0 +1,84 @@
+{{- /*
+Web Deployment — nginx serving the prebuilt React/Vite static bundle with SPA
+fallback (web/Dockerfile, web/nginx.conf). GET /healthz on :80.
+
+KNOWN M3 LIMITATION (also noted in values.yaml and the README): VITE_API_URL and
+VITE_KEYCLOAK_URL are baked into the static bundle at IMAGE BUILD time
+(web/Dockerfile ARG/ENV), not at deploy time. A production release therefore
+needs an image built with prod URLs (CI build-args) — or a runtime-config shim.
+This Deployment only selects WHICH prebuilt image runs (services.web.image.*);
+it cannot rewrite the baked URLs. No app env is injected for that reason.
+*/ -}}
+{{- $svc := "web" -}}
+{{- $cfg := .Values.services.web -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "asker.serviceFullname" (list . $svc) }}
+  labels:
+    {{- include "asker.serviceLabels" (list . $svc) | nindent 4 }}
+spec:
+  {{- if not $cfg.autoscaling.enabled }}
+  replicas: {{ $cfg.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list . $svc) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.serviceLabels" (list . $svc) | nindent 8 }}
+      {{- with $cfg.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "asker.serviceAccountNameFor" (list . $svc) }}
+      {{- with $cfg.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: web
+          image: {{ include "asker.image" (list . $svc) }}
+          imagePullPolicy: {{ include "asker.imagePullPolicy" (list . $svc) }}
+          {{- with $cfg.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $cfg.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $cfg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

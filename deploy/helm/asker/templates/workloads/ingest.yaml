@@ -1,0 +1,7 @@
+{{/*
+ingest — Kafka consumer (docs.raw -> parse/chunk -> docs.chunked). No inbound
+RPC; only INGEST_HEALTH_ADDR :9501 (/healthz + /readyz). Consumes Kafka, uses
+Redis. Scalable (HPA, partition-bound). A Service is still rendered for the
+health port so probes/metrics scrapers and peers can reach :9501 if needed.
+*/}}
+{{- include "asker.workload.all" (list . "ingest") }}

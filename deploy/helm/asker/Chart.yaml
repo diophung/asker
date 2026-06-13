@@ -1,0 +1,41 @@
+apiVersion: v2
+name: asker
+description: |
+  Asker — "Google for your own data". A multi-tenant personal search engine that
+  indexes private per-user sources and answers blended semantic + keyword queries
+  with strict per-tenant isolation. This umbrella chart deploys the 9 stateless
+  application services (gateway, query, ingest, enrich, index-writer, connector-hub,
+  control-plane, clip, web) cloud-agnostically to Kubernetes. Stateful dependencies
+  (Kafka via Strimzi, Vespa, Postgres, Redis, MinIO, Keycloak, TEI, Vault) are
+  managed by operators / StatefulSets in M4 wave 1; this chart references them by
+  Service DNS (ADR-014, ADR-003).
+type: application
+
+# Chart version. CI sets image.tag to this value by default, so the chart and the
+# images it references move together (bump on every release).
+version: 0.1.0
+
+# Application version: the Asker product/milestone this chart was cut for.
+appVersion: "M4"
+
+home: https://github.com/asker/asker
+sources:
+  - https://github.com/asker/asker
+
+keywords:
+  - search
+  - multi-tenant
+  - vespa
+  - rag
+  - personal-search
+
+maintainers:
+  - name: Asker Engineering
+    url: https://github.com/asker/asker
+
+# This is the umbrella chart for the stateless application tier. Stateful
+# dependencies are NOT pulled in as Helm subcharts: they are operator-managed
+# (Strimzi Kafka, Vespa) or run as their own StatefulSets in wave 1, and this
+# chart only needs their Service addresses (see values.yaml `deps.*`). Keeping
+# them out of `dependencies` avoids coupling the app rollout to operator CRD
+# lifecycles. See docs/adr/ADR-014-kubernetes-helm.md.

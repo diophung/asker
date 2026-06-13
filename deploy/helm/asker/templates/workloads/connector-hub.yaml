@@ -1,0 +1,9 @@
+{{/*
+connector-hub — connector orchestration + blob/media crypto. Compose: HUB_ADDR
+:9300 (HTTP, dialed by gateway/enrich as http://connector-hub:9300), HUB_HEALTH_ADDR
+:9301 (/healthz + /readyz). So the Service object is named "connector-hub".
+Owns envelope crypto (ADR-013): mounts the shared KEK at /keys (KEK_FILE=
+/keys/kek.bin) from a dev Secret (Vault replaces it in a later wave). Talks to
+control-plane (gRPC), Kafka, MinIO. Scalable (HPA).
+*/}}
+{{- include "asker.workload.all" (list . "connector-hub") }}

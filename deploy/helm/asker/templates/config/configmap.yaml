@@ -1,0 +1,55 @@
+{{- /*
+Shared, non-secret configuration for the stateless app tier.
+
+Every app workload (gateway + web here; query/ingest/enrich/index-writer/
+connector-hub/control-plane/clip from the stateless-workloads wave) `envFrom`s
+this ConfigMap so dependency Service DNS and the two embedding dims (ADR-005,
+ADR-013) live in one place. Keys are the exact env var names the binaries read
+(see deploy/compose/docker-compose.yml — the source of truth) so envFrom works
+without per-key mapping. Secrets (MinIO/Postgres/Keycloak creds) live in the
+separate dev Secret (templates/config/secret.yaml), never here.
+*/ -}}
+{{- /*
+ConfigMap name helper, defined here (config wave owns templates/config/**) since
+the chart-skeleton _helpers.tpl provides asker.secretName but no ConfigMap-name
+helper. Named templates are chart-global, so any wave's workloads can reference
+"asker.configMapName" for the envFrom configMapRef.
+
+The name MUST match what the stateless-workloads wave envFroms:
+    .Values.sharedEnv.configMapName | default "<fullname>-env"
+(templates/workloads/_workload.tpl). We mirror that exact resolution so the
+single shared ConfigMap this template renders is the one every workload mounts.
+*/ -}}
+{{- define "asker.configMapName" -}}
+{{- $shared := .Values.sharedEnv | default dict -}}
+{{- $shared.configMapName | default (printf "%s-env" (include "asker.fullname" .)) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "asker.configMapName" . }}
+  labels:
+    {{- include "asker.labels" . | nindent 4 }}
+data:
+  # --- Embedding spaces (deploy-time config; must match the serving models) ---
+  EMBEDDING_DIM: {{ .Values.config.embeddingDim | quote }}
+  CLIP_DIM: {{ .Values.config.clipDim | quote }}
+  # --- Event backbone (Strimzi Kafka bootstrap in M4 wave 1; configurable) -----
+  KAFKA_BROKERS: {{ .Values.config.kafkaBrokers | quote }}
+  # --- Dependency Service DNS (names mirror compose service names) -------------
+  VESPA_URL: {{ .Values.config.vespaUrl | quote }}
+  TEI_URL: {{ .Values.config.teiUrl | quote }}
+  REDIS_ADDR: {{ .Values.config.redisAddr | quote }}
+  CLIP_URL: {{ .Values.config.clipUrl | quote }}
+  HUB_HTTP_URL: {{ .Values.config.hubHttpUrl | quote }}
+  # connector-hub also dials itself for webhooks/media; same in-cluster address.
+  HUB_WEBHOOK_BASE: {{ .Values.config.hubHttpUrl | quote }}
+  HUB_MEDIA_URL: {{ .Values.config.hubHttpUrl | quote }}
+  QUERY_GRPC_ADDR: {{ .Values.config.queryGrpcAddr | quote }}
+  CONTROL_PLANE_GRPC_ADDR: {{ .Values.config.controlPlaneGrpcAddr | quote }}
+  # --- Blob store (MinIO; creds are in the dev Secret) -------------------------
+  MINIO_ENDPOINT: {{ .Values.config.minioEndpoint | quote }}
+  MINIO_USE_SSL: {{ .Values.config.minioUseSsl | quote }}
+  BLOB_BUCKET: {{ .Values.config.blobBucket | quote }}
+  # --- Telemetry ---------------------------------------------------------------
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelExporterOtlpEndpoint | quote }}
