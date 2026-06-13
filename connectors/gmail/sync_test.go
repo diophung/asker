@@ -124,6 +124,7 @@ func TestFullSyncGolden(t *testing.T) {
 		"to":         testEmail,
 		"thread_id":  msg.ThreadID,
 		"message_id": msg.ID,
+		"web_link":   "https://mail.google.com/mail/u/0/#all/" + msg.ID,
 	}
 	gotMeta := doc.GetMetadata()
 	if len(gotMeta) != len(wantMeta) {

@@ -101,6 +101,16 @@ export function ResultCard({
       </div>
       <footer className="result-meta">
         {date !== "" && <time className="result-date">{date}</time>}
+        {hit.source_url !== undefined && hit.source_url !== "" && (
+          <a
+            className="source-link"
+            href={hit.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View original <span aria-hidden="true">↗</span>
+          </a>
+        )}
       </footer>
     </article>
   );

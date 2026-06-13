@@ -81,10 +81,13 @@ func (c *Connector) tombstoneDocument(tenant, msgID string, historyID uint64) *a
 	}
 }
 
-// metadata builds the flat metadata map: from, to, thread_id, message_id.
-// Empty values are omitted.
+// metadata builds the flat metadata map: from, to, thread_id, message_id, and
+// web_link — a browser-openable deep link to the message in the Gmail web UI.
+// The #all/<id> view opens the message regardless of which label/folder holds
+// it; u/0 targets the browser's first signed-in Google account. Empty values
+// are omitted (the caller guarantees msg.Id is non-empty before this runs).
 func metadata(msg *gmailapi.Message) map[string]string {
-	md := make(map[string]string, 4)
+	md := make(map[string]string, 5)
 	put := func(k, v string) {
 		if v != "" {
 			md[k] = v
@@ -94,6 +97,7 @@ func metadata(msg *gmailapi.Message) map[string]string {
 	put("to", headerValue(msg.Payload, "To"))
 	put("thread_id", msg.ThreadId)
 	put("message_id", msg.Id)
+	put("web_link", "https://mail.google.com/mail/u/0/#all/"+msg.Id)
 	return md
 }
 

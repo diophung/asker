@@ -27,6 +27,11 @@ type searchHitJSON struct {
 	Created     string            `json:"created"`
 	Modified    string            `json:"modified"`
 	Metadata    map[string]string `json:"metadata"`
+	// SourceURL is a browser-openable link to the original item at its source
+	// (the Gmail message in Gmail, the Drive file, the Slack permalink, ...),
+	// derived from the connector metadata. "" when the source has no web URL
+	// (e.g. uploaded files). Always emitted (pinned shape).
+	SourceURL string `json:"source_url"`
 	// Media fields (M3): set for IMAGE/AUDIO/VIDEO hits; zero/empty otherwise.
 	StartMs      int64  `json:"start_ms"`
 	EndMs        int64  `json:"end_ms"`
@@ -154,6 +159,7 @@ func restSearchResponse(resp *queryv1.SearchResponse) searchResponseJSON {
 			Created:      rfc3339OrEmpty(h.GetCreated()),
 			Modified:     rfc3339OrEmpty(h.GetModified()),
 			Metadata:     md,
+			SourceURL:    sourceURLFromMetadata(md),
 			StartMs:      h.GetStartMs(),
 			EndMs:        h.GetEndMs(),
 			Modality:     h.GetModality(),
@@ -167,6 +173,41 @@ func restSearchResponse(resp *queryv1.SearchResponse) searchResponseJSON {
 		TookMs:   resp.GetTookMs(),
 		Cached:   resp.GetCached(),
 	}
+}
+
+// sourceLinkKeys are the connector metadata keys that may hold a browser-
+// openable link to the original item, in priority order. Connectors are not
+// consistent (Outlook/Outlook-cal web_link, Drive web_view_link, Slack
+// permalink, GCal html_link, Teams/Confluence/Jira web_url, iCal url), so the
+// gateway picks the first present, http(s) value and exposes it as the single
+// source_url field the web renders. A "source_url" key wins if a connector
+// ever sets one directly.
+var sourceLinkKeys = []string{
+	"source_url", "web_link", "web_view_link", "permalink", "html_link", "web_url", "url",
+}
+
+// sourceURLFromMetadata returns the first metadata value (by sourceLinkKeys
+// priority) that is an absolute http(s) URL with a host, or "" when none
+// qualifies. The scheme check is a safety gate: the value originates from an
+// external provider and the web renders it as an href, so only http/https may
+// become a link — never javascript:/data: or a scheme-relative target. The host
+// check additionally rejects opaque/hostless forms ("https:evil") that would
+// otherwise render as a broken relative link.
+func sourceURLFromMetadata(md map[string]string) string {
+	for _, k := range sourceLinkKeys {
+		v := strings.TrimSpace(md[k])
+		if v == "" {
+			continue
+		}
+		u, err := url.Parse(v)
+		if err != nil {
+			continue
+		}
+		if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func rfc3339OrEmpty(ts *timestamppb.Timestamp) string {

@@ -368,8 +368,24 @@ body {
 }
 
 .result-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/* "View original ↗" — external deep link to the item at its source. */
+.source-link {
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.source-link:hover,
+.source-link:focus-visible {
+  text-decoration: underline;
 }
 
 /* Media hits (IMAGE / VIDEO / AUDIO) */

@@ -85,6 +85,7 @@ func TestSearchTenantChokepointAndShape(t *testing.T) {
 			"created":       "2026-05-01T10:30:00Z",
 			"modified":      "2026-05-02T08:00:00Z",
 			"metadata":      map[string]any{"thread_id": "t-1"},
+			"source_url":    "",
 			"start_ms":      float64(0),
 			"end_ms":        float64(0),
 			"modality":      "",
@@ -141,6 +142,35 @@ func TestSearchNilMetadataBecomesEmptyObject(t *testing.T) {
 	// nil timestamps render as empty strings, keys still present.
 	if !strings.Contains(body, `"created":""`) || !strings.Contains(body, `"modified":""`) {
 		t.Errorf("body = %s, want empty created/modified", body)
+	}
+}
+
+func TestSourceURLFromMetadata(t *testing.T) {
+	cases := map[string]struct {
+		md   map[string]string
+		want string
+	}{
+		"none":               {map[string]string{"thread_id": "t-1"}, ""},
+		"gmail web_link":     {map[string]string{"web_link": "https://mail.google.com/mail/u/0/#all/abc"}, "https://mail.google.com/mail/u/0/#all/abc"},
+		"drive web_view":     {map[string]string{"web_view_link": "https://drive.google.com/file/d/X/view"}, "https://drive.google.com/file/d/X/view"},
+		"slack permalink":    {map[string]string{"permalink": "https://app.slack.com/archives/C1/p1"}, "https://app.slack.com/archives/C1/p1"},
+		"jira web_url":       {map[string]string{"web_url": "https://acme.atlassian.net/browse/ASK-1"}, "https://acme.atlassian.net/browse/ASK-1"},
+		"ical url":           {map[string]string{"url": "http://events.example.com/e/1"}, "http://events.example.com/e/1"},
+		"source_url wins":    {map[string]string{"source_url": "https://x/canonical", "web_link": "https://x/other"}, "https://x/canonical"},
+		"web_link beats url": {map[string]string{"url": "https://x/low", "web_link": "https://x/high"}, "https://x/high"},
+		"javascript blocked": {map[string]string{"web_link": "javascript:alert(1)"}, ""},
+		"data blocked":       {map[string]string{"web_url": "data:text/html,<script>"}, ""},
+		"scheme-relative":    {map[string]string{"web_url": "//evil.example.com/x"}, ""},
+		"opaque no host":     {map[string]string{"web_link": "https:evil.com"}, ""},
+		"whitespace trimmed": {map[string]string{"web_link": "  https://x/y  "}, "https://x/y"},
+		"nil map":            {nil, ""},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := sourceURLFromMetadata(c.md); got != c.want {
+				t.Errorf("sourceURLFromMetadata(%v) = %q, want %q", c.md, got, c.want)
+			}
+		})
 	}
 }
 

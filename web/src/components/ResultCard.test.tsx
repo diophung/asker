@@ -29,6 +29,33 @@ describe("ResultCard — text hits (unchanged)", () => {
   });
 });
 
+describe("ResultCard — source link", () => {
+  it("renders a 'View original' link to the source, opened safely in a new tab", () => {
+    const hit = searchMock.hits[0]; // EMAIL with source_url
+    const { container } = render(<ResultCard hit={hit} />);
+
+    const link = container.querySelector("a.source-link") as HTMLAnchorElement;
+    expect(link).not.toBeNull();
+    expect(link.textContent).toContain("View original");
+    expect(link.getAttribute("href")).toBe(hit.source_url);
+    expect(link.getAttribute("target")).toBe("_blank");
+    // noopener+noreferrer: the source tab cannot reach window.opener.
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("omits the link when the hit has no source_url", () => {
+    const hit = searchMock.hits[1]; // FILE upload, no source_url
+    const { container } = render(<ResultCard hit={hit} />);
+    expect(container.querySelector("a.source-link")).toBeNull();
+  });
+
+  it("omits the link when source_url is the empty string", () => {
+    const hit = { ...searchMock.hits[0], source_url: "" };
+    const { container } = render(<ResultCard hit={hit} />);
+    expect(container.querySelector("a.source-link")).toBeNull();
+  });
+});
+
 describe("ResultCard — IMAGE hits", () => {
   it("renders an <img> sourced via fetchThumbnail and an OCR modality badge", async () => {
     const objectUrl = "blob:mock-image-url";

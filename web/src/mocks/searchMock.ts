@@ -16,6 +16,7 @@ export const searchMock: SearchResponse = {
       created: "2026-05-02T09:15:00Z",
       modified: "2026-05-03T11:42:00Z",
       metadata: { thread_id: "187cdeadbeef" },
+      source_url: "https://mail.google.com/mail/u/0/#all/187cdeadbeef",
     },
     {
       doc_id: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",

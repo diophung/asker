@@ -59,6 +59,14 @@ export interface Hit {
   modality?: string;
   /** Blob key of a thumbnail/poster, fetched via GET /v1/media?key=. */
   thumbnail_key?: string;
+  /**
+   * Browser-openable link to the original item at its source (the Gmail
+   * message in Gmail, the Drive file, the Slack permalink, ...). The gateway
+   * derives this from connector metadata and emits only http(s) URLs; "" or
+   * absent when the source has no web URL (e.g. uploaded files). Rendered as
+   * an external "View original" link.
+   */
+  source_url?: string;
 }
 
 export interface SearchResponse {
