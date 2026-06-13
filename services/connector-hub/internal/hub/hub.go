@@ -36,12 +36,28 @@ const topicPartitions = 4
 // independent of connector packages.
 type UploadFunc func(ctx context.Context, tenant tenancy.Context, file io.Reader, filename, title, contentType string, size int64) (*askerv1.Document, error)
 
+// MediaBlobStore is the slice of the tenant-encrypted blob store the
+// /internal/media endpoint needs: decrypt-on-read (Get) and encrypt-on-write
+// (Put), both fail-closed on the tenant key prefix. *blob.Store satisfies it;
+// it is an interface so the http layer is testable against a fake without an
+// object store. See media.go (ADR-013) for why crypto stays in Go.
+type MediaBlobStore interface {
+	Get(ctx context.Context, tc tenancy.Context, ref *askerv1.BlobRef) ([]byte, error)
+	Put(ctx context.Context, tc tenancy.Context, key, contentType string, data []byte) (*askerv1.BlobRef, error)
+}
+
 // Deps are the connector-facing pieces package main wires in.
 type Deps struct {
 	// Registry catalogs the in-process connectors (gmail, upload).
 	Registry *sdk.Registry
 	// Upload backs POST /upload.
 	Upload UploadFunc
+	// MediaBlobs backs the internal-only GET/PUT /internal/media endpoint
+	// (ADR-013): the Python enrich worker cannot decrypt blobs (crypto is
+	// Go), so it reads/writes media bytes through this Go hop. Optional: when
+	// nil the media routes return 503 (the rest of the hub is unaffected), so
+	// a hub wired without a blob store still serves webhooks/upload/status.
+	MediaBlobs MediaBlobStore
 }
 
 func (d Deps) validate() error {
@@ -133,12 +149,13 @@ func Run(ctx context.Context, cfg Config, deps Deps, logger *slog.Logger) error 
 	})
 
 	api := &httpAPI{
-		cp:       cp,
-		registry: deps.Registry,
-		sched:    sch,
-		emit:     em,
-		upload:   deps.Upload,
-		logger:   logger,
+		cp:         cp,
+		registry:   deps.Registry,
+		sched:      sch,
+		emit:       em,
+		upload:     deps.Upload,
+		mediaBlobs: deps.MediaBlobs,
+		logger:     logger,
 	}
 
 	httpSrv := &http.Server{

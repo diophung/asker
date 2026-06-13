@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 // Degradation ladder (spec §2.6, ADR-006). M1 has no rerank rung, so the
@@ -29,6 +30,30 @@ import (
 // degradedKeywordOnly is the SearchResponse.degraded marker for a vector path
 // that was skipped or shed.
 const degradedKeywordOnly = "keyword-only"
+
+// degradedClipUnavailable is the SearchResponse.degraded marker for a dropped
+// CLIP text->image arm (clip service error/timeout, or a CLIP_DIM mismatch);
+// the text/OCR arm still served (ADR-006, ADR-013).
+const degradedClipUnavailable = "clip-unavailable"
+
+// addDegraded appends a degradation reason once (the same reason can be
+// reached via more than one rung). Order of first appearance is preserved so
+// the composed marker is deterministic.
+func addDegraded(reasons []string, reason string) []string {
+	for _, r := range reasons {
+		if r == reason {
+			return reasons
+		}
+	}
+	return append(reasons, reason)
+}
+
+// joinDegraded composes the SearchResponse.degraded marker from the collected
+// reasons: "" when none, a single reason, or comma-separated reasons (e.g.
+// "keyword-only,clip-unavailable") when several apply.
+func joinDegraded(reasons []string) string {
+	return strings.Join(reasons, ",")
+}
 
 // degradableError marks a retrieval failure the ladder may absorb.
 type degradableError struct{ err error }

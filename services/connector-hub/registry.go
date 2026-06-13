@@ -84,5 +84,8 @@ func buildDeps(ctx context.Context, cfg hub.Config, logger *slog.Logger) (hub.De
 			tenant, file, filename, title, contentType, size)
 	}
 
-	return hub.Deps{Registry: registry, Upload: uploadFn}, nil
+	// The same tenant-encrypted blob store backs the internal-only media
+	// endpoint (ADR-013): the Python enrich worker reads originals and writes
+	// thumbnails/keyframes through it because the envelope crypto stays in Go.
+	return hub.Deps{Registry: registry, Upload: uploadFn, MediaBlobs: blobs}, nil
 }

@@ -1,0 +1,11 @@
+# Runtime dependencies for services/clip (pinned; Python deps pinned per the
+# M3 build contract). The HTTP layer uses the stdlib (http.server) — no web
+# framework dependency. torch is the CPU build (see the --extra-index-url note
+# below and the Dockerfile, which installs the CPU wheel explicitly).
+#
+# torch CPU wheels are published on the PyTorch index, not PyPI's default for
+# every platform. The Dockerfile installs torch from the CPU index first; the
+# version here pins what that resolves to.
+open_clip_torch==2.24.0
+torch==2.2.2
+pillow==10.4.0

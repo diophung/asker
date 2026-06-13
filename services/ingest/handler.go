@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/asker/asker/platform/kafkautil"
@@ -86,12 +87,26 @@ func (h *handler) Handle(ctx context.Context, doc *askerv1.Document) error {
 		return nil
 	}
 
-	chunks, truncated := buildChunks(doc)
-	if truncated {
-		h.log.Warn("chunk cap exceeded; truncating",
-			"doc_id", doc.GetDocId(), "cap", maxChunksPerDoc, "body_bytes", len(doc.GetBodyText()))
+	// Media routing (ADR-013). IMAGE/AUDIO/VIDEO documents carry no body_text
+	// to chunk — their retrieval chunks (OCR/ASR/caption/keyframe, each with a
+	// modality, time anchor, and possibly a CLIP vector) are produced later by
+	// the Python enrich worker from the original media bytes. Ingest therefore
+	// SKIPS text chunking for them and passes them through to docs.chunked
+	// unchanged except for normalization (which still sets/derives
+	// version_etag) and dedupe (below), so re-delivery stays idempotent. Text
+	// docs keep the existing structure-aware chunker.
+	if isMediaDoc(doc) {
+		h.log.Debug("media document passed through without text chunking",
+			"doc_id", doc.GetDocId(), "type", doc.GetType().String(),
+			"content_type", doc.GetOriginal().GetContentType())
+	} else {
+		chunks, truncated := buildChunks(doc)
+		if truncated {
+			h.log.Warn("chunk cap exceeded; truncating",
+				"doc_id", doc.GetDocId(), "cap", maxChunksPerDoc, "body_bytes", len(doc.GetBodyText()))
+		}
+		doc.Chunks = chunks
 	}
-	doc.Chunks = chunks
 
 	if err := h.producer.ProduceDocument(ctx, kafkautil.TopicDocsChunked, doc); err != nil {
 		return fmt.Errorf("produce chunked %s: %w", doc.GetDocId(), err)
@@ -106,7 +121,24 @@ func (h *handler) Handle(ctx context.Context, doc *askerv1.Document) error {
 		h.log.Warn("failed to record dedupe key; duplicates may flow",
 			"doc_id", doc.GetDocId(), "error", err)
 	}
-	h.log.Debug("document chunked",
-		"doc_id", doc.GetDocId(), "chunks", len(chunks), "body_bytes", len(doc.GetBodyText()))
+	h.log.Debug("document produced to docs.chunked",
+		"doc_id", doc.GetDocId(), "chunks", len(doc.GetChunks()), "body_bytes", len(doc.GetBodyText()))
 	return nil
+}
+
+// isMediaDoc reports whether a document is an image/audio/video asset whose
+// retrieval chunks come from the media-enrich worker rather than the text
+// chunker. Document.type is authoritative; original.content_type
+// (image/*, audio/*, video/*) is a fallback for connectors that set the MIME
+// type but leave the type unspecified. Tombstones never reach here (handled
+// upstream), so a media tombstone still passes through untouched.
+func isMediaDoc(doc *askerv1.Document) bool {
+	switch doc.GetType() {
+	case askerv1.DocType_IMAGE, askerv1.DocType_VIDEO, askerv1.DocType_AUDIO:
+		return true
+	}
+	ct := doc.GetOriginal().GetContentType()
+	return strings.HasPrefix(ct, "image/") ||
+		strings.HasPrefix(ct, "audio/") ||
+		strings.HasPrefix(ct, "video/")
 }

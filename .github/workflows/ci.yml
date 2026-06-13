@@ -127,6 +127,7 @@ jobs:
       # EMBEDDING_DIM must match the model (ADR-005): bge-small = 384.
       TEI_MODEL_ID: BAAI/bge-small-en-v1.5
       EMBEDDING_DIM: "384"
+      CLIP_DIM: "512"
     steps:
       - uses: actions/checkout@v4
       - name: Start the dev stack
@@ -147,6 +148,7 @@ jobs:
       # EMBEDDING_DIM must match the model (ADR-005): bge-small = 384.
       TEI_MODEL_ID: BAAI/bge-small-en-v1.5
       EMBEDDING_DIM: "384"
+      CLIP_DIM: "512"
       # M1 exit criteria scale: 10K synthetic emails across 3 tenants.
       E2E_EMAIL_COUNT: "10000"
     steps:

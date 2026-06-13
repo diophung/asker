@@ -48,7 +48,7 @@ coverage-gate: test ## Enforce coverage floors (platform/tenancy 100%, platform/
 
 # Built one at a time: parallel BuildKit builds of 9 images spike memory hard
 # enough to OOM-kill running containers on small Docker VMs (observed).
-BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query fake-gmail web
+BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query clip fake-gmail web
 
 dev-build: ## Build all service images serially (low-memory friendly)
 	@for s in $(BUILT_SERVICES); do echo "== build $$s"; $(COMPOSE) build $$s || exit 1; done

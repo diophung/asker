@@ -123,11 +123,18 @@ services:
       TEI_URL: "http://tei:80"
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       ENRICH_HEALTH_ADDR: ":9601"
+      # Media pipeline (M3, used by wave-1 media handlers): CLIP embeddings, and
+      # the hub's internal decrypt/encrypt endpoint for original media + thumbnails.
+      CLIP_URL: "http://clip:9800"
+      CLIP_DIM: ${CLIP_DIM:-512}
+      HUB_MEDIA_URL: "http://connector-hub:9300"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
       redpanda:
         condition: service_healthy
       tei:
+        condition: service_healthy
+      clip:
         condition: service_healthy
     healthcheck:
       test:
@@ -148,6 +155,7 @@ services:
       KAFKA_BROKERS: "redpanda:9092"
       VESPA_URL: "http://vespa:8080"
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      CLIP_DIM: ${CLIP_DIM:-512}
       INDEX_WRITER_HEALTH_ADDR: ":9701"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
@@ -173,6 +181,9 @@ services:
       TEI_URL: "http://tei:80"
       REDIS_ADDR: "redis:6379"
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      # CLIP text->image arm (M3, ADR-013); degrades gracefully if clip is down.
+      CLIP_URL: "http://clip:9800"
+      CLIP_DIM: ${CLIP_DIM:-512}
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
       vespa:
@@ -185,6 +196,31 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  clip:
+    # CLIP model service (M3, ADR-013): one open_clip model serves both the text
+    # and image encoders so text->image queries and image embeddings share a
+    # space. Dev/CI use ViT-B/32 (small). First start loads/downloads the model.
+    build:
+      context: ../../services/clip
+      dockerfile: Dockerfile
+    environment:
+      CLIP_MODEL: ${CLIP_MODEL:-ViT-B-32}
+      CLIP_PRETRAINED: ${CLIP_PRETRAINED:-openai}
+      CLIP_PORT: ":9800"
+    volumes:
+      - clip-cache:/root/.cache # open_clip model weights cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9800/health', timeout=2).status==200 else 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      # Model download + load on first boot.
+      start_period: 10m
 
   fake-gmail:
     # Dev/CI only: local Gmail API fake (ADR-008). Admin API is unauthenticated
@@ -391,3 +427,4 @@ volumes:
   # Shared dev KEK for envelope encryption (control-plane token vault +
   # connector-hub blob store). Vault replaces this in M4.
   kek-keys:
+  clip-cache: # open_clip model weights (M3)

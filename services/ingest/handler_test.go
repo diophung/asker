@@ -100,6 +100,123 @@ func rawDoc(docID, etag string) *askerv1.Document {
 	}
 }
 
+// mediaDoc builds an IMAGE/AUDIO/VIDEO document: no body_text, an original
+// BlobRef pointing at the media bytes (the enrich worker chunks it later).
+func mediaDoc(docID, etag string, typ askerv1.DocType, contentType string) *askerv1.Document {
+	return &askerv1.Document{
+		TenantId:       "tenant-a",
+		DocId:          docID,
+		ConnectorId:    "gdrive",
+		SourceNativeId: "native-" + docID,
+		Type:           typ,
+		Title:          "Photo " + docID,
+		BodyText:       "", // media docs have no body to chunk
+		VersionEtag:    etag,
+		Original: &askerv1.BlobRef{
+			Bucket:      "asker-blobs",
+			Key:         "tenant-a/" + docID,
+			ContentType: contentType,
+			SizeBytes:   1024,
+		},
+	}
+}
+
+// TestHandleMediaDocPassesThroughUnchunked covers ADR-013 media routing: an
+// IMAGE/AUDIO/VIDEO document (no body, has an original BlobRef) flows to
+// docs.chunked with NO chunks added, version_etag preserved, and the dedupe
+// key recorded — the enrich worker produces its chunks later.
+func TestHandleMediaDocPassesThroughUnchunked(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		typ         askerv1.DocType
+		contentType string
+	}{
+		{"image by type", askerv1.DocType_IMAGE, "image/jpeg"},
+		{"audio by type", askerv1.DocType_AUDIO, "audio/mpeg"},
+		{"video by type", askerv1.DocType_VIDEO, "video/mp4"},
+		// Type unspecified but content_type identifies the media (connector
+		// that set the MIME but not the DocType).
+		{"image by content type", askerv1.DocType_DOC_TYPE_UNSPECIFIED, "image/png"},
+		{"audio by content type", askerv1.DocType_DOC_TYPE_UNSPECIFIED, "audio/wav"},
+		{"video by content type", askerv1.DocType_DOC_TYPE_UNSPECIFIED, "video/webm"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prod, seen := &fakeProducer{}, newFakeSeen()
+			h := newHandler(prod, seen, discardLogger())
+
+			doc := mediaDoc("media-1", "etag-media", tc.typ, tc.contentType)
+			if err := h.Handle(context.Background(), doc); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			docs := prod.produced()
+			if len(docs) != 1 {
+				t.Fatalf("produced %d docs, want 1", len(docs))
+			}
+			if prod.topics[0] != kafkautil.TopicDocsChunked {
+				t.Errorf("produced to %q, want %q", prod.topics[0], kafkautil.TopicDocsChunked)
+			}
+			out := docs[0]
+			if got := len(out.GetChunks()); got != 0 {
+				t.Errorf("media doc has %d chunks, want 0 (enrich chunks media)", got)
+			}
+			if got := out.GetVersionEtag(); got != "etag-media" {
+				t.Errorf("version_etag = %q, want preserved %q", got, "etag-media")
+			}
+			if out.GetOriginal().GetContentType() != tc.contentType {
+				t.Errorf("original content_type = %q, want %q",
+					out.GetOriginal().GetContentType(), tc.contentType)
+			}
+			if _, ok := seen.keys[seenKeyPrefix+"media-1:etag-media"]; !ok {
+				t.Errorf("dedupe key not recorded for media doc; keys: %v", seen.keys)
+			}
+		})
+	}
+}
+
+// TestHandleMediaDocDerivesEtag: a media doc with an empty version_etag still
+// gets one derived during normalization, so its dedupe key is stable.
+func TestHandleMediaDocDerivesEtag(t *testing.T) {
+	t.Parallel()
+	prod, seen := &fakeProducer{}, newFakeSeen()
+	h := newHandler(prod, seen, discardLogger())
+
+	doc := mediaDoc("media-noetag", "", askerv1.DocType_IMAGE, "image/gif")
+	if err := h.Handle(context.Background(), doc); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	docs := prod.produced()
+	if len(docs) != 1 {
+		t.Fatalf("produced %d docs, want 1", len(docs))
+	}
+	if docs[0].GetVersionEtag() == "" {
+		t.Error("empty version_etag was not derived for media doc")
+	}
+	if got := len(docs[0].GetChunks()); got != 0 {
+		t.Errorf("media doc has %d chunks, want 0", got)
+	}
+}
+
+// TestHandleMediaDuplicateSkipped: a replay of the same (doc_id, version_etag)
+// media doc is suppressed by dedupe, exactly as for text docs.
+func TestHandleMediaDuplicateSkipped(t *testing.T) {
+	t.Parallel()
+	prod, seen := &fakeProducer{}, newFakeSeen()
+	h := newHandler(prod, seen, discardLogger())
+
+	if err := h.Handle(context.Background(), mediaDoc("media-1", "etag-media", askerv1.DocType_VIDEO, "video/mp4")); err != nil {
+		t.Fatalf("first Handle: %v", err)
+	}
+	if err := h.Handle(context.Background(), mediaDoc("media-1", "etag-media", askerv1.DocType_VIDEO, "video/mp4")); err != nil {
+		t.Fatalf("duplicate Handle: %v", err)
+	}
+	if got := len(prod.produced()); got != 1 {
+		t.Errorf("produced %d docs, want 1 (media replay must be deduped)", got)
+	}
+}
+
 func TestHandleChunksAndProduces(t *testing.T) {
 	t.Parallel()
 	prod, seen := &fakeProducer{}, newFakeSeen()

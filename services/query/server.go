@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ type server struct {
 	queryv1.UnimplementedQueryServiceServer
 
 	embed  embedder
+	clip   clipEmbedder
 	vespa  vespaSearcher
 	cache  resultCache
 	logger *slog.Logger
@@ -28,10 +30,13 @@ type server struct {
 	// cacheWarnOnce gates the loud log for a down Redis: the contract is
 	// "skip silently (log once)" — first failure warns, the rest are debug.
 	cacheWarnOnce sync.Once
+	// clipWarnOnce gates the loud log for a down clip service: degradation is
+	// "log once" (ADR-006) — first failure warns, the rest are debug.
+	clipWarnOnce sync.Once
 }
 
-func newServer(embed embedder, vespa vespaSearcher, cache resultCache, logger *slog.Logger) *server {
-	return &server{embed: embed, vespa: vespa, cache: cache, logger: logger}
+func newServer(embed embedder, clip clipEmbedder, vespa vespaSearcher, cache resultCache, logger *slog.Logger) *server {
+	return &server{embed: embed, clip: clip, vespa: vespa, cache: cache, logger: logger}
 }
 
 // Search runs the spec §2.6 pipeline: validate/normalize -> understand ->
@@ -62,9 +67,16 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		return nil, status.Error(codes.InvalidArgument, "query: empty query with no filters")
 	}
 
+	// The CLIP text->image arm (ADR-013) is part of the plan for a HYBRID
+	// query that has residual text. This is deterministic from the request, so
+	// it is folded into the cache key (a CLIP-planning request never collides
+	// with a CLIP-less one) and decides whether stage 4b runs.
+	mode := norm.GetMode()
+	clipPlanned := plan.Text != "" && mode == queryv1.SearchMode_HYBRID
+
 	// Stage 3: result cache.
 	stage = time.Now()
-	key := cacheKey(tc.TenantID(), norm)
+	key := cacheKey(tc.TenantID(), norm, clipPlanned)
 	if cached := s.cacheGet(ctx, logger, key); cached != nil {
 		cached.Cached = true
 		cached.TookMs = time.Since(start).Milliseconds()
@@ -75,8 +87,7 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 
 	// Stage 4: embed the residual text (HYBRID/VECTOR only). Ladder rung 1:
 	// a TEI failure in HYBRID degrades to keyword-only; VECTOR mode errors.
-	mode := norm.GetMode()
-	degraded := ""
+	var degradedReasons []string
 	var vector []float32
 	if plan.Text != "" && (mode == queryv1.SearchMode_HYBRID || mode == queryv1.SearchMode_VECTOR) {
 		stage = time.Now()
@@ -93,35 +104,74 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 			} else {
 				logger.Warn("query embedding failed; degrading to keyword-only", "error", embedErr)
 			}
-			degraded = degradedKeywordOnly
+			degradedReasons = addDegraded(degradedReasons, degradedKeywordOnly)
+		}
+	}
+
+	// Stage 4b: CLIP text->image embedding (ADR-013). Only the blended HYBRID
+	// mode runs the CLIP arm — KEYWORD/VECTOR are caller-constrained strategies
+	// that must behave exactly as before. A clip failure drops the arm
+	// (degraded="clip-unavailable"); it never blocks text retrieval.
+	clipActive := false
+	var clipVector []float32
+	if clipPlanned {
+		stage = time.Now()
+		cv, clipErr := s.clip.EmbedText(ctx, plan.Text)
+		logger.Debug("stage clip-embed", "took", time.Since(stage), "error", clipErr != nil)
+		if clipErr != nil {
+			s.logClipError(logger, clipErr)
+			degradedReasons = addDegraded(degradedReasons, degradedClipUnavailable)
+		} else {
+			clipActive = true
+			clipVector = cv
 		}
 	}
 
 	// Stage 5+6: Vespa retrieval with the degradation ladder.
-	vq := vespaQuery{
+	base := vespaQuery{
 		Tenant:      tc.TenantID(), // from verified ctx — NEVER from the request
-		Kind:        retrievalPlan(plan, mode, vector),
 		Text:        plan.Text,
-		Vector:      vector,
 		DocTypes:    plan.DocTypes,
 		From:        plan.From,
 		To:          plan.To,
 		Participant: plan.Participant,
-		Hits:        norm.GetLimit(),
-		Offset:      norm.GetOffset(),
 	}
+	limit, offset := norm.GetLimit(), norm.GetOffset()
+
+	textQ := base
+	textQ.Kind = retrievalPlan(plan, mode, vector)
+	textQ.Vector = vector
+
+	var result vespaResult
 	stage = time.Now()
-	result, keywordFallback, err := s.searchWithDegradation(ctx, vq)
-	logger.Debug("stage vespa", "took", time.Since(stage), "profile", vq.Kind.profile(), "error", err != nil)
-	if keywordFallback {
-		degraded = degradedKeywordOnly
+	if clipActive {
+		// Two arms merged: each arm must contribute its full prefix up to
+		// offset+limit (with offset 0), so the merged ranking is correct
+		// before the page is sliced. The text arm still degrades on its own
+		// ladder; a CLIP arm failure here drops the arm (never fail closed).
+		clipQ := base
+		clipQ.Kind = retrieveCLIP
+		clipQ.ClipVector = clipVector
+
+		result, err = s.searchMerged(ctx, logger, textQ, clipQ, limit, offset, &degradedReasons)
+	} else {
+		textQ.Hits = limit
+		textQ.Offset = offset
+		var keywordFallback bool
+		result, keywordFallback, err = s.searchWithDegradation(ctx, textQ)
+		if keywordFallback {
+			degradedReasons = addDegraded(degradedReasons, degradedKeywordOnly)
+		}
 	}
+	logger.Debug("stage vespa", "took", time.Since(stage), "profile", textQ.Kind.profile(), "clip_arm", clipActive, "error", err != nil)
 	if err != nil {
 		if errors.Is(err, errInvalidFilterValue) {
 			return nil, status.Errorf(codes.InvalidArgument, "query: %v", err)
 		}
 		return nil, status.Errorf(codes.Unavailable, "query: search backend: %v", err)
 	}
+
+	degraded := joinDegraded(degradedReasons)
 
 	// Stage 7: respond; cache full-fidelity (non-degraded) results only, so
 	// a 60s TTL never pins keyword-only results past a TEI/Vespa blip.
@@ -137,6 +187,130 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	logger.Debug("search complete",
 		"took", time.Since(start), "hits", len(resp.Hits), "total", resp.Total, "degraded", degraded)
 	return resp, nil
+}
+
+// searchMerged runs the text arm (with its degradation ladder) and the CLIP
+// arm side by side, unions the hits by doc_id, blends scores, and returns the
+// requested page of the merged ranking. Each arm is fetched from offset 0 up
+// to offset+limit so the merge sees every candidate that could land on the
+// page. It owns both degradation appends so the composed marker is
+// deterministic ("keyword-only" before "clip-unavailable"): the text arm's
+// keyword fallback first, then a dropped CLIP arm (the arm is dropped and the
+// text results still return — ADR-006).
+func (s *server) searchMerged(
+	ctx context.Context, logger *slog.Logger,
+	textQ, clipQ vespaQuery, limit, offset int32, degradedReasons *[]string,
+) (vespaResult, error) {
+	// Each arm needs the full prefix [0, offset+limit) so pagination over the
+	// merged set is correct. int32 math is bounded by the request validation
+	// (limit<=100, offset<=1000), so no overflow.
+	prefix := offset + limit
+
+	textQ.Hits = prefix
+	textQ.Offset = 0
+	textResult, keywordFallback, textErr := s.searchWithDegradation(ctx, textQ)
+	if textErr != nil {
+		// The text arm is the backbone: its failure is the search's failure.
+		return vespaResult{}, textErr
+	}
+	if keywordFallback {
+		*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
+	}
+
+	clipQ.Hits = prefix
+	clipQ.Offset = 0
+	clipResult, clipErr := s.vespa.Search(ctx, clipQ)
+	if clipErr != nil {
+		// Drop the CLIP arm; never fail the search on it (ADR-006).
+		s.logClipError(logger, clipErr)
+		*degradedReasons = addDegraded(*degradedReasons, degradedClipUnavailable)
+		clipResult = vespaResult{}
+	}
+
+	merged := mergeHits(textResult.Hits, clipResult.Hits)
+	total := mergedTotal(textResult, clipResult, len(merged))
+	return vespaResult{Hits: pageHits(merged, offset, limit), Total: total}, nil
+}
+
+// mergeHits unions two arms' hits by doc_id and orders the result by blended
+// score, descending. A doc matched by BOTH arms keeps the higher of the two
+// scores (so an image with matching OCR text AND visual similarity ranks at
+// least as well as either alone); a purely-visual or purely-textual match
+// keeps its single score. The first arm (text) is authoritative for a hit's
+// non-score fields (snippet, metadata), but a text hit that lacks media deep-
+// link fields inherits them from the CLIP match (the CLIP arm is what knows
+// the visually-matched chunk).
+func mergeHits(textHits, clipHits []*queryv1.Hit) []*queryv1.Hit {
+	order := make([]string, 0, len(textHits)+len(clipHits))
+	byDoc := make(map[string]*queryv1.Hit, len(textHits)+len(clipHits))
+
+	add := func(h *queryv1.Hit) {
+		existing, ok := byDoc[h.GetDocId()]
+		if !ok {
+			order = append(order, h.GetDocId())
+			byDoc[h.GetDocId()] = h
+			return
+		}
+		// Keep the higher score (the blend for a doc both arms matched).
+		if h.GetScore() > existing.GetScore() {
+			existing.Score = h.GetScore()
+		}
+		// Fill media deep-link fields the text arm did not carry from the
+		// CLIP match (visual chunk anchoring).
+		if existing.GetModality() == "" && h.GetModality() != "" {
+			existing.StartMs = h.GetStartMs()
+			existing.EndMs = h.GetEndMs()
+			existing.Modality = h.GetModality()
+		}
+		if existing.GetThumbnailKey() == "" && h.GetThumbnailKey() != "" {
+			existing.ThumbnailKey = h.GetThumbnailKey()
+		}
+	}
+	for _, h := range textHits {
+		add(h)
+	}
+	for _, h := range clipHits {
+		add(h)
+	}
+
+	out := make([]*queryv1.Hit, 0, len(order))
+	for _, id := range order {
+		out = append(out, byDoc[id])
+	}
+	// Stable sort by score desc so equal scores keep arrival (text-first) order.
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].GetScore() > out[j].GetScore()
+	})
+	return out
+}
+
+// mergedTotal estimates the tenant-scoped match count across both arms. The
+// arms' per-arm totalCounts overlap (a doc matched by both is counted twice),
+// so the merged distinct count is at least max(arm totals are not additive);
+// the count actually observed after dedupe is the most honest lower bound we
+// have without a second pass. We report max(distinct observed, each arm's
+// total) so the figure never undercounts the dominant (text) arm.
+func mergedTotal(textResult, clipResult vespaResult, distinct int) int64 {
+	total := int64(distinct)
+	if textResult.Total > total {
+		total = textResult.Total
+	}
+	if clipResult.Total > total {
+		total = clipResult.Total
+	}
+	return total
+}
+
+// pageHits applies offset/limit to the merged ranking.
+func pageHits(hits []*queryv1.Hit, offset, limit int32) []*queryv1.Hit {
+	if offset >= int32(len(hits)) {
+		return nil
+	}
+	end := offset + limit
+	if end > int32(len(hits)) {
+		end = int32(len(hits))
+	}
+	return hits[offset:end]
 }
 
 // retrievalPlan picks the retrieval kind from the understanding output, the
@@ -194,5 +368,23 @@ func (s *server) logCacheError(logger *slog.Logger, op string, err error) {
 	})
 	if !warned {
 		logger.Debug("result cache unavailable", "op", op, "error", err)
+	}
+}
+
+// logClipError reports a dropped CLIP arm: loud once (a CLIP_DIM mismatch is
+// an operator error per ADR-013; any other failure means the clip service is
+// unavailable), quiet thereafter.
+func (s *server) logClipError(logger *slog.Logger, err error) {
+	warned := false
+	s.clipWarnOnce.Do(func() {
+		warned = true
+		if errors.Is(err, errClipDim) {
+			logger.Error("CLIP_DIM mismatch — fix the deployment (ADR-013)", "error", err)
+		} else {
+			logger.Warn("clip text->image arm unavailable; dropping it", "error", err)
+		}
+	})
+	if !warned {
+		logger.Debug("clip text->image arm unavailable", "error", err)
 	}
 }

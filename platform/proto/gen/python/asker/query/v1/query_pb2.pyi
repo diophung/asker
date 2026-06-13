@@ -57,7 +57,7 @@ class SearchResponse(_message.Message):
     def __init__(self, hits: _Optional[_Iterable[_Union[Hit, _Mapping]]] = ..., total: _Optional[int] = ..., degraded: _Optional[str] = ..., took_ms: _Optional[int] = ..., cached: _Optional[bool] = ...) -> None: ...
 
 class Hit(_message.Message):
-    __slots__ = ("doc_id", "connector_id", "type", "title", "snippet", "score", "created", "modified", "metadata")
+    __slots__ = ("doc_id", "connector_id", "type", "title", "snippet", "score", "created", "modified", "metadata", "start_ms", "end_ms", "modality", "thumbnail_key")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -74,6 +74,10 @@ class Hit(_message.Message):
     CREATED_FIELD_NUMBER: _ClassVar[int]
     MODIFIED_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    START_MS_FIELD_NUMBER: _ClassVar[int]
+    END_MS_FIELD_NUMBER: _ClassVar[int]
+    MODALITY_FIELD_NUMBER: _ClassVar[int]
+    THUMBNAIL_KEY_FIELD_NUMBER: _ClassVar[int]
     doc_id: str
     connector_id: str
     type: _document_pb2.DocType
@@ -83,4 +87,8 @@ class Hit(_message.Message):
     created: _timestamp_pb2.Timestamp
     modified: _timestamp_pb2.Timestamp
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, doc_id: _Optional[str] = ..., connector_id: _Optional[str] = ..., type: _Optional[_Union[_document_pb2.DocType, str]] = ..., title: _Optional[str] = ..., snippet: _Optional[str] = ..., score: _Optional[float] = ..., created: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., modified: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    start_ms: int
+    end_ms: int
+    modality: str
+    thumbnail_key: str
+    def __init__(self, doc_id: _Optional[str] = ..., connector_id: _Optional[str] = ..., type: _Optional[_Union[_document_pb2.DocType, str]] = ..., title: _Optional[str] = ..., snippet: _Optional[str] = ..., score: _Optional[float] = ..., created: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., modified: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., start_ms: _Optional[int] = ..., end_ms: _Optional[int] = ..., modality: _Optional[str] = ..., thumbnail_key: _Optional[str] = ...) -> None: ...

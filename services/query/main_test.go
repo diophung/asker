@@ -54,6 +54,7 @@ func waitReady(t *testing.T, url string) {
 // dead port: the cache must be skipped silently, not break searches.
 func TestRunEndToEnd(t *testing.T) {
 	tei, _ := newTEIStub(t, testDim)
+	clip, _ := newClipStub(t, testDim)
 	vespa := newVespaStub(t)
 	deadRedis := freeAddr(t)
 
@@ -65,6 +66,9 @@ func TestRunEndToEnd(t *testing.T) {
 		RedisAddr:    deadRedis,
 		EmbeddingDim: testDim,
 		EmbedTimeout: time.Second,
+		ClipURL:      clip.URL,
+		ClipDim:      testDim,
+		ClipTimeout:  time.Second,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -188,10 +192,22 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.TEIURL != "http://tei:80" || cfg.VespaURL != "http://vespa:8080" || cfg.RedisAddr != "redis:6379" {
 			t.Errorf("endpoints = %q/%q/%q, want contract defaults", cfg.TEIURL, cfg.VespaURL, cfg.RedisAddr)
 		}
+		if cfg.ClipURL != "http://clip:9800" {
+			t.Errorf("ClipURL = %q, want http://clip:9800", cfg.ClipURL)
+		}
+		if cfg.ClipDim != 512 {
+			t.Errorf("ClipDim = %d, want 512", cfg.ClipDim)
+		}
+		if cfg.ClipTimeout != 2*time.Second {
+			t.Errorf("ClipTimeout = %v, want 2s", cfg.ClipTimeout)
+		}
 	})
 	t.Run("env overrides", func(t *testing.T) {
 		t.Setenv("EMBEDDING_DIM", "384")
 		t.Setenv("QUERY_EMBED_TIMEOUT", "750ms")
+		t.Setenv("CLIP_URL", "http://clip-host:9800")
+		t.Setenv("CLIP_DIM", "512")
+		t.Setenv("QUERY_CLIP_TIMEOUT", "1500ms")
 		cfg, err := loadConfig()
 		if err != nil {
 			t.Fatalf("loadConfig: %v", err)
@@ -201,6 +217,15 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if cfg.EmbedTimeout != 750*time.Millisecond {
 			t.Errorf("EmbedTimeout = %v, want 750ms", cfg.EmbedTimeout)
+		}
+		if cfg.ClipURL != "http://clip-host:9800" {
+			t.Errorf("ClipURL = %q, want override", cfg.ClipURL)
+		}
+		if cfg.ClipDim != 512 {
+			t.Errorf("ClipDim = %d, want 512", cfg.ClipDim)
+		}
+		if cfg.ClipTimeout != 1500*time.Millisecond {
+			t.Errorf("ClipTimeout = %v, want 1500ms", cfg.ClipTimeout)
 		}
 	})
 	t.Run("invalid dim rejected", func(t *testing.T) {
@@ -213,6 +238,18 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("QUERY_EMBED_TIMEOUT", "0s")
 		if _, err := loadConfig(); err == nil {
 			t.Error("loadConfig accepted QUERY_EMBED_TIMEOUT=0s")
+		}
+	})
+	t.Run("invalid clip dim rejected", func(t *testing.T) {
+		t.Setenv("CLIP_DIM", "0")
+		if _, err := loadConfig(); err == nil {
+			t.Error("loadConfig accepted CLIP_DIM=0")
+		}
+	})
+	t.Run("invalid clip timeout rejected", func(t *testing.T) {
+		t.Setenv("QUERY_CLIP_TIMEOUT", "0s")
+		if _, err := loadConfig(); err == nil {
+			t.Error("loadConfig accepted QUERY_CLIP_TIMEOUT=0s")
 		}
 	})
 }

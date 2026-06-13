@@ -26,14 +26,16 @@ const tenantHeader = "x-asker-tenant"
 const maxUploadBytes = 32 << 20
 
 // httpAPI serves the hub's :9300 surface: webhook receiver, direct upload,
-// and the per-tenant sync-status listing the gateway proxies.
+// the per-tenant sync-status listing the gateway proxies, and the internal-
+// only media decrypt/encrypt hop (ADR-013).
 type httpAPI struct {
-	cp       controlplanev1.ControlPlaneServiceClient
-	registry *sdk.Registry
-	sched    *scheduler
-	emit     *emitter
-	upload   UploadFunc
-	logger   *slog.Logger
+	cp         controlplanev1.ControlPlaneServiceClient
+	registry   *sdk.Registry
+	sched      *scheduler
+	emit       *emitter
+	upload     UploadFunc
+	mediaBlobs MediaBlobStore
+	logger     *slog.Logger
 }
 
 func (h *httpAPI) routes() http.Handler {
@@ -41,6 +43,10 @@ func (h *httpAPI) routes() http.Handler {
 	mux.HandleFunc("POST /webhooks/{connectorID}/{instanceID}", h.handleWebhook)
 	mux.HandleFunc("POST /upload", h.handleUpload)
 	mux.HandleFunc("GET /v1/sync-status", h.handleSyncStatus)
+	// Internal-only (ADR-009): no host port is published for :9300, only the
+	// compose/cluster network reaches these; M4 adds mTLS/NetworkPolicy.
+	mux.HandleFunc("GET /internal/media", h.handleMediaGet)
+	mux.HandleFunc("PUT /internal/media", h.handleMediaPut)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})

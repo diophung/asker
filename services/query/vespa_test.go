@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,19 @@ func TestBuildYQL(t *testing.T) {
 			name: "vector clause alone",
 			q:    vespaQuery{Kind: retrieveVector},
 			want: `select * from sources * where ({targetHits:100}nearestNeighbor(embedding,q))`,
+		},
+		{
+			name: "clip text->image clause",
+			q:    vespaQuery{Kind: retrieveCLIP},
+			want: `select * from sources * where ({targetHits:100}nearestNeighbor(clip_embedding,qclip))`,
+		},
+		{
+			name: "clip clause respects filters",
+			q: vespaQuery{
+				Kind:     retrieveCLIP,
+				DocTypes: []askerv1.DocType{askerv1.DocType_IMAGE},
+			},
+			want: `select * from sources * where ({targetHits:100}nearestNeighbor(clip_embedding,qclip)) and type contains "IMAGE"`,
 		},
 		{
 			name: "filter-only true clause",
@@ -184,8 +198,140 @@ const vespaFixture = `{
   }
 }`
 
+// clipFixture is a CLIP-arm (text->image) response: an image doc whose
+// visually-matched chunk is named by the closest(clip_embedding) summary
+// feature, carrying parallel chunk_starts_ms/ends_ms/modalities arrays and a
+// doc-level thumbnail_key (ADR-013).
+const clipFixture = `{
+  "root": {
+    "id": "toplevel",
+    "fields": {"totalCount": 1},
+    "children": [
+      {
+        "id": "index:asker/0/img",
+        "relevance": 0.93,
+        "fields": {
+          "doc_id": "doc-img",
+          "connector_id": "drive",
+          "type": "IMAGE",
+          "title": "Beach sunset.jpg",
+          "thumbnail_key": "thumb/doc-img.jpg",
+          "chunk_starts_ms": [0, 0],
+          "chunk_ends_ms": [0, 0],
+          "chunk_modalities": ["ocr", "caption"],
+          "summaryfeatures": {
+            "closest(clip_embedding)": {"type": "tensor(chunk{})", "cells": {"1": 1.0}}
+          }
+        }
+      }
+    ]
+  }
+}`
+
+// asrFixture is a text/ASR-arm response: a video doc whose matched transcript
+// chunk is the one carrying the <hi> highlight; its start_ms/modality come
+// from the parallel arrays at that index.
+const asrFixture = `{
+  "root": {
+    "id": "toplevel",
+    "fields": {"totalCount": 1},
+    "children": [
+      {
+        "id": "index:asker/0/vid",
+        "relevance": 0.71,
+        "fields": {
+          "doc_id": "doc-vid",
+          "connector_id": "drive",
+          "type": "VIDEO",
+          "title": "All hands.mp4",
+          "thumbnail_key": "thumb/doc-vid.jpg",
+          "chunk_snippets": ["intro no match", "the <hi>budget</hi> discussion", "outro"],
+          "chunk_starts_ms": [0, 42000, 90000],
+          "chunk_ends_ms": [42000, 90000, 120000],
+          "chunk_modalities": ["asr", "asr", "asr"]
+        }
+      }
+    ]
+  }
+}`
+
+func TestParseVespaResponseClipMediaFields(t *testing.T) {
+	res, err := parseVespaResponse([]byte(clipFixture), retrieveCLIP)
+	if err != nil {
+		t.Fatalf("parseVespaResponse(clip): %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("len(Hits) = %d, want 1", len(res.Hits))
+	}
+	h := res.Hits[0]
+	// closest(clip_embedding) named chunk index 1 -> the "caption" chunk.
+	if h.GetModality() != "caption" {
+		t.Errorf("Modality = %q, want caption (the matched CLIP chunk)", h.GetModality())
+	}
+	if h.GetThumbnailKey() != "thumb/doc-img.jpg" {
+		t.Errorf("ThumbnailKey = %q, want the doc thumbnail", h.GetThumbnailKey())
+	}
+}
+
+func TestParseVespaResponseAsrMediaFields(t *testing.T) {
+	res, err := parseVespaResponse([]byte(asrFixture), retrieveHybrid)
+	if err != nil {
+		t.Fatalf("parseVespaResponse(asr): %v", err)
+	}
+	h := res.Hits[0]
+	// The matched chunk is index 1 (the only highlighted chunk_snippets element).
+	if h.GetStartMs() != 42000 || h.GetEndMs() != 90000 {
+		t.Errorf("start/end = %d/%d, want 42000/90000 (the matched ASR chunk)", h.GetStartMs(), h.GetEndMs())
+	}
+	if h.GetModality() != "asr" {
+		t.Errorf("Modality = %q, want asr", h.GetModality())
+	}
+	if h.GetThumbnailKey() != "thumb/doc-vid.jpg" {
+		t.Errorf("ThumbnailKey = %q, want the poster thumbnail", h.GetThumbnailKey())
+	}
+}
+
+func TestMatchedClipChunkIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"tensor cells form", `{"type":"tensor(chunk{})","cells":{"3":1.0}}`, 3},
+		{"bare map form", `{"2":1.0}`, 2},
+		{"smallest label wins", `{"cells":{"5":1.0,"2":1.0}}`, 2},
+		{"empty", `{}`, -1},
+		{"non-numeric label", `{"cells":{"x":1.0}}`, -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			feats := map[string]json.RawMessage{"closest(clip_embedding)": json.RawMessage(tt.raw)}
+			if got := matchedClipChunkIndex(feats); got != tt.want {
+				t.Errorf("matchedClipChunkIndex(%s) = %d, want %d", tt.raw, got, tt.want)
+			}
+		})
+	}
+	if got := matchedClipChunkIndex(nil); got != -1 {
+		t.Errorf("matchedClipChunkIndex(nil) = %d, want -1", got)
+	}
+}
+
+func TestPopulateMediaFieldsTextDocStaysZero(t *testing.T) {
+	// A text document (no parallel arrays, a highlighted text chunk) gets no
+	// time offset attributed — the whole-document case the proto documents.
+	res, err := parseVespaResponse([]byte(vespaFixture), retrieveHybrid)
+	if err != nil {
+		t.Fatalf("parseVespaResponse: %v", err)
+	}
+	h := res.Hits[0]
+	if h.GetStartMs() != 0 || h.GetEndMs() != 0 || h.GetModality() != "" || h.GetThumbnailKey() != "" {
+		t.Errorf("text doc got media fields: start=%d end=%d modality=%q thumb=%q",
+			h.GetStartMs(), h.GetEndMs(), h.GetModality(), h.GetThumbnailKey())
+	}
+}
+
 func TestParseVespaResponse(t *testing.T) {
-	res, err := parseVespaResponse([]byte(vespaFixture))
+	res, err := parseVespaResponse([]byte(vespaFixture), retrieveHybrid)
 	if err != nil {
 		t.Fatalf("parseVespaResponse: %v", err)
 	}
@@ -236,7 +382,7 @@ func TestParseVespaResponse(t *testing.T) {
 
 func TestParseVespaResponseErrorsOnly(t *testing.T) {
 	raw := `{"root":{"errors":[{"code":8,"summary":"Error in search reply","message":"boom"}]}}`
-	if _, err := parseVespaResponse([]byte(raw)); err == nil {
+	if _, err := parseVespaResponse([]byte(raw), retrieveHybrid); err == nil {
 		t.Fatal("parseVespaResponse with errors and no children must fail")
 	}
 }

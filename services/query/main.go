@@ -79,6 +79,7 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 	logger.Info("query service configuration",
 		"vespa_url", cfg.VespaURL, "tei_url", cfg.TEIURL,
 		"embedding_dim", cfg.EmbeddingDim, "embed_timeout", cfg.EmbedTimeout,
+		"clip_url", cfg.ClipURL, "clip_dim", cfg.ClipDim, "clip_timeout", cfg.ClipTimeout,
 		"redis_addr", cfg.RedisAddr)
 
 	cache := newRedisCache(cfg.RedisAddr)
@@ -86,6 +87,7 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 
 	srv := newServer(
 		newTEIEmbedder(cfg.TEIURL, cfg.EmbeddingDim, cfg.EmbedTimeout),
+		newClipEmbedder(cfg.ClipURL, cfg.ClipDim, cfg.ClipTimeout),
 		newVespaClient(cfg.VespaURL),
 		cache,
 		logger,

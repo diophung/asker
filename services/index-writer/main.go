@@ -79,7 +79,7 @@ func run(ctx context.Context, cfg indexWriterConfig, logger *slog.Logger) error 
 		return fmt.Errorf("ensure topics: %w", err)
 	}
 
-	w, err := newWriter(cfg.VespaURL, cfg.EmbeddingDim, logger)
+	w, err := newWriter(cfg.VespaURL, cfg.EmbeddingDim, cfg.CLIPDim, logger)
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func run(ctx context.Context, cfg indexWriterConfig, logger *slog.Logger) error 
 	logger.Info("index-writer consuming",
 		"topic", kafkautil.TopicDocsEnriched, "group", consumerGroup,
 		"vespa_url", cfg.VespaURL, "embedding_dim", cfg.EmbeddingDim,
-		"health_addr", ln.Addr().String())
+		"clip_dim", cfg.CLIPDim, "health_addr", ln.Addr().String())
 
 	shutdownHealth := func() error {
 		shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

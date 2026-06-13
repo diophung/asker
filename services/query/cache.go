@@ -34,7 +34,14 @@ type resultCache interface {
 // normalized request (proto wire marshaling is not guaranteed deterministic,
 // so it is not hashed directly). Doc types are sorted so order-insensitive
 // equivalent requests share an entry.
-func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest) string {
+//
+// clipArm records whether the CLIP text->image arm is part of this query's
+// plan (ADR-013) — it is folded into the key so a result computed without the
+// CLIP arm (e.g. an M2-era entry, or a deployment where CLIP was not yet in
+// the plan) is never served for a request that now plans the CLIP arm, and
+// vice versa. Only non-degraded results are cached, so a CLIP-down result is
+// never stored; this key bit is the belt-and-suspenders namespace separation.
+func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest, clipArm bool) string {
 	types := make([]int32, 0, len(req.GetDocTypes()))
 	for _, t := range req.GetDocTypes() {
 		types = append(types, int32(t))
@@ -59,7 +66,7 @@ func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest) string {
 	writeTimestampField(req.GetFromDate() != nil, req.GetFromDate().GetSeconds(), req.GetFromDate().GetNanos())
 	writeTimestampField(req.GetToDate() != nil, req.GetToDate().GetSeconds(), req.GetToDate().GetNanos())
 	b.WriteString(req.GetParticipant())
-	fmt.Fprintf(&b, "\x1f%d\x1f%d\x1f%d", req.GetLimit(), req.GetOffset(), req.GetMode())
+	fmt.Fprintf(&b, "\x1f%d\x1f%d\x1f%d\x1f%t", req.GetLimit(), req.GetOffset(), req.GetMode(), clipArm)
 
 	sum := sha256.Sum256([]byte(b.String()))
 	return "q:" + string(tenant) + ":" + hex.EncodeToString(sum[:])
