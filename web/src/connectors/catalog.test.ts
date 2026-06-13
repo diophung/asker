@@ -5,6 +5,7 @@ import {
   CONNECTOR_CATALOG,
   connectorTypeLabel,
   type ConnectorType,
+  oauthProviderLabel,
 } from "./catalog";
 
 describe("CONNECTOR_CATALOG", () => {
@@ -35,6 +36,34 @@ describe("CONNECTOR_CATALOG", () => {
     expect(byId.get("s3")?.needsToken).toBe(false);
     expect(byId.get("ical")?.needsToken).toBe(false);
     expect(byId.get("upload")?.needsToken).toBe(false);
+  });
+
+  it("tags OAuth connectors with their provider; token-free ones have none", () => {
+    const byId = new Map(CONNECTOR_CATALOG.map((t) => [t.id, t]));
+    // gmail/gcal/gdrive -> google
+    expect(byId.get("gmail")?.oauthProvider).toBe("google");
+    expect(byId.get("gcal")?.oauthProvider).toBe("google");
+    expect(byId.get("gdrive")?.oauthProvider).toBe("google");
+    // outlook-mail/outlook-cal -> microsoft
+    expect(byId.get("outlook-mail")?.oauthProvider).toBe("microsoft");
+    expect(byId.get("outlook-cal")?.oauthProvider).toBe("microsoft");
+    // slack -> slack
+    expect(byId.get("slack")?.oauthProvider).toBe("slack");
+    // jira/confluence -> atlassian
+    expect(byId.get("jira")?.oauthProvider).toBe("atlassian");
+    expect(byId.get("confluence")?.oauthProvider).toBe("atlassian");
+    // Non-OAuth / token-free connectors carry no provider.
+    expect(byId.get("s3")?.oauthProvider).toBeUndefined();
+    expect(byId.get("ical")?.oauthProvider).toBeUndefined();
+    expect(byId.get("upload")?.oauthProvider).toBeUndefined();
+  });
+
+  it("keeps needsToken true for OAuth connectors (dev paste fallback)", () => {
+    for (const t of CONNECTOR_CATALOG) {
+      if (t.oauthProvider !== undefined) {
+        expect(t.needsToken).toBe(true);
+      }
+    }
   });
 
   it("encodes the documented config field hints", () => {
@@ -69,6 +98,15 @@ describe("connectorTypeLabel", () => {
   it("returns the display name and passes through unknown ids", () => {
     expect(connectorTypeLabel("gmail")).toBe("Gmail");
     expect(connectorTypeLabel("mystery")).toBe("mystery");
+  });
+});
+
+describe("oauthProviderLabel", () => {
+  it("maps providers to their human labels", () => {
+    expect(oauthProviderLabel("google")).toBe("Google");
+    expect(oauthProviderLabel("microsoft")).toBe("Microsoft");
+    expect(oauthProviderLabel("slack")).toBe("Slack");
+    expect(oauthProviderLabel("atlassian")).toBe("Atlassian");
   });
 });
 

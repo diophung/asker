@@ -61,9 +61,20 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	mux.Handle("/v1/connectors/{id}/token", authed(methods(map[string]http.HandlerFunc{
 		http.MethodPut: d.handlePutToken,
 	})))
+	// OAuth connector authorization start (wave 1). AUTHED: the tenant is the
+	// verified-token tenant, and the server-side flow state it persists is bound
+	// to it. The web fetches this, then navigates the browser to authorize_url.
+	mux.Handle("/v1/connectors/{id}/oauth/start", authed(getOnly(d.handleOAuthStart)))
 	mux.Handle("/v1/upload", authed(methods(map[string]http.HandlerFunc{
 		http.MethodPost: d.handleUpload,
 	})))
+
+	// OAuth provider redirect target. PUBLIC: registered OUTSIDE the authed
+	// chain (the provider's browser redirect carries no bearer). It still sits
+	// behind the pre-auth throttle + telemetry that wrap the whole mux below.
+	// Tenant + connector come ONLY from the single-use server-side state keyed by
+	// the unguessable `state`, never from this request (see oauth.go).
+	mux.Handle("/v1/oauth/callback", getOnly(d.handleOAuthCallback))
 
 	// Admin API (M6): privileged, cross-tenant operator surface, gated by the
 	// admin role/scope claim (admin.go). NOT a web UI — an API; the console is a

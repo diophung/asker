@@ -48,7 +48,7 @@ coverage-gate: test ## Enforce coverage floors (platform/tenancy 100%, platform/
 
 # Built one at a time: parallel BuildKit builds of 9 images spike memory hard
 # enough to OOM-kill running containers on small Docker VMs (observed).
-BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query clip fake-gmail web
+BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query clip fake-gmail fake-oauth web
 
 dev-build: ## Build all service images serially (low-memory friendly)
 	@for s in $(BUILT_SERVICES); do echo "== build $$s"; $(COMPOSE) build $$s || exit 1; done
@@ -80,6 +80,9 @@ e2e-leakage: ## Cross-tenant leakage suite (sacred — must always pass)
 
 e2e-gdpr: ## M6 GDPR per-tenant delete drill (cascade purge + crypto-shred; asserts isolation). DESTRUCTIVE: erases the test tenant.
 	bash tools/e2e/gdpr-delete.sh
+
+e2e-oauth: ## Connector OAuth e2e against the fake provider (auth-code + PKCE + refresh -> token stored -> gmail sync)
+	bash tools/e2e/oauth.sh
 
 e2e-m3-media: ## M3 media exit test (spoken phrase -> video@timestamp, CLIP text->image, OCR, isolation)
 	bash tools/e2e/m3-media.sh

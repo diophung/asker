@@ -17,9 +17,23 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/oauth"
 	controlplanev1 "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
+
+// refreshSkew is the margin before an access token's expiry at which the hub
+// proactively refreshes it, so a sync never hands a connector a token that
+// expires mid-pass. It must stay well under the steady sync interval.
+const refreshSkew = 60 * time.Second
+
+// tokenRefresher is the slice of *oauth.Service the scheduler needs to renew a
+// stored OAuth credential. It is an interface so the refresh path is testable
+// against a fake without standing up provider HTTP endpoints; *oauth.Service
+// (the production implementation) satisfies it.
+type tokenRefresher interface {
+	Refresh(ctx context.Context, p oauth.Provider, t oauth.Token) (oauth.Token, error)
+}
 
 // Scheduler defaults: at most maxConcurrentSyncs syncs run hub-wide at once;
 // repeated failures back off exponentially from failureBackoffBase to
@@ -41,6 +55,12 @@ type scheduler struct {
 	registry *sdk.Registry
 	emit     *emitter
 	logger   *slog.Logger
+
+	// oauth refreshes stored Asker OAuth credentials before a sync. It is nil
+	// when no OAuth provider is configured (manual/legacy tokens still flow
+	// through unchanged); a NeedsRefresh OAuth token then fails the run with a
+	// clear error rather than handing the connector a stale bearer.
+	oauth tokenRefresher
 
 	webhookBase  string
 	syncInterval time.Duration
@@ -77,6 +97,7 @@ type schedulerOpts struct {
 	registry     *sdk.Registry
 	emit         *emitter
 	logger       *slog.Logger
+	oauth        tokenRefresher // optional; nil when no OAuth provider is configured
 	webhookBase  string
 	syncInterval time.Duration
 	tick         time.Duration
@@ -103,6 +124,7 @@ func newScheduler(o schedulerOpts) *scheduler {
 		registry:              o.registry,
 		emit:                  o.emit,
 		logger:                o.logger,
+		oauth:                 o.oauth,
 		webhookBase:           strings.TrimRight(o.webhookBase, "/"),
 		syncInterval:          o.syncInterval,
 		tick:                  o.tick,
@@ -520,10 +542,11 @@ func (s *scheduler) recordFailure(tctx context.Context, run *syncRun, cause erro
 	}
 }
 
-// buildConfig assembles the sdk.Config for one run: the decrypted token from
-// the control-plane vault (absent for AuthNone connectors) and the instance
-// ConfigJSON with the hub-owned webhook_url merged in. tctx must carry the
-// instance tenant.
+// buildConfig assembles the sdk.Config for one run: the bearer the connector
+// uses (the decrypted vault credential — refreshed when it is an Asker OAuth
+// token, passed through verbatim when it is a legacy/manual token, absent for
+// AuthNone connectors; see fetchToken) and the instance ConfigJSON with the
+// hub-owned webhook_url merged in. tctx must carry the instance tenant.
 func (s *scheduler) buildConfig(tctx context.Context, snap instanceSnap, checkpoint sdk.Checkpoint) (sdk.Config, error) {
 	token, err := s.fetchToken(tctx, snap.inst.GetId())
 	if err != nil {
@@ -545,8 +568,28 @@ func (s *scheduler) buildConfig(tctx context.Context, snap instanceSnap, checkpo
 	}, nil
 }
 
-// fetchToken returns the instance's decrypted credential, or nil when none
-// is stored (AuthNone connectors, or not yet connected).
+// fetchToken returns the bearer the connector should use for this run.
+//
+// It reads the instance's decrypted credential from the control-plane vault,
+// then:
+//
+//   - no token stored (AuthNone connectors / not yet connected) -> nil.
+//   - the blob is NOT an Asker OAuth token (oauth.Parse ok=false: a legacy,
+//     manually-pasted opaque token such as "fake-gmail-token:...") -> the bytes
+//     are passed through UNCHANGED, preserving the manual-token / fake-gmail
+//     path that the m1 and leakage e2e suites rely on.
+//   - the blob IS an Asker OAuth Token: when it needs a refresh (expired or
+//     within refreshSkew of expiry, and it has a refresh token) the access
+//     token is renewed via the oauth service; if it changed it is re-stored in
+//     the vault (PutToken, under tctx's tenant) so the next run reuses it. The
+//     connector receives the (possibly refreshed) ACCESS token as the bearer.
+//
+// A refresh failure fails the run with a clear error — the connector can
+// re-auth — rather than handing it a stale or empty token.
+//
+// tctx MUST carry the instance tenant: the GetToken/PutToken calls are
+// tenant-scoped and the tenancy client interceptor stamps x-asker-tenant from
+// it. The tenant is never taken from the token blob or any request input.
 func (s *scheduler) fetchToken(tctx context.Context, instanceID string) ([]byte, error) {
 	resp, err := s.cp.GetToken(tctx, &controlplanev1.GetTokenRequest{ConnectorInstanceId: instanceID})
 	if err != nil {
@@ -555,7 +598,50 @@ func (s *scheduler) fetchToken(tctx context.Context, instanceID string) ([]byte,
 		}
 		return nil, fmt.Errorf("hub: get token for %s: %w", instanceID, err)
 	}
-	return resp.GetToken(), nil
+	stored := resp.GetToken()
+
+	tok, ok := oauth.Parse(stored)
+	if !ok {
+		// Legacy / manually-pasted opaque token: pass through verbatim.
+		return stored, nil
+	}
+
+	if !tok.NeedsRefresh(s.now(), refreshSkew) {
+		// Still valid (or non-expiring): use the stored access token as-is.
+		return []byte(tok.AccessToken), nil
+	}
+
+	if s.oauth == nil {
+		// An OAuth token is due for refresh but no provider is configured: do
+		// not hand the connector a stale bearer.
+		return nil, fmt.Errorf("hub: oauth token for %s needs refresh but no oauth service is configured", instanceID)
+	}
+
+	newTok, err := s.oauth.Refresh(tctx, tok.Provider, tok)
+	if err != nil {
+		return nil, fmt.Errorf("hub: refresh oauth token for %s: %w", instanceID, err)
+	}
+	if newTok.AccessToken == "" {
+		return nil, fmt.Errorf("hub: refresh oauth token for %s: empty access token", instanceID)
+	}
+
+	// Re-store only when the refresh actually changed the credential, so an
+	// unchanged token (x/oauth2 returns the same one when still valid) does not
+	// cause a needless vault write.
+	if newTok.AccessToken != tok.AccessToken || newTok.RefreshToken != tok.RefreshToken || !newTok.Expiry.Equal(tok.Expiry) {
+		blob, mErr := oauth.Marshal(newTok)
+		if mErr != nil {
+			return nil, fmt.Errorf("hub: marshal refreshed oauth token for %s: %w", instanceID, mErr)
+		}
+		if _, pErr := s.cp.PutToken(tctx, &controlplanev1.PutTokenRequest{
+			ConnectorInstanceId: instanceID,
+			Token:               blob,
+		}); pErr != nil {
+			return nil, fmt.Errorf("hub: store refreshed oauth token for %s: %w", instanceID, pErr)
+		}
+	}
+
+	return []byte(newTok.AccessToken), nil
 }
 
 // mergeWebhookURL merges the hub-owned webhook_url key into the instance

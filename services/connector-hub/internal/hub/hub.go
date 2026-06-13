@@ -17,8 +17,10 @@ import (
 
 	"github.com/asker/asker/connectors/sdk"
 	"github.com/asker/asker/platform/kafkautil"
+	"github.com/asker/asker/platform/oauth"
 	controlplanev1 "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1"
 	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
+	"github.com/asker/asker/platform/safehttp"
 	"github.com/asker/asker/platform/telemetry"
 	"github.com/asker/asker/platform/tenancy"
 	"github.com/asker/asker/platform/tenancy/tenancygrpc"
@@ -65,6 +67,18 @@ type Deps struct {
 	// nil the media routes return 503 (the rest of the hub is unaffected), so
 	// a hub wired without a blob store still serves webhooks/upload/status.
 	MediaBlobs MediaBlobStore
+}
+
+// anyProviderConfigured reports whether at least one OAuth provider has client
+// credentials, so the hub only builds a refresher (and reaches out to provider
+// token endpoints) when OAuth is actually in use.
+func anyProviderConfigured(cfg oauth.Config) bool {
+	for _, p := range oauth.Providers() {
+		if cfg.IsConfigured(p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d Deps) validate() error {
@@ -143,6 +157,24 @@ func Run(ctx context.Context, cfg Config, deps Deps, logger *slog.Logger) error 
 	cp := controlplanev1.NewControlPlaneServiceClient(cpConn)
 	schedClient := controlplanev1.NewSchedulerServiceClient(schedConn)
 
+	// OAuth refresher: built once at startup from the operator-supplied
+	// ASKER_OAUTH_<P>_* env (same providers as the gateway). When no provider
+	// is configured (dev without OAuth, or only manual/legacy tokens), it is
+	// left nil and the scheduler passes manual tokens through unchanged.
+	//
+	// The HTTP client is the SSRF-hardened safehttp client (provider token
+	// endpoints are external). Dev/CI must set ASKER_SAFEHTTP_ALLOW_PRIVATE=1
+	// so the fake OAuth provider on 127.0.0.1 is reachable — the SAME dev caveat
+	// the gateway carries; the INTEGRATOR sets it in compose.
+	oauthCfg := oauth.LoadConfig()
+	var refresher tokenRefresher
+	if anyProviderConfigured(oauthCfg) {
+		refresher = oauth.New(oauthCfg, safehttp.NewClientOrDefault())
+		logger.Info("oauth token refresh enabled")
+	} else {
+		logger.Info("no oauth provider configured; stored OAuth tokens will not be refreshed (manual tokens unaffected)")
+	}
+
 	em := newEmitter(producer, kafkautil.TopicDocsRaw, time.Now)
 	sch := newScheduler(schedulerOpts{
 		cp:                    cp,
@@ -150,6 +182,7 @@ func Run(ctx context.Context, cfg Config, deps Deps, logger *slog.Logger) error 
 		registry:              deps.Registry,
 		emit:                  em,
 		logger:                logger,
+		oauth:                 refresher,
 		webhookBase:           cfg.WebhookBase,
 		syncInterval:          cfg.SyncInterval,
 		tick:                  cfg.SchedulerTick,

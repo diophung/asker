@@ -328,6 +328,26 @@ export class ConnectorClient {
     );
   }
 
+  /**
+   * Begin the OAuth "Connect with <provider>" flow for an instance. Makes an
+   * AUTHED GET /v1/connectors/{id}/oauth/start (the gateway derives the tenant
+   * from the bearer and stores the server-side state keyed by an unguessable
+   * `state`) and returns the provider authorize URL the browser must navigate
+   * to. Throws ApiError if the connector is not OAuth / not configured.
+   */
+  async startOAuth(id: string, signal?: AbortSignal): Promise<string> {
+    const res = await this.request(
+      `/v1/connectors/${encodeURIComponent(id)}/oauth/start`,
+      { method: "GET" },
+      signal,
+    );
+    const body = (await res.json()) as { authorize_url?: unknown };
+    if (typeof body.authorize_url !== "string" || body.authorize_url === "") {
+      throw new ApiError(res.status, "oauth start: missing authorize_url");
+    }
+    return body.authorize_url;
+  }
+
   /** Store (or replace) the auth token for a connector instance. */
   async putConnectorToken(
     id: string,

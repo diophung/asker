@@ -12,6 +12,30 @@ import { InstanceList } from "./InstanceList";
 const POLL_INTERVAL_MS = 15000;
 
 type LoadStatus = "loading" | "ready" | "error";
+type OAuthResult = "connected" | "error" | null;
+
+/**
+ * Read the `oauth` result from the URL (the gateway callback redirects the
+ * browser to /connectors?oauth=connected|error), then strip it so a reload or
+ * back/forward doesn't re-show the banner. Returns null when absent/unknown.
+ */
+function consumeOAuthResult(): OAuthResult {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const value = params.get("oauth");
+  if (value !== "connected" && value !== "error") {
+    return null;
+  }
+  params.delete("oauth");
+  const query = params.toString();
+  const url =
+    window.location.pathname + (query === "" ? "" : `?${query}`) +
+    window.location.hash;
+  window.history.replaceState(null, "", url);
+  return value;
+}
 
 /**
  * Connectors management view: a catalog of connectable source types, a Connect
@@ -24,6 +48,14 @@ export function ConnectorsPage({ client }: { client: ConnectorClient }) {
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [selected, setSelected] = useState<ConnectorType | null>(null);
+  // Banner for the result of a provider OAuth round-trip (?oauth=…).
+  const [oauthResult, setOAuthResult] = useState<OAuthResult>(null);
+
+  // The provider redirect lands us back here with ?oauth=…; read it once on
+  // mount and clear the param so it doesn't survive a reload.
+  useEffect(() => {
+    setOAuthResult(consumeOAuthResult());
+  }, []);
 
   // Stable so the polling effect doesn't re-subscribe on every render.
   const refresh = useCallback(
@@ -53,18 +85,20 @@ export function ConnectorsPage({ client }: { client: ConnectorClient }) {
     };
   }, [refresh]);
 
+  // Create the instance and, for the dev paste-a-token path, store the token.
+  // Returns the new instance id so the form can drive the OAuth sign-in step.
   async function handleConnect(
     type: ConnectorType,
     displayName: string,
     config: Record<string, unknown>,
     token: string,
-  ): Promise<void> {
+  ): Promise<string> {
     const created = await client.createConnector(type.id, displayName, config);
     if (type.needsToken && token !== "") {
       await client.putConnectorToken(created.id, token);
     }
-    setSelected(null);
     await refresh();
+    return created.id;
   }
 
   async function handleDelete(id: string): Promise<void> {
@@ -81,6 +115,33 @@ export function ConnectorsPage({ client }: { client: ConnectorClient }) {
 
   return (
     <div className="connectors-page">
+      {oauthResult === "connected" && (
+        <div className="oauth-banner oauth-banner-success" role="status">
+          <p className="state-detail">Account connected. Syncing will begin shortly.</p>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setOAuthResult(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {oauthResult === "error" && (
+        <div className="oauth-banner oauth-banner-error" role="alert">
+          <p className="state-detail">
+            Could not connect the account. Please try again.
+          </p>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setOAuthResult(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <section className="connectors-catalog" aria-label="Available connectors">
         <h2 className="section-title">Add a source</h2>
         {catalogByCategory().map((group) => (
@@ -109,6 +170,8 @@ export function ConnectorsPage({ client }: { client: ConnectorClient }) {
           onSubmit={(displayName, config, token) =>
             handleConnect(selected, displayName, config, token)
           }
+          onStartOAuth={(id) => client.startOAuth(id)}
+          onDone={() => setSelected(null)}
           onCancel={() => setSelected(null)}
         />
       )}

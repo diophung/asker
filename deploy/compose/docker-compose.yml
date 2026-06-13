@@ -3,6 +3,36 @@
 # then vespa/deploy.sh pushes the Vespa application package).
 name: asker
 
+# Connector OAuth (dev): point every provider's authorize/token endpoints at the
+# fake-oauth service (auto-consents, issues dev tokens). Real deployments set
+# ASKER_OAUTH_<P>_CLIENT_ID/_SECRET to a registered app and DROP the *_URL
+# overrides so the real provider endpoints are used (see docs/oauth.md). Shared by
+# the gateway (code exchange) and connector-hub (token refresh).
+# ASKER_SAFEHTTP_ALLOW_PRIVATE relaxes the SSRF guard so the in-network fake-oauth
+# host is reachable — DEV/CI ONLY, never production (the metadata IP stays blocked).
+# AUTH_URL is BROWSER-facing (the user's host browser is redirected there), so it
+# uses the host-published address localhost:9500; TOKEN_URL is GATEWAY/HUB-facing
+# (server-side code exchange + refresh), so it uses the in-network fake-oauth:9500.
+# Same split as OIDC_ISSUER (localhost:8081) vs OIDC_JWKS_URL (keycloak:8080).
+x-oauth-env: &oauth-env
+  ASKER_SAFEHTTP_ALLOW_PRIVATE: "1" # dev-only: reach the in-network fake-oauth
+  ASKER_OAUTH_GOOGLE_CLIENT_ID: "dev-google-client" # dev-only throwaway
+  ASKER_OAUTH_GOOGLE_CLIENT_SECRET: "dev-google-secret" # dev-only
+  ASKER_OAUTH_GOOGLE_AUTH_URL: "http://localhost:9500/google/authorize"
+  ASKER_OAUTH_GOOGLE_TOKEN_URL: "http://fake-oauth:9500/google/token"
+  ASKER_OAUTH_MICROSOFT_CLIENT_ID: "dev-microsoft-client" # dev-only
+  ASKER_OAUTH_MICROSOFT_CLIENT_SECRET: "dev-microsoft-secret" # dev-only
+  ASKER_OAUTH_MICROSOFT_AUTH_URL: "http://localhost:9500/microsoft/authorize"
+  ASKER_OAUTH_MICROSOFT_TOKEN_URL: "http://fake-oauth:9500/microsoft/token"
+  ASKER_OAUTH_SLACK_CLIENT_ID: "dev-slack-client" # dev-only
+  ASKER_OAUTH_SLACK_CLIENT_SECRET: "dev-slack-secret" # dev-only
+  ASKER_OAUTH_SLACK_AUTH_URL: "http://localhost:9500/slack/authorize"
+  ASKER_OAUTH_SLACK_TOKEN_URL: "http://fake-oauth:9500/slack/token"
+  ASKER_OAUTH_ATLASSIAN_CLIENT_ID: "dev-atlassian-client" # dev-only
+  ASKER_OAUTH_ATLASSIAN_CLIENT_SECRET: "dev-atlassian-secret" # dev-only
+  ASKER_OAUTH_ATLASSIAN_AUTH_URL: "http://localhost:9500/atlassian/authorize"
+  ASKER_OAUTH_ATLASSIAN_TOKEN_URL: "http://fake-oauth:9500/atlassian/token"
+
 services:
   gateway:
     build:
@@ -11,6 +41,11 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     environment:
+      <<: *oauth-env
+      # Public base used to build the OAuth redirect_uri (<base>/v1/oauth/callback)
+      # and the post-callback redirect back to the web UI.
+      GATEWAY_PUBLIC_URL: "http://localhost:8080"
+      WEB_APP_URL: "http://localhost:13001"
       GATEWAY_ADDR: ":8080"
       OIDC_ISSUER: "http://localhost:8081/realms/asker"
       # Token `iss` is the host-visible URL (KC_HOSTNAME), but the gateway fetches
@@ -66,6 +101,7 @@ services:
       context: ../..
       dockerfile: services/connector-hub/Dockerfile
     environment:
+      <<: *oauth-env
       HUB_ADDR: ":9300"
       HUB_HEALTH_ADDR: ":9301"
       HUB_WEBHOOK_BASE: "http://connector-hub:9300"
@@ -247,6 +283,28 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  fake-oauth:
+    # Dev/CI only: a standards-correct fake OAuth 2.0 authorization server that the
+    # gateway (code exchange) and connector-hub (refresh) point every provider at.
+    # It AUTO-CONSENTS — any caller gets a token for the configured subject — so it
+    # is bound to 127.0.0.1 / the compose network ONLY; NEVER expose it. For Google
+    # it issues "fake-gmail-token:<subject>" so the post-OAuth gmail sync reaches the
+    # fake-gmail service end to end.
+    build:
+      context: ../..
+      dockerfile: tools/fake-oauth/Dockerfile
+    ports:
+      - "127.0.0.1:9500:9500"
+    environment:
+      ADDR: ":9500"
+      FAKE_OAUTH_SUBJECT: "alice@example.com" # dev default identity
+    healthcheck:
+      test: ["CMD", "/fake-oauth", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   web:
     build:

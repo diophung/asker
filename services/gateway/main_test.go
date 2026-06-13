@@ -388,6 +388,8 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_ORIGINS", "http://a.test,http://b.test")
 	t.Setenv("MAX_UPLOAD_MB", "7")
 	t.Setenv("MAX_MEDIA_MB", "9")
+	t.Setenv("GATEWAY_PUBLIC_URL", "https://gw.test")
+	t.Setenv("WEB_APP_URL", "https://web.test")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -412,6 +414,8 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		CORSAllowedOrigins:    "http://a.test,http://b.test",
 		MaxUploadMB:           7,
 		MaxMediaMB:            9,
+		GatewayPublicURL:      "https://gw.test",
+		WebAppURL:             "https://web.test",
 	}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
@@ -446,6 +450,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.MaxMediaMB != 25 {
 		t.Errorf("MaxMediaMB default = %d", cfg.MaxMediaMB)
+	}
+	if cfg.GatewayPublicURL != "http://localhost:8080" {
+		t.Errorf("GatewayPublicURL default = %q", cfg.GatewayPublicURL)
+	}
+	if cfg.WebAppURL != "http://localhost:13001" {
+		t.Errorf("WebAppURL default = %q", cfg.WebAppURL)
 	}
 }
 

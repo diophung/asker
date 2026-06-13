@@ -70,7 +70,17 @@ type fakeControlPlane struct {
 	states    map[string]*controlplanev1.SyncState
 	tokens    map[string][]byte
 	stateLog  []stateWrite
+	tokenLog  []tokenWrite
 	listCalls int
+}
+
+// tokenWrite records one PutToken: the caller tenant (from x-asker-tenant
+// metadata) and the stored bytes, so tests can assert the refreshed credential
+// was re-stored under the right tenant.
+type tokenWrite struct {
+	tenant string
+	id     string
+	token  []byte
 }
 
 func newFakeControlPlane() *fakeControlPlane {
@@ -247,6 +257,33 @@ func (f *fakeControlPlane) GetToken(ctx context.Context, req *controlplanev1.Get
 		return nil, status.Error(codes.NotFound, "not found")
 	}
 	return &controlplanev1.GetTokenResponse{Token: token}, nil
+}
+
+func (f *fakeControlPlane) PutToken(ctx context.Context, req *controlplanev1.PutTokenRequest) (*controlplanev1.PutTokenResponse, error) {
+	tenant, err := callerTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.ownedInstance(tenant, req.GetConnectorInstanceId()); !ok {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+	stored := append([]byte(nil), req.GetToken()...)
+	f.tokens[req.GetConnectorInstanceId()] = stored
+	f.tokenLog = append(f.tokenLog, tokenWrite{tenant: tenant, id: req.GetConnectorInstanceId(), token: append([]byte(nil), stored...)})
+	return &controlplanev1.PutTokenResponse{}, nil
+}
+
+// tokenWrites returns a copy of the PutToken log.
+func (f *fakeControlPlane) tokenWrites() []tokenWrite {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]tokenWrite, len(f.tokenLog))
+	for i, w := range f.tokenLog {
+		out[i] = tokenWrite{tenant: w.tenant, id: w.id, token: append([]byte(nil), w.token...)}
+	}
+	return out
 }
 
 // startFakeControlPlane serves f on 127.0.0.1:0 and returns the production-

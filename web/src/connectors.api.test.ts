@@ -97,6 +97,53 @@ describe("ConnectorClient.putConnectorToken", () => {
   });
 });
 
+describe("ConnectorClient.startOAuth", () => {
+  it("GETs the authed oauth/start endpoint and returns authorize_url", async () => {
+    const { fetchFn, calls } = recorder(() =>
+      jsonResponse({ authorize_url: "https://accounts.example/authorize?s=abc" }),
+    );
+    const client = new ConnectorClient({
+      baseUrl: "http://gw:8080",
+      getToken: token,
+      fetchFn,
+    });
+
+    const url = await client.startOAuth("inst/1");
+
+    expect(calls[0].url).toBe(
+      "http://gw:8080/v1/connectors/inst%2F1/oauth/start",
+    );
+    expect(calls[0].method).toBe("GET");
+    expect(calls[0].auth).toBe("Bearer test-token");
+    // No request body — the tenant comes from the bearer, never a param/body.
+    expect(calls[0].body).toBeUndefined();
+    expect(url).toBe("https://accounts.example/authorize?s=abc");
+  });
+
+  it("throws when the gateway omits authorize_url", async () => {
+    const client = new ConnectorClient({
+      baseUrl: "http://gw:8080",
+      getToken: token,
+      fetchFn: async () => jsonResponse({}),
+    });
+    const err = await client.startOAuth("inst-1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+
+  it("surfaces a gateway error (e.g. not an OAuth connector)", async () => {
+    const client = new ConnectorClient({
+      baseUrl: "http://gw:8080",
+      getToken: token,
+      fetchFn: async () =>
+        jsonResponse({ error: "connector is not OAuth" }, 400),
+    });
+    const err = await client.startOAuth("inst-1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(400);
+    expect((err as ApiError).message).toBe("connector is not OAuth");
+  });
+});
+
 describe("ConnectorClient.deleteConnector", () => {
   it("DELETEs the instance by id", async () => {
     const { fetchFn, calls } = recorder(() => new Response(null, { status: 204 }));

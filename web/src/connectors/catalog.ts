@@ -16,6 +16,9 @@ export interface ConnectorField {
   required?: boolean;
 }
 
+/** OAuth provider that backs an OAuth connector (matches platform/oauth). */
+export type OAuthProvider = "google" | "microsoft" | "slack" | "atlassian";
+
 /** A connector type that can be instantiated from the catalog. */
 export interface ConnectorType {
   /** Registry id sent as connector_id. */
@@ -27,9 +30,30 @@ export interface ConnectorType {
   /**
    * True when the connector authenticates with an AuthToken/OAuth2 credential.
    * For dev, the form shows a "paste a token" field that is stored via
-   * putConnectorToken after the instance is created.
+   * putConnectorToken after the instance is created. For OAuth connectors this
+   * stays true so the manual-token paste remains available as a dev fallback.
    */
   needsToken: boolean;
+  /**
+   * Set for connectors that support the real "Connect with <provider>" OAuth
+   * flow. When present, the Connect form offers a provider sign-in button
+   * (GET /v1/connectors/{id}/oauth/start -> authorize_url -> browser redirect)
+   * in addition to the dev paste-a-token fallback (needsToken).
+   */
+  oauthProvider?: OAuthProvider;
+}
+
+/** Human label for an OAuth provider, used on the "Connect with …" button. */
+const OAUTH_PROVIDER_LABEL: Record<OAuthProvider, string> = {
+  google: "Google",
+  microsoft: "Microsoft",
+  slack: "Slack",
+  atlassian: "Atlassian",
+};
+
+/** Display label for an OAuth provider (e.g. "Connect with Google"). */
+export function oauthProviderLabel(provider: OAuthProvider): string {
+  return OAUTH_PROVIDER_LABEL[provider];
 }
 
 const baseUrl = (placeholder: string): ConnectorField => ({
@@ -49,6 +73,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Gmail",
     category: "Email",
     needsToken: true,
+    oauthProvider: "google",
     fields: [
       {
         key: "user_email",
@@ -64,6 +89,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Outlook Mail",
     category: "Email",
     needsToken: true,
+    oauthProvider: "microsoft",
     fields: [
       {
         key: "user_principal_name",
@@ -79,6 +105,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Google Drive",
     category: "Files",
     needsToken: true,
+    oauthProvider: "google",
     fields: [baseUrl("https://www.googleapis.com")],
   },
   {
@@ -116,6 +143,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Google Calendar",
     category: "Calendar",
     needsToken: true,
+    oauthProvider: "google",
     fields: [
       {
         key: "calendar_id",
@@ -130,6 +158,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Outlook Calendar",
     category: "Calendar",
     needsToken: true,
+    oauthProvider: "microsoft",
     fields: [
       {
         key: "user_principal_name",
@@ -159,6 +188,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Slack",
     category: "Chat",
     needsToken: true,
+    oauthProvider: "slack",
     fields: [baseUrl("https://slack.com/api")],
   },
   {
@@ -173,6 +203,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Confluence",
     category: "Knowledge",
     needsToken: true,
+    oauthProvider: "atlassian",
     fields: [
       {
         key: "base_url",
@@ -188,6 +219,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorType> = [
     displayName: "Jira",
     category: "Knowledge",
     needsToken: true,
+    oauthProvider: "atlassian",
     fields: [
       {
         key: "base_url",

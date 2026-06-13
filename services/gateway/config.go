@@ -43,6 +43,17 @@ type gatewayConfig struct {
 	// Cap on the bytes streamed back from the hub for GET /v1/media — these
 	// are thumbnails/keyframes, so the default is small.
 	MaxMediaMB int64 `env:"MAX_MEDIA_MB" envDefault:"25"`
+
+	// GatewayPublicURL is the externally reachable base URL of the gateway. It
+	// builds the OAuth redirect_uri (<base>/v1/oauth/callback) that the provider
+	// redirects the browser back to, so it MUST match what the OAuth client is
+	// registered with at the provider. No trailing slash.
+	GatewayPublicURL string `env:"GATEWAY_PUBLIC_URL" envDefault:"http://localhost:8080"`
+	// WebAppURL is the FIXED, configured front-end base the OAuth callback
+	// redirects the browser to after the flow (…/connectors?oauth=connected|error).
+	// It is never derived from request input, so the callback cannot be turned
+	// into an open redirect.
+	WebAppURL string `env:"WEB_APP_URL" envDefault:"http://localhost:13001"`
 }
 
 func loadConfig() (gatewayConfig, error) {
