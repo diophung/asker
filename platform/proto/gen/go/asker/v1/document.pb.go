@@ -115,6 +115,7 @@ type Document struct {
 	Original       *BlobRef               `protobuf:"bytes,13,opt,name=original,proto3" json:"original,omitempty"`                                                                          // pointer into the blob store
 	VersionEtag    string                 `protobuf:"bytes,14,opt,name=version_etag,json=versionEtag,proto3" json:"version_etag,omitempty"`                                                 // for idempotent upserts
 	Tombstone      *Tombstone             `protobuf:"bytes,15,opt,name=tombstone,proto3" json:"tombstone,omitempty"`                                                                        // deletions propagate as documents too
+	Media          *MediaInfo             `protobuf:"bytes,16,opt,name=media,proto3" json:"media,omitempty"`                                                                                // image/audio/video metadata (M3); unset for text docs
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -254,6 +255,161 @@ func (x *Document) GetTombstone() *Tombstone {
 	return nil
 }
 
+func (x *Document) GetMedia() *MediaInfo {
+	if x != nil {
+		return x.Media
+	}
+	return nil
+}
+
+// MediaInfo carries metadata produced by the media enrich pipeline (M3) for
+// IMAGE/AUDIO/VIDEO documents. Unset for text documents.
+type MediaInfo struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	DurationMs     int64                  `protobuf:"varint,1,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`            // audio/video length in milliseconds
+	Width          int32                  `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`                                        // image/video pixel width
+	Height         int32                  `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`                                      // image/video pixel height
+	Thumbnail      *BlobRef               `protobuf:"bytes,4,opt,name=thumbnail,proto3" json:"thumbnail,omitempty"`                                 // generated thumbnail / poster frame in the blob store
+	Keyframes      []*Keyframe            `protobuf:"bytes,5,rep,name=keyframes,proto3" json:"keyframes,omitempty"`                                 // video scene keyframes (CLIP-embedded), empty otherwise
+	TranscriptLang string                 `protobuf:"bytes,6,opt,name=transcript_lang,json=transcriptLang,proto3" json:"transcript_lang,omitempty"` // detected ASR language (BCP-47), e.g. "en"
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *MediaInfo) Reset() {
+	*x = MediaInfo{}
+	mi := &file_asker_v1_document_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaInfo) ProtoMessage() {}
+
+func (x *MediaInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_v1_document_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaInfo.ProtoReflect.Descriptor instead.
+func (*MediaInfo) Descriptor() ([]byte, []int) {
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *MediaInfo) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *MediaInfo) GetWidth() int32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *MediaInfo) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *MediaInfo) GetThumbnail() *BlobRef {
+	if x != nil {
+		return x.Thumbnail
+	}
+	return nil
+}
+
+func (x *MediaInfo) GetKeyframes() []*Keyframe {
+	if x != nil {
+		return x.Keyframes
+	}
+	return nil
+}
+
+func (x *MediaInfo) GetTranscriptLang() string {
+	if x != nil {
+		return x.TranscriptLang
+	}
+	return ""
+}
+
+// Keyframe is one extracted video frame anchored at a time offset, with a
+// thumbnail in the blob store. Its CLIP embedding rides on the matching Chunk.
+type Keyframe struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TsMs          int64                  `protobuf:"varint,1,opt,name=ts_ms,json=tsMs,proto3" json:"ts_ms,omitempty"`         // offset of the frame within the video, milliseconds
+	Image         *BlobRef               `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`                    // the extracted frame in the blob store
+	ChunkId       string                 `protobuf:"bytes,3,opt,name=chunk_id,json=chunkId,proto3" json:"chunk_id,omitempty"` // the Chunk (CLIP embedding + any OCR text) for this frame
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Keyframe) Reset() {
+	*x = Keyframe{}
+	mi := &file_asker_v1_document_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Keyframe) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Keyframe) ProtoMessage() {}
+
+func (x *Keyframe) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_v1_document_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Keyframe.ProtoReflect.Descriptor instead.
+func (*Keyframe) Descriptor() ([]byte, []int) {
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Keyframe) GetTsMs() int64 {
+	if x != nil {
+		return x.TsMs
+	}
+	return 0
+}
+
+func (x *Keyframe) GetImage() *BlobRef {
+	if x != nil {
+		return x.Image
+	}
+	return nil
+}
+
+func (x *Keyframe) GetChunkId() string {
+	if x != nil {
+		return x.ChunkId
+	}
+	return ""
+}
+
 // Chunk is one retrieval unit cut from body_text.
 type Chunk struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
@@ -265,14 +421,23 @@ type Chunk struct {
 	// Embedding vector, filled by the enrich worker on docs.enriched only
 	// (empty on docs.raw / docs.chunked). Length must equal EMBEDDING_DIM
 	// (ADR-005); the index writer rejects mismatches.
-	Embedding     []float32 `protobuf:"fixed32,6,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
+	Embedding []float32 `protobuf:"fixed32,6,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
+	// Media time anchoring (M3): for AUDIO/VIDEO transcript chunks, the start/end
+	// of this segment within the media, in milliseconds, so a search hit can
+	// deep-link to the moment. Zero/zero for non-media (text) chunks.
+	StartMs int64 `protobuf:"varint,7,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs   int64 `protobuf:"varint,8,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	// Modality of this chunk's text (M3): "text" (default/empty), "ocr" (text
+	// extracted from an image), "asr" (speech transcript), "caption" (generated
+	// image caption). Lets the query path label and rank media hits.
+	Modality      string `protobuf:"bytes,9,opt,name=modality,proto3" json:"modality,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Chunk) Reset() {
 	*x = Chunk{}
-	mi := &file_asker_v1_document_proto_msgTypes[1]
+	mi := &file_asker_v1_document_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -284,7 +449,7 @@ func (x *Chunk) String() string {
 func (*Chunk) ProtoMessage() {}
 
 func (x *Chunk) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_v1_document_proto_msgTypes[1]
+	mi := &file_asker_v1_document_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -297,7 +462,7 @@ func (x *Chunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Chunk.ProtoReflect.Descriptor instead.
 func (*Chunk) Descriptor() ([]byte, []int) {
-	return file_asker_v1_document_proto_rawDescGZIP(), []int{1}
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Chunk) GetChunkId() string {
@@ -342,6 +507,27 @@ func (x *Chunk) GetEmbedding() []float32 {
 	return nil
 }
 
+func (x *Chunk) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *Chunk) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
+func (x *Chunk) GetModality() string {
+	if x != nil {
+		return x.Modality
+	}
+	return ""
+}
+
 // Participant is a person attached to the document (sender, attendee, ...).
 type Participant struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -355,7 +541,7 @@ type Participant struct {
 
 func (x *Participant) Reset() {
 	*x = Participant{}
-	mi := &file_asker_v1_document_proto_msgTypes[2]
+	mi := &file_asker_v1_document_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -367,7 +553,7 @@ func (x *Participant) String() string {
 func (*Participant) ProtoMessage() {}
 
 func (x *Participant) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_v1_document_proto_msgTypes[2]
+	mi := &file_asker_v1_document_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -380,7 +566,7 @@ func (x *Participant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Participant.ProtoReflect.Descriptor instead.
 func (*Participant) Descriptor() ([]byte, []int) {
-	return file_asker_v1_document_proto_rawDescGZIP(), []int{2}
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Participant) GetName() string {
@@ -423,7 +609,7 @@ type Timestamps struct {
 
 func (x *Timestamps) Reset() {
 	*x = Timestamps{}
-	mi := &file_asker_v1_document_proto_msgTypes[3]
+	mi := &file_asker_v1_document_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -435,7 +621,7 @@ func (x *Timestamps) String() string {
 func (*Timestamps) ProtoMessage() {}
 
 func (x *Timestamps) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_v1_document_proto_msgTypes[3]
+	mi := &file_asker_v1_document_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -448,7 +634,7 @@ func (x *Timestamps) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Timestamps.ProtoReflect.Descriptor instead.
 func (*Timestamps) Descriptor() ([]byte, []int) {
-	return file_asker_v1_document_proto_rawDescGZIP(), []int{3}
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Timestamps) GetCreated() *timestamppb.Timestamp {
@@ -483,7 +669,7 @@ type AclInfo struct {
 
 func (x *AclInfo) Reset() {
 	*x = AclInfo{}
-	mi := &file_asker_v1_document_proto_msgTypes[4]
+	mi := &file_asker_v1_document_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -495,7 +681,7 @@ func (x *AclInfo) String() string {
 func (*AclInfo) ProtoMessage() {}
 
 func (x *AclInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_v1_document_proto_msgTypes[4]
+	mi := &file_asker_v1_document_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -508,7 +694,7 @@ func (x *AclInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AclInfo.ProtoReflect.Descriptor instead.
 func (*AclInfo) Descriptor() ([]byte, []int) {
-	return file_asker_v1_document_proto_rawDescGZIP(), []int{4}
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AclInfo) GetAllowedPrincipals() []string {
@@ -539,7 +725,7 @@ type BlobRef struct {
 
 func (x *BlobRef) Reset() {
 	*x = BlobRef{}
-	mi := &file_asker_v1_document_proto_msgTypes[5]
+	mi := &file_asker_v1_document_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -551,7 +737,7 @@ func (x *BlobRef) String() string {
 func (*BlobRef) ProtoMessage() {}
 
 func (x *BlobRef) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_v1_document_proto_msgTypes[5]
+	mi := &file_asker_v1_document_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,7 +750,7 @@ func (x *BlobRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BlobRef.ProtoReflect.Descriptor instead.
 func (*BlobRef) Descriptor() ([]byte, []int) {
-	return file_asker_v1_document_proto_rawDescGZIP(), []int{5}
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *BlobRef) GetBucket() string {
@@ -613,7 +799,7 @@ type Tombstone struct {
 
 func (x *Tombstone) Reset() {
 	*x = Tombstone{}
-	mi := &file_asker_v1_document_proto_msgTypes[6]
+	mi := &file_asker_v1_document_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -625,7 +811,7 @@ func (x *Tombstone) String() string {
 func (*Tombstone) ProtoMessage() {}
 
 func (x *Tombstone) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_v1_document_proto_msgTypes[6]
+	mi := &file_asker_v1_document_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -638,7 +824,7 @@ func (x *Tombstone) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tombstone.ProtoReflect.Descriptor instead.
 func (*Tombstone) Descriptor() ([]byte, []int) {
-	return file_asker_v1_document_proto_rawDescGZIP(), []int{6}
+	return file_asker_v1_document_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Tombstone) GetDeleted() bool {
@@ -659,7 +845,7 @@ var File_asker_v1_document_proto protoreflect.FileDescriptor
 
 const file_asker_v1_document_proto_rawDesc = "" +
 	"\n" +
-	"\x17asker/v1/document.proto\x12\basker.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x94\x05\n" +
+	"\x17asker/v1/document.proto\x12\basker.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbf\x05\n" +
 	"\bDocument\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06doc_id\x18\x02 \x01(\tR\x05docId\x12!\n" +
@@ -676,10 +862,23 @@ const file_asker_v1_document_proto_rawDesc = "" +
 	"\x03acl\x18\f \x01(\v2\x11.asker.v1.AclInfoR\x03acl\x12-\n" +
 	"\boriginal\x18\r \x01(\v2\x11.asker.v1.BlobRefR\boriginal\x12!\n" +
 	"\fversion_etag\x18\x0e \x01(\tR\vversionEtag\x121\n" +
-	"\ttombstone\x18\x0f \x01(\v2\x13.asker.v1.TombstoneR\ttombstone\x1a;\n" +
+	"\ttombstone\x18\x0f \x01(\v2\x13.asker.v1.TombstoneR\ttombstone\x12)\n" +
+	"\x05media\x18\x10 \x01(\v2\x13.asker.v1.MediaInfoR\x05media\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb3\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe6\x01\n" +
+	"\tMediaInfo\x12\x1f\n" +
+	"\vduration_ms\x18\x01 \x01(\x03R\n" +
+	"durationMs\x12\x14\n" +
+	"\x05width\x18\x02 \x01(\x05R\x05width\x12\x16\n" +
+	"\x06height\x18\x03 \x01(\x05R\x06height\x12/\n" +
+	"\tthumbnail\x18\x04 \x01(\v2\x11.asker.v1.BlobRefR\tthumbnail\x120\n" +
+	"\tkeyframes\x18\x05 \x03(\v2\x12.asker.v1.KeyframeR\tkeyframes\x12'\n" +
+	"\x0ftranscript_lang\x18\x06 \x01(\tR\x0etranscriptLang\"c\n" +
+	"\bKeyframe\x12\x13\n" +
+	"\x05ts_ms\x18\x01 \x01(\x03R\x04tsMs\x12'\n" +
+	"\x05image\x18\x02 \x01(\v2\x11.asker.v1.BlobRefR\x05image\x12\x19\n" +
+	"\bchunk_id\x18\x03 \x01(\tR\achunkId\"\x81\x02\n" +
 	"\x05Chunk\x12\x19\n" +
 	"\bchunk_id\x18\x01 \x01(\tR\achunkId\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12#\n" +
@@ -687,7 +886,10 @@ const file_asker_v1_document_proto_rawDesc = "" +
 	"\n" +
 	"char_start\x18\x04 \x01(\x03R\tcharStart\x12\x19\n" +
 	"\bchar_end\x18\x05 \x01(\x03R\acharEnd\x12\x1c\n" +
-	"\tembedding\x18\x06 \x03(\x02R\tembedding\"c\n" +
+	"\tembedding\x18\x06 \x03(\x02R\tembedding\x12\x19\n" +
+	"\bstart_ms\x18\a \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\b \x01(\x03R\x05endMs\x12\x1a\n" +
+	"\bmodality\x18\t \x01(\tR\bmodality\"c\n" +
 	"\vParticipant\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x16\n" +
@@ -739,37 +941,43 @@ func file_asker_v1_document_proto_rawDescGZIP() []byte {
 }
 
 var file_asker_v1_document_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_asker_v1_document_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_asker_v1_document_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_asker_v1_document_proto_goTypes = []any{
 	(DocType)(0),                  // 0: asker.v1.DocType
 	(*Document)(nil),              // 1: asker.v1.Document
-	(*Chunk)(nil),                 // 2: asker.v1.Chunk
-	(*Participant)(nil),           // 3: asker.v1.Participant
-	(*Timestamps)(nil),            // 4: asker.v1.Timestamps
-	(*AclInfo)(nil),               // 5: asker.v1.AclInfo
-	(*BlobRef)(nil),               // 6: asker.v1.BlobRef
-	(*Tombstone)(nil),             // 7: asker.v1.Tombstone
-	nil,                           // 8: asker.v1.Document.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	(*MediaInfo)(nil),             // 2: asker.v1.MediaInfo
+	(*Keyframe)(nil),              // 3: asker.v1.Keyframe
+	(*Chunk)(nil),                 // 4: asker.v1.Chunk
+	(*Participant)(nil),           // 5: asker.v1.Participant
+	(*Timestamps)(nil),            // 6: asker.v1.Timestamps
+	(*AclInfo)(nil),               // 7: asker.v1.AclInfo
+	(*BlobRef)(nil),               // 8: asker.v1.BlobRef
+	(*Tombstone)(nil),             // 9: asker.v1.Tombstone
+	nil,                           // 10: asker.v1.Document.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_asker_v1_document_proto_depIdxs = []int32{
 	0,  // 0: asker.v1.Document.type:type_name -> asker.v1.DocType
-	2,  // 1: asker.v1.Document.chunks:type_name -> asker.v1.Chunk
-	8,  // 2: asker.v1.Document.metadata:type_name -> asker.v1.Document.MetadataEntry
-	3,  // 3: asker.v1.Document.participants:type_name -> asker.v1.Participant
-	4,  // 4: asker.v1.Document.ts:type_name -> asker.v1.Timestamps
-	5,  // 5: asker.v1.Document.acl:type_name -> asker.v1.AclInfo
-	6,  // 6: asker.v1.Document.original:type_name -> asker.v1.BlobRef
-	7,  // 7: asker.v1.Document.tombstone:type_name -> asker.v1.Tombstone
-	9,  // 8: asker.v1.Timestamps.created:type_name -> google.protobuf.Timestamp
-	9,  // 9: asker.v1.Timestamps.modified:type_name -> google.protobuf.Timestamp
-	9,  // 10: asker.v1.Timestamps.ingested:type_name -> google.protobuf.Timestamp
-	9,  // 11: asker.v1.Tombstone.deleted_at:type_name -> google.protobuf.Timestamp
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	4,  // 1: asker.v1.Document.chunks:type_name -> asker.v1.Chunk
+	10, // 2: asker.v1.Document.metadata:type_name -> asker.v1.Document.MetadataEntry
+	5,  // 3: asker.v1.Document.participants:type_name -> asker.v1.Participant
+	6,  // 4: asker.v1.Document.ts:type_name -> asker.v1.Timestamps
+	7,  // 5: asker.v1.Document.acl:type_name -> asker.v1.AclInfo
+	8,  // 6: asker.v1.Document.original:type_name -> asker.v1.BlobRef
+	9,  // 7: asker.v1.Document.tombstone:type_name -> asker.v1.Tombstone
+	2,  // 8: asker.v1.Document.media:type_name -> asker.v1.MediaInfo
+	8,  // 9: asker.v1.MediaInfo.thumbnail:type_name -> asker.v1.BlobRef
+	3,  // 10: asker.v1.MediaInfo.keyframes:type_name -> asker.v1.Keyframe
+	8,  // 11: asker.v1.Keyframe.image:type_name -> asker.v1.BlobRef
+	11, // 12: asker.v1.Timestamps.created:type_name -> google.protobuf.Timestamp
+	11, // 13: asker.v1.Timestamps.modified:type_name -> google.protobuf.Timestamp
+	11, // 14: asker.v1.Timestamps.ingested:type_name -> google.protobuf.Timestamp
+	11, // 15: asker.v1.Tombstone.deleted_at:type_name -> google.protobuf.Timestamp
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_asker_v1_document_proto_init() }
@@ -783,7 +991,7 @@ func file_asker_v1_document_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_asker_v1_document_proto_rawDesc), len(file_asker_v1_document_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

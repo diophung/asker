@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x61sker/v1/document.proto\x12\x08\x61sker.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x94\x05\n\x08\x44ocument\x12\x1b\n\ttenant_id\x18\x01 \x01(\tR\x08tenantId\x12\x15\n\x06\x64oc_id\x18\x02 \x01(\tR\x05\x64ocId\x12!\n\x0c\x63onnector_id\x18\x03 \x01(\tR\x0b\x63onnectorId\x12(\n\x10source_native_id\x18\x04 \x01(\tR\x0esourceNativeId\x12%\n\x04type\x18\x05 \x01(\x0e\x32\x11.asker.v1.DocTypeR\x04type\x12\x14\n\x05title\x18\x06 \x01(\tR\x05title\x12\x1b\n\tbody_text\x18\x07 \x01(\tR\x08\x62odyText\x12\'\n\x06\x63hunks\x18\x08 \x03(\x0b\x32\x0f.asker.v1.ChunkR\x06\x63hunks\x12<\n\x08metadata\x18\t \x03(\x0b\x32 .asker.v1.Document.MetadataEntryR\x08metadata\x12\x39\n\x0cparticipants\x18\n \x03(\x0b\x32\x15.asker.v1.ParticipantR\x0cparticipants\x12$\n\x02ts\x18\x0b \x01(\x0b\x32\x14.asker.v1.TimestampsR\x02ts\x12#\n\x03\x61\x63l\x18\x0c \x01(\x0b\x32\x11.asker.v1.AclInfoR\x03\x61\x63l\x12-\n\x08original\x18\r \x01(\x0b\x32\x11.asker.v1.BlobRefR\x08original\x12!\n\x0cversion_etag\x18\x0e \x01(\tR\x0bversionEtag\x12\x31\n\ttombstone\x18\x0f \x01(\x0b\x32\x13.asker.v1.TombstoneR\ttombstone\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\xb3\x01\n\x05\x43hunk\x12\x19\n\x08\x63hunk_id\x18\x01 \x01(\tR\x07\x63hunkId\x12\x12\n\x04text\x18\x02 \x01(\tR\x04text\x12#\n\rembedding_ref\x18\x03 \x01(\tR\x0c\x65mbeddingRef\x12\x1d\n\nchar_start\x18\x04 \x01(\x03R\tcharStart\x12\x19\n\x08\x63har_end\x18\x05 \x01(\x03R\x07\x63harEnd\x12\x1c\n\tembedding\x18\x06 \x03(\x02R\tembedding\"c\n\x0bParticipant\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n\x05\x65mail\x18\x02 \x01(\tR\x05\x65mail\x12\x16\n\x06handle\x18\x03 \x01(\tR\x06handle\x12\x12\n\x04role\x18\x04 \x01(\tR\x04role\"\xb2\x01\n\nTimestamps\x12\x34\n\x07\x63reated\x18\x01 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x07\x63reated\x12\x36\n\x08modified\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08modified\x12\x36\n\x08ingested\x18\x03 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08ingested\"W\n\x07\x41\x63lInfo\x12-\n\x12\x61llowed_principals\x18\x01 \x03(\tR\x11\x61llowedPrincipals\x12\x1d\n\nis_private\x18\x02 \x01(\x08R\tisPrivate\"\x8d\x01\n\x07\x42lobRef\x12\x16\n\x06\x62ucket\x18\x01 \x01(\tR\x06\x62ucket\x12\x10\n\x03key\x18\x02 \x01(\tR\x03key\x12\x1d\n\nsize_bytes\x18\x03 \x01(\x03R\tsizeBytes\x12!\n\x0c\x63ontent_type\x18\x04 \x01(\tR\x0b\x63ontentType\x12\x16\n\x06sha256\x18\x05 \x01(\tR\x06sha256\"`\n\tTombstone\x12\x18\n\x07\x64\x65leted\x18\x01 \x01(\x08R\x07\x64\x65leted\x12\x39\n\ndeleted_at\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tdeletedAt*\x9a\x01\n\x07\x44ocType\x12\x18\n\x14\x44OC_TYPE_UNSPECIFIED\x10\x00\x12\t\n\x05\x45MAIL\x10\x01\x12\x10\n\x0c\x43HAT_MESSAGE\x10\x02\x12\x08\n\x04\x46ILE\x10\x03\x12\x12\n\x0e\x43\x41LENDAR_EVENT\x10\x04\x12\r\n\tWIKI_PAGE\x10\x05\x12\n\n\x06TICKET\x10\x06\x12\t\n\x05IMAGE\x10\x07\x12\t\n\x05VIDEO\x10\x08\x12\t\n\x05\x41UDIO\x10\tB?Z=github.com/asker/asker/platform/proto/gen/go/asker/v1;askerv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x61sker/v1/document.proto\x12\x08\x61sker.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbf\x05\n\x08\x44ocument\x12\x1b\n\ttenant_id\x18\x01 \x01(\tR\x08tenantId\x12\x15\n\x06\x64oc_id\x18\x02 \x01(\tR\x05\x64ocId\x12!\n\x0c\x63onnector_id\x18\x03 \x01(\tR\x0b\x63onnectorId\x12(\n\x10source_native_id\x18\x04 \x01(\tR\x0esourceNativeId\x12%\n\x04type\x18\x05 \x01(\x0e\x32\x11.asker.v1.DocTypeR\x04type\x12\x14\n\x05title\x18\x06 \x01(\tR\x05title\x12\x1b\n\tbody_text\x18\x07 \x01(\tR\x08\x62odyText\x12\'\n\x06\x63hunks\x18\x08 \x03(\x0b\x32\x0f.asker.v1.ChunkR\x06\x63hunks\x12<\n\x08metadata\x18\t \x03(\x0b\x32 .asker.v1.Document.MetadataEntryR\x08metadata\x12\x39\n\x0cparticipants\x18\n \x03(\x0b\x32\x15.asker.v1.ParticipantR\x0cparticipants\x12$\n\x02ts\x18\x0b \x01(\x0b\x32\x14.asker.v1.TimestampsR\x02ts\x12#\n\x03\x61\x63l\x18\x0c \x01(\x0b\x32\x11.asker.v1.AclInfoR\x03\x61\x63l\x12-\n\x08original\x18\r \x01(\x0b\x32\x11.asker.v1.BlobRefR\x08original\x12!\n\x0cversion_etag\x18\x0e \x01(\tR\x0bversionEtag\x12\x31\n\ttombstone\x18\x0f \x01(\x0b\x32\x13.asker.v1.TombstoneR\ttombstone\x12)\n\x05media\x18\x10 \x01(\x0b\x32\x13.asker.v1.MediaInfoR\x05media\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\xe6\x01\n\tMediaInfo\x12\x1f\n\x0b\x64uration_ms\x18\x01 \x01(\x03R\ndurationMs\x12\x14\n\x05width\x18\x02 \x01(\x05R\x05width\x12\x16\n\x06height\x18\x03 \x01(\x05R\x06height\x12/\n\tthumbnail\x18\x04 \x01(\x0b\x32\x11.asker.v1.BlobRefR\tthumbnail\x12\x30\n\tkeyframes\x18\x05 \x03(\x0b\x32\x12.asker.v1.KeyframeR\tkeyframes\x12\'\n\x0ftranscript_lang\x18\x06 \x01(\tR\x0etranscriptLang\"c\n\x08Keyframe\x12\x13\n\x05ts_ms\x18\x01 \x01(\x03R\x04tsMs\x12\'\n\x05image\x18\x02 \x01(\x0b\x32\x11.asker.v1.BlobRefR\x05image\x12\x19\n\x08\x63hunk_id\x18\x03 \x01(\tR\x07\x63hunkId\"\x81\x02\n\x05\x43hunk\x12\x19\n\x08\x63hunk_id\x18\x01 \x01(\tR\x07\x63hunkId\x12\x12\n\x04text\x18\x02 \x01(\tR\x04text\x12#\n\rembedding_ref\x18\x03 \x01(\tR\x0c\x65mbeddingRef\x12\x1d\n\nchar_start\x18\x04 \x01(\x03R\tcharStart\x12\x19\n\x08\x63har_end\x18\x05 \x01(\x03R\x07\x63harEnd\x12\x1c\n\tembedding\x18\x06 \x03(\x02R\tembedding\x12\x19\n\x08start_ms\x18\x07 \x01(\x03R\x07startMs\x12\x15\n\x06\x65nd_ms\x18\x08 \x01(\x03R\x05\x65ndMs\x12\x1a\n\x08modality\x18\t \x01(\tR\x08modality\"c\n\x0bParticipant\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n\x05\x65mail\x18\x02 \x01(\tR\x05\x65mail\x12\x16\n\x06handle\x18\x03 \x01(\tR\x06handle\x12\x12\n\x04role\x18\x04 \x01(\tR\x04role\"\xb2\x01\n\nTimestamps\x12\x34\n\x07\x63reated\x18\x01 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x07\x63reated\x12\x36\n\x08modified\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08modified\x12\x36\n\x08ingested\x18\x03 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08ingested\"W\n\x07\x41\x63lInfo\x12-\n\x12\x61llowed_principals\x18\x01 \x03(\tR\x11\x61llowedPrincipals\x12\x1d\n\nis_private\x18\x02 \x01(\x08R\tisPrivate\"\x8d\x01\n\x07\x42lobRef\x12\x16\n\x06\x62ucket\x18\x01 \x01(\tR\x06\x62ucket\x12\x10\n\x03key\x18\x02 \x01(\tR\x03key\x12\x1d\n\nsize_bytes\x18\x03 \x01(\x03R\tsizeBytes\x12!\n\x0c\x63ontent_type\x18\x04 \x01(\tR\x0b\x63ontentType\x12\x16\n\x06sha256\x18\x05 \x01(\tR\x06sha256\"`\n\tTombstone\x12\x18\n\x07\x64\x65leted\x18\x01 \x01(\x08R\x07\x64\x65leted\x12\x39\n\ndeleted_at\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tdeletedAt*\x9a\x01\n\x07\x44ocType\x12\x18\n\x14\x44OC_TYPE_UNSPECIFIED\x10\x00\x12\t\n\x05\x45MAIL\x10\x01\x12\x10\n\x0c\x43HAT_MESSAGE\x10\x02\x12\x08\n\x04\x46ILE\x10\x03\x12\x12\n\x0e\x43\x41LENDAR_EVENT\x10\x04\x12\r\n\tWIKI_PAGE\x10\x05\x12\n\n\x06TICKET\x10\x06\x12\t\n\x05IMAGE\x10\x07\x12\t\n\x05VIDEO\x10\x08\x12\t\n\x05\x41UDIO\x10\tB?Z=github.com/asker/asker/platform/proto/gen/go/asker/v1;askerv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,22 +35,26 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._serialized_options = b'Z=github.com/asker/asker/platform/proto/gen/go/asker/v1;askerv1'
   _globals['_DOCUMENT_METADATAENTRY']._loaded_options = None
   _globals['_DOCUMENT_METADATAENTRY']._serialized_options = b'8\001'
-  _globals['_DOCTYPE']._serialized_start=1529
-  _globals['_DOCTYPE']._serialized_end=1683
+  _globals['_DOCTYPE']._serialized_start=1984
+  _globals['_DOCTYPE']._serialized_end=2138
   _globals['_DOCUMENT']._serialized_start=71
-  _globals['_DOCUMENT']._serialized_end=731
-  _globals['_DOCUMENT_METADATAENTRY']._serialized_start=672
-  _globals['_DOCUMENT_METADATAENTRY']._serialized_end=731
-  _globals['_CHUNK']._serialized_start=734
-  _globals['_CHUNK']._serialized_end=913
-  _globals['_PARTICIPANT']._serialized_start=915
-  _globals['_PARTICIPANT']._serialized_end=1014
-  _globals['_TIMESTAMPS']._serialized_start=1017
-  _globals['_TIMESTAMPS']._serialized_end=1195
-  _globals['_ACLINFO']._serialized_start=1197
-  _globals['_ACLINFO']._serialized_end=1284
-  _globals['_BLOBREF']._serialized_start=1287
-  _globals['_BLOBREF']._serialized_end=1428
-  _globals['_TOMBSTONE']._serialized_start=1430
-  _globals['_TOMBSTONE']._serialized_end=1526
+  _globals['_DOCUMENT']._serialized_end=774
+  _globals['_DOCUMENT_METADATAENTRY']._serialized_start=715
+  _globals['_DOCUMENT_METADATAENTRY']._serialized_end=774
+  _globals['_MEDIAINFO']._serialized_start=777
+  _globals['_MEDIAINFO']._serialized_end=1007
+  _globals['_KEYFRAME']._serialized_start=1009
+  _globals['_KEYFRAME']._serialized_end=1108
+  _globals['_CHUNK']._serialized_start=1111
+  _globals['_CHUNK']._serialized_end=1368
+  _globals['_PARTICIPANT']._serialized_start=1370
+  _globals['_PARTICIPANT']._serialized_end=1469
+  _globals['_TIMESTAMPS']._serialized_start=1472
+  _globals['_TIMESTAMPS']._serialized_end=1650
+  _globals['_ACLINFO']._serialized_start=1652
+  _globals['_ACLINFO']._serialized_end=1739
+  _globals['_BLOBREF']._serialized_start=1742
+  _globals['_BLOBREF']._serialized_end=1883
+  _globals['_TOMBSTONE']._serialized_start=1885
+  _globals['_TOMBSTONE']._serialized_end=1981
 # @@protoc_insertion_point(module_scope)

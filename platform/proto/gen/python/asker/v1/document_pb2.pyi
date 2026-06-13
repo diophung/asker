@@ -34,7 +34,7 @@ VIDEO: DocType
 AUDIO: DocType
 
 class Document(_message.Message):
-    __slots__ = ("tenant_id", "doc_id", "connector_id", "source_native_id", "type", "title", "body_text", "chunks", "metadata", "participants", "ts", "acl", "original", "version_etag", "tombstone")
+    __slots__ = ("tenant_id", "doc_id", "connector_id", "source_native_id", "type", "title", "body_text", "chunks", "metadata", "participants", "ts", "acl", "original", "version_etag", "tombstone", "media")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -57,6 +57,7 @@ class Document(_message.Message):
     ORIGINAL_FIELD_NUMBER: _ClassVar[int]
     VERSION_ETAG_FIELD_NUMBER: _ClassVar[int]
     TOMBSTONE_FIELD_NUMBER: _ClassVar[int]
+    MEDIA_FIELD_NUMBER: _ClassVar[int]
     tenant_id: str
     doc_id: str
     connector_id: str
@@ -72,23 +73,56 @@ class Document(_message.Message):
     original: BlobRef
     version_etag: str
     tombstone: Tombstone
-    def __init__(self, tenant_id: _Optional[str] = ..., doc_id: _Optional[str] = ..., connector_id: _Optional[str] = ..., source_native_id: _Optional[str] = ..., type: _Optional[_Union[DocType, str]] = ..., title: _Optional[str] = ..., body_text: _Optional[str] = ..., chunks: _Optional[_Iterable[_Union[Chunk, _Mapping]]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., participants: _Optional[_Iterable[_Union[Participant, _Mapping]]] = ..., ts: _Optional[_Union[Timestamps, _Mapping]] = ..., acl: _Optional[_Union[AclInfo, _Mapping]] = ..., original: _Optional[_Union[BlobRef, _Mapping]] = ..., version_etag: _Optional[str] = ..., tombstone: _Optional[_Union[Tombstone, _Mapping]] = ...) -> None: ...
+    media: MediaInfo
+    def __init__(self, tenant_id: _Optional[str] = ..., doc_id: _Optional[str] = ..., connector_id: _Optional[str] = ..., source_native_id: _Optional[str] = ..., type: _Optional[_Union[DocType, str]] = ..., title: _Optional[str] = ..., body_text: _Optional[str] = ..., chunks: _Optional[_Iterable[_Union[Chunk, _Mapping]]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., participants: _Optional[_Iterable[_Union[Participant, _Mapping]]] = ..., ts: _Optional[_Union[Timestamps, _Mapping]] = ..., acl: _Optional[_Union[AclInfo, _Mapping]] = ..., original: _Optional[_Union[BlobRef, _Mapping]] = ..., version_etag: _Optional[str] = ..., tombstone: _Optional[_Union[Tombstone, _Mapping]] = ..., media: _Optional[_Union[MediaInfo, _Mapping]] = ...) -> None: ...
+
+class MediaInfo(_message.Message):
+    __slots__ = ("duration_ms", "width", "height", "thumbnail", "keyframes", "transcript_lang")
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    WIDTH_FIELD_NUMBER: _ClassVar[int]
+    HEIGHT_FIELD_NUMBER: _ClassVar[int]
+    THUMBNAIL_FIELD_NUMBER: _ClassVar[int]
+    KEYFRAMES_FIELD_NUMBER: _ClassVar[int]
+    TRANSCRIPT_LANG_FIELD_NUMBER: _ClassVar[int]
+    duration_ms: int
+    width: int
+    height: int
+    thumbnail: BlobRef
+    keyframes: _containers.RepeatedCompositeFieldContainer[Keyframe]
+    transcript_lang: str
+    def __init__(self, duration_ms: _Optional[int] = ..., width: _Optional[int] = ..., height: _Optional[int] = ..., thumbnail: _Optional[_Union[BlobRef, _Mapping]] = ..., keyframes: _Optional[_Iterable[_Union[Keyframe, _Mapping]]] = ..., transcript_lang: _Optional[str] = ...) -> None: ...
+
+class Keyframe(_message.Message):
+    __slots__ = ("ts_ms", "image", "chunk_id")
+    TS_MS_FIELD_NUMBER: _ClassVar[int]
+    IMAGE_FIELD_NUMBER: _ClassVar[int]
+    CHUNK_ID_FIELD_NUMBER: _ClassVar[int]
+    ts_ms: int
+    image: BlobRef
+    chunk_id: str
+    def __init__(self, ts_ms: _Optional[int] = ..., image: _Optional[_Union[BlobRef, _Mapping]] = ..., chunk_id: _Optional[str] = ...) -> None: ...
 
 class Chunk(_message.Message):
-    __slots__ = ("chunk_id", "text", "embedding_ref", "char_start", "char_end", "embedding")
+    __slots__ = ("chunk_id", "text", "embedding_ref", "char_start", "char_end", "embedding", "start_ms", "end_ms", "modality")
     CHUNK_ID_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
     EMBEDDING_REF_FIELD_NUMBER: _ClassVar[int]
     CHAR_START_FIELD_NUMBER: _ClassVar[int]
     CHAR_END_FIELD_NUMBER: _ClassVar[int]
     EMBEDDING_FIELD_NUMBER: _ClassVar[int]
+    START_MS_FIELD_NUMBER: _ClassVar[int]
+    END_MS_FIELD_NUMBER: _ClassVar[int]
+    MODALITY_FIELD_NUMBER: _ClassVar[int]
     chunk_id: str
     text: str
     embedding_ref: str
     char_start: int
     char_end: int
     embedding: _containers.RepeatedScalarFieldContainer[float]
-    def __init__(self, chunk_id: _Optional[str] = ..., text: _Optional[str] = ..., embedding_ref: _Optional[str] = ..., char_start: _Optional[int] = ..., char_end: _Optional[int] = ..., embedding: _Optional[_Iterable[float]] = ...) -> None: ...
+    start_ms: int
+    end_ms: int
+    modality: str
+    def __init__(self, chunk_id: _Optional[str] = ..., text: _Optional[str] = ..., embedding_ref: _Optional[str] = ..., char_start: _Optional[int] = ..., char_end: _Optional[int] = ..., embedding: _Optional[_Iterable[float]] = ..., start_ms: _Optional[int] = ..., end_ms: _Optional[int] = ..., modality: _Optional[str] = ...) -> None: ...
 
 class Participant(_message.Message):
     __slots__ = ("name", "email", "handle", "role")
