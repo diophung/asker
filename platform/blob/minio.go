@@ -61,11 +61,12 @@ func (c *minioClient) putObject(ctx context.Context, bucket, key, contentType st
 	return nil
 }
 
-// getObject fetches bucket/key, mapping a missing object to ErrNotFound.
-func (c *minioClient) getObject(ctx context.Context, bucket, key string) ([]byte, error) {
+// getObject fetches bucket/key, returning the bytes and the object's stored
+// Content-Type, and mapping a missing object to ErrNotFound.
+func (c *minioClient) getObject(ctx context.Context, bucket, key string) ([]byte, string, error) {
 	obj, err := c.mc.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("get object %q: %w", key, err)
+		return nil, "", fmt.Errorf("get object %q: %w", key, err)
 	}
 	defer func() { _ = obj.Close() }()
 	data, err := io.ReadAll(obj)
@@ -73,9 +74,17 @@ func (c *minioClient) getObject(ctx context.Context, bucket, key string) ([]byte
 		// GetObject is lazy: server-side errors (including a missing key)
 		// surface on the first read.
 		if minio.ToErrorResponse(err).Code == minio.NoSuchKey {
-			return nil, fmt.Errorf("get object %q: %w", key, ErrNotFound)
+			return nil, "", fmt.Errorf("get object %q: %w", key, ErrNotFound)
 		}
-		return nil, fmt.Errorf("get object %q: %w", key, err)
+		return nil, "", fmt.Errorf("get object %q: %w", key, err)
 	}
-	return data, nil
+	// Stat shares the same lazily fetched object handle, so the Content-Type
+	// is already available without a second round trip. A Stat error here is
+	// non-fatal: the bytes decrypted fine, so fall back to no content-type
+	// (the caller defaults it) rather than failing the read.
+	contentType := ""
+	if info, statErr := obj.Stat(); statErr == nil {
+		contentType = info.ContentType
+	}
+	return data, contentType, nil
 }

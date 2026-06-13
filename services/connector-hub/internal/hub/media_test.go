@@ -22,19 +22,26 @@ import (
 // media handlers' tenant isolation and round-trip contract without an object
 // store: keys are tenant-prefixed ("<tenant>/<key>"), payloads are stored as
 // a trivially reversible "ciphertext" (a 0x01 version byte prefix) that is
-// NOT equal to the plaintext, Get fails closed on a foreign prefix, and Get
-// verifies the BlobRef sha256. Safe for concurrent use.
+// NOT equal to the plaintext, and GetByKey fails closed on a foreign prefix
+// or a "."/".."/empty traversal segment (mirroring blob.checkTenantKey) before
+// any lookup. No sha256 is checked: like the real store, the (fake) tenant-
+// bound transform authenticates the read. Safe for concurrent use.
 type fakeMediaStore struct {
 	bucket string
 
-	mu      sync.Mutex
-	objects map[string][]byte // objectKey -> "ciphertext"
-	putErr  error             // when set, Put returns it
-	getErr  error             // when set, Get returns it (after prefix/ref checks)
+	mu           sync.Mutex
+	objects      map[string][]byte // objectKey -> "ciphertext"
+	contentTypes map[string]string // objectKey -> stored Content-Type
+	putErr       error             // when set, Put returns it
+	getErr       error             // when set, GetByKey returns it (after prefix checks)
 }
 
 func newFakeMediaStore() *fakeMediaStore {
-	return &fakeMediaStore{bucket: "asker-blobs", objects: make(map[string][]byte)}
+	return &fakeMediaStore{
+		bucket:       "asker-blobs",
+		objects:      make(map[string][]byte),
+		contentTypes: make(map[string]string),
+	}
 }
 
 // encrypt is a stand-in for envelope encryption: a version byte + the bytes
@@ -64,40 +71,48 @@ func decrypt(tenant string, ciphertext []byte) ([]byte, error) {
 	return out, nil
 }
 
-func (s *fakeMediaStore) Get(ctx context.Context, tc tenancy.Context, ref *askerv1.BlobRef) ([]byte, error) {
+func (s *fakeMediaStore) GetByKey(ctx context.Context, tc tenancy.Context, key string) ([]byte, string, error) {
 	if tc.TenantID() == "" {
-		return nil, tenancy.ErrNoTenant
+		return nil, "", tenancy.ErrNoTenant
 	}
-	if ref == nil || ref.GetKey() == "" {
-		return nil, errors.New("fake: nil or empty ref")
+	if key == "" {
+		return nil, "", errors.New("fake: empty key")
 	}
-	if ref.GetSha256() == "" {
-		return nil, errors.New("fake: ref carries no sha256")
-	}
-	// Fail closed before any read: a key outside the caller's prefix is a
-	// cross-tenant attempt.
+	// Fail closed before any read: a key outside the caller's prefix — or one
+	// that traverses out of it via "."/".."/empty segments — is a cross-tenant
+	// attempt. Mirrors blob.checkTenantKey.
 	prefix := string(tc.TenantID()) + "/"
-	if !strings.HasPrefix(ref.GetKey(), prefix) {
-		return nil, blob.ErrTenantMismatch
+	if !strings.HasPrefix(key, prefix) || !fakeValidKey(key[len(prefix):]) {
+		return nil, "", blob.ErrTenantMismatch
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.getErr != nil {
-		return nil, s.getErr
+		return nil, "", s.getErr
 	}
-	ciphertext, ok := s.objects[ref.GetKey()]
+	ciphertext, ok := s.objects[key]
 	if !ok {
-		return nil, blob.ErrNotFound
+		return nil, "", blob.ErrNotFound
 	}
 	plaintext, err := decrypt(string(tc.TenantID()), ciphertext)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	sum := sha256.Sum256(plaintext)
-	if !strings.EqualFold(hex.EncodeToString(sum[:]), ref.GetSha256()) {
-		return nil, blob.ErrChecksumMismatch
+	return plaintext, s.contentTypes[key], nil
+}
+
+// fakeValidKey mirrors blob.validKey: rejects empty / "." / ".." path
+// segments so a crafted key cannot escape the tenant prefix.
+func fakeValidKey(key string) bool {
+	if key == "" {
+		return false
 	}
-	return plaintext, nil
+	for _, seg := range strings.Split(key, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *fakeMediaStore) Put(ctx context.Context, tc tenancy.Context, key, contentType string, data []byte) (*askerv1.BlobRef, error) {
@@ -111,6 +126,7 @@ func (s *fakeMediaStore) Put(ctx context.Context, tc tenancy.Context, key, conte
 		return nil, s.putErr
 	}
 	s.objects[objectKey] = encrypt(string(tc.TenantID()), data)
+	s.contentTypes[objectKey] = contentType
 	sum := sha256.Sum256(data)
 	return &askerv1.BlobRef{
 		Bucket:      s.bucket,
@@ -227,7 +243,7 @@ func TestMediaGet(t *testing.T) {
 
 	t.Run("absent key is 404", func(t *testing.T) {
 		api := mediaAPIRig(t, newFakeMediaStore())
-		req := httptest.NewRequest(http.MethodGet, "/internal/media?key=tenant-a/nope.jpg&sha256="+hexOf("anything"), nil)
+		req := httptest.NewRequest(http.MethodGet, "/internal/media?key=tenant-a/nope.jpg", nil)
 		req.Header.Set(tenantHeader, tenantA)
 		rec := doRequest(api, req)
 		if rec.Code != http.StatusNotFound {
@@ -245,13 +261,27 @@ func TestMediaGet(t *testing.T) {
 		}
 	})
 
-	t.Run("missing sha256 is 400", func(t *testing.T) {
-		api := mediaAPIRig(t, newFakeMediaStore())
-		req := httptest.NewRequest(http.MethodGet, "/internal/media?key=tenant-a/x.jpg", nil)
+	t.Run("a key-only request (no sha256) succeeds", func(t *testing.T) {
+		// The end-to-end thumbnail fix: the gateway/UI hold only a
+		// thumbnail_key, never the plaintext sha256, so the request carries no
+		// sha256 at all. It must still return the decrypted bytes and the
+		// stored Content-Type (regression guard for the HIGH finding).
+		store := newFakeMediaStore()
+		ref := putMedia(t, store, tenantA, "thumb.jpg", "image/jpeg", []byte(plaintext))
+		api := mediaAPIRig(t, store)
+
+		req := httptest.NewRequest(http.MethodGet, "/internal/media?key="+ref.GetKey(), nil)
 		req.Header.Set(tenantHeader, tenantA)
 		rec := doRequest(api, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400", rec.Code)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("key-only GET status = %d (body %s), want 200", rec.Code, rec.Body)
+		}
+		if got := rec.Body.String(); got != plaintext {
+			t.Errorf("body = %q, want %q (decrypted)", got, plaintext)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "image/jpeg" {
+			t.Errorf("Content-Type = %q, want image/jpeg (from stored object)", ct)
 		}
 	})
 
@@ -279,20 +309,25 @@ func TestMediaGet(t *testing.T) {
 		}
 	})
 
-	t.Run("checksum mismatch is 404", func(t *testing.T) {
-		// A tampered/wrong sha256 collapses to not-found rather than leaking
-		// that the object exists.
+	t.Run("a traversal key cannot escape the tenant prefix (404, no read)", func(t *testing.T) {
+		// A crafted "<tenant>/../<other>/x" key passes a naive HasPrefix yet
+		// escapes the prefix. It must be denied (collapsed to 404, like any
+		// foreign key) and must never reach a stored object — proving a probe
+		// cannot traverse out of its own namespace.
 		store := newFakeMediaStore()
-		ref := putMedia(t, store, tenantA, "thumb.jpg", "image/jpeg", []byte(plaintext))
+		// Seed an object under tenant B that the traversal key would resolve to.
+		putMedia(t, store, tenantB, "secret.bin", "application/octet-stream", []byte("tenant B secret"))
 		api := mediaAPIRig(t, store)
 
-		req := httptest.NewRequest(http.MethodGet, "/internal/media?key="+ref.GetKey()+"&sha256="+hexOf("wrong"), nil)
+		req := httptest.NewRequest(http.MethodGet, "/internal/media?key="+tenantA+"/../"+tenantB+"/secret.bin", nil)
 		req.Header.Set(tenantHeader, tenantA)
 		rec := doRequest(api, req)
-		// ErrChecksumMismatch is neither ErrNotFound nor ErrTenantMismatch, so
-		// it surfaces as a 500 (corrupt object / caller passed a bad ref).
-		if rec.Code != http.StatusInternalServerError {
-			t.Errorf("status = %d, want 500 (checksum failure)", rec.Code)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("traversal GET status = %d, want 404 (denied)", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "tenant B secret") {
+			t.Fatal("traversal key leaked another tenant's plaintext")
 		}
 	})
 
@@ -458,13 +493,6 @@ func TestMediaPut(t *testing.T) {
 			t.Errorf("content_type = %q, want %q", ref.ContentType, defaultMediaContentType)
 		}
 	})
-}
-
-// hexOf returns the lowercase-hex sha256 of s, for crafting non-matching ref
-// digests in tests.
-func hexOf(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
 }
 
 // neverEndingReader yields an endless stream of 'a' bytes; bounded by an outer

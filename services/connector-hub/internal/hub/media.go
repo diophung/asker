@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/asker/asker/platform/blob"
-	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
 
@@ -39,20 +38,22 @@ type mediaBlobRef struct {
 }
 
 // handleMediaGet returns the DECRYPTED bytes of a blob for the calling tenant
-// (ADR-013): the Python enrich worker fetches original media here because the
-// envelope crypto stays in Go.
+// (ADR-013). Two callers use it: the Python enrich worker fetches original
+// media here (the envelope crypto stays in Go), and the gateway proxies the
+// browser's GET /v1/media here to serve a search Hit's thumbnail/keyframe.
 //
-// Contract: GET /internal/media?key=<objectKey>&sha256=<hex>[&bucket=<name>]
-// [&content_type=<mime>] with header x-asker-tenant: <tenant>. The key MUST be
-// within the tenant's "<tenant>/" prefix; blob.Get fails closed on a foreign
-// prefix (a different tenant's header can never read this object). sha256 is
-// required because blob.Get verifies the plaintext digest before returning it
-// — the worker already holds the full BlobRef (key+sha256+bucket+content_type)
-// from Document.original / the PUT response, so it passes them back. blob.Get
-// returns only the decrypted bytes (no stored metadata), so the response
-// Content-Type is taken from the content_type param, else octet-stream.
+// Contract: GET /internal/media?key=<objectKey> with header x-asker-tenant:
+// <tenant>. Only the object key is needed — the gateway/UI hold a
+// thumbnail_key but never the plaintext sha256, so the read goes through
+// blob.GetByKey, whose tenant-bound AEAD authenticates the ciphertext (a
+// separate digest check would add nothing). The key MUST be within the
+// tenant's "<tenant>/" prefix AND free of "."/".." traversal segments;
+// GetByKey fails closed on either, so a different tenant's header — or a
+// crafted key — can never read this object. GetByKey returns the object's
+// stored Content-Type, which becomes the response Content-Type (octet-stream
+// when the store has none).
 //
-// 401 missing/invalid tenant · 400 missing key/sha256 · 404 absent or
+// 401 missing/invalid tenant · 400 missing key · 404 absent or
 // not-owned-by-tenant (the two are deliberately indistinguishable, so a probe
 // cannot tell a foreign object from a missing one) · 503 when no blob store is
 // wired · 200 with the decrypted body otherwise.
@@ -71,33 +72,21 @@ func (h *httpAPI) handleMediaGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query parameter \"key\" is required"})
 		return
 	}
-	sum := r.URL.Query().Get("sha256")
-	if sum == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query parameter \"sha256\" is required"})
-		return
-	}
-
-	ref := &askerv1.BlobRef{
-		Bucket:      r.URL.Query().Get("bucket"),
-		Key:         key,
-		Sha256:      sum,
-		ContentType: r.URL.Query().Get("content_type"),
-	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), mediaTimeout)
 	defer cancel()
 	tctx := tenancy.WithContext(ctx, tc)
 
-	data, err := h.mediaBlobs.Get(tctx, tc, ref)
+	data, contentType, err := h.mediaBlobs.GetByKey(tctx, tc, key)
 	if err != nil {
 		// ErrNotFound AND ErrTenantMismatch both collapse to 404: a foreign
-		// tenant's header must not be able to distinguish "exists but not
-		// yours" from "absent" (the sacred no-cross-tenant-read property).
+		// tenant's header (or a crafted/traversal key, which GetByKey reports
+		// as ErrTenantMismatch) must not be able to distinguish "exists but
+		// not yours" from "absent" (the sacred no-cross-tenant-read property).
 		if errors.Is(err, blob.ErrNotFound) || errors.Is(err, blob.ErrTenantMismatch) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
 		}
-		// A bad ref (empty sha256, foreign bucket) is the caller's fault.
 		if errors.Is(err, tenancy.ErrNoTenant) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid tenant"})
 			return
@@ -108,7 +97,6 @@ func (h *httpAPI) handleMediaGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contentType := ref.GetContentType()
 	if contentType == "" {
 		contentType = defaultMediaContentType
 	}

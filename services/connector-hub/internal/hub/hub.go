@@ -37,12 +37,19 @@ const topicPartitions = 4
 type UploadFunc func(ctx context.Context, tenant tenancy.Context, file io.Reader, filename, title, contentType string, size int64) (*askerv1.Document, error)
 
 // MediaBlobStore is the slice of the tenant-encrypted blob store the
-// /internal/media endpoint needs: decrypt-on-read (Get) and encrypt-on-write
-// (Put), both fail-closed on the tenant key prefix. *blob.Store satisfies it;
-// it is an interface so the http layer is testable against a fake without an
-// object store. See media.go (ADR-013) for why crypto stays in Go.
+// /internal/media endpoint needs: decrypt-on-read by object key
+// (GetByKey) and encrypt-on-write (Put), both fail-closed on the tenant key
+// prefix. *blob.Store satisfies it; it is an interface so the http layer is
+// testable against a fake without an object store. See media.go (ADR-013) for
+// why crypto stays in Go.
+//
+// GetByKey (not the sha256-checking Get) is what the gateway/UI thumbnail path
+// needs: those callers hold only a thumbnail/keyframe key, never the plaintext
+// sha256, so they cannot construct a BlobRef for Get. The tenant-bound AEAD
+// authenticates the read, returning the decrypted bytes and stored
+// Content-Type.
 type MediaBlobStore interface {
-	Get(ctx context.Context, tc tenancy.Context, ref *askerv1.BlobRef) ([]byte, error)
+	GetByKey(ctx context.Context, tc tenancy.Context, key string) (data []byte, contentType string, err error)
 	Put(ctx context.Context, tc tenancy.Context, key, contentType string, data []byte) (*askerv1.BlobRef, error)
 }
 

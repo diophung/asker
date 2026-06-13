@@ -380,6 +380,16 @@ func parseVespaResponse(raw []byte, kind retrievalKind) (vespaResult, error) {
 //     carrying a <hi> highlight is the matched chunk; absent any highlight
 //     (e.g. a pure vector match), no chunk offset is attributed.
 //
+// The index writer labels every chunk's modality, including plain text chunks
+// of EMAIL/FILE docs ("text"). The Hit contract (query.proto) reserves the
+// start_ms/end_ms/modality fields for IMAGE/AUDIO/VIDEO hits and pins them to
+// zero "for the whole-document / non-media case". So a matched chunk whose
+// modality is "text" (or unlabeled) is treated as that non-media case:
+// modality and offsets stay at their zero values. Only genuine media chunks
+// (ocr / asr / caption) populate them. thumbnail_key is still propagated
+// regardless — an image surfaced only by its OCR text can legitimately carry a
+// poster, and a pure text doc has none anyway.
+//
 // All reads are defensive: a doc that is not media (no parallel arrays) or a
 // matched index out of range simply leaves the offset/modality at zero — the
 // whole-document / text case the proto documents.
@@ -392,17 +402,20 @@ func populateMediaFields(hit *queryv1.Hit, f vespaHitFields, kind retrievalKind)
 	} else {
 		idx = matchedTextChunkIndex(f.ChunkSnippets)
 	}
-	if idx < 0 {
+	if idx < 0 || idx >= len(f.ChunkModalities) {
 		return
 	}
+	// "text" (or empty) marks a non-media chunk: leave the media fields zero.
+	modality := f.ChunkModalities[idx]
+	if modality == "" || modality == "text" {
+		return
+	}
+	hit.Modality = modality
 	if idx < len(f.ChunkStartsMs) {
 		hit.StartMs = f.ChunkStartsMs[idx]
 	}
 	if idx < len(f.ChunkEndsMs) {
 		hit.EndMs = f.ChunkEndsMs[idx]
-	}
-	if idx < len(f.ChunkModalities) {
-		hit.Modality = f.ChunkModalities[idx]
 	}
 }
 

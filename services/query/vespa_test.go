@@ -255,6 +255,36 @@ const asrFixture = `{
   }
 }`
 
+// textDocFixture is a realistic text/hybrid-arm response for a plain EMAIL doc
+// as the index writer actually emits it: every chunk carries a modality label,
+// and for non-media docs that label is "text" (the parallel chunk_starts_ms/
+// ends_ms are absent — text chunks have no time offset). The matched chunk is
+// the highlighted one at index 1. Per the Hit contract (query.proto) this is
+// the whole-document / non-media case: modality and offsets must stay zero.
+const textDocFixture = `{
+  "root": {
+    "id": "toplevel",
+    "fields": {"totalCount": 1},
+    "children": [
+      {
+        "id": "index:asker/0/aaa",
+        "relevance": 0.87,
+        "fields": {
+          "doc_id": "doc-1",
+          "connector_id": "gmail",
+          "type": "EMAIL",
+          "title": "Quarterly planning",
+          "snippet": "about the <hi>quarterly</hi> plan",
+          "chunk_snippets": ["full unmatched chunk text", "chunk with <hi>quarterly</hi> term"],
+          "chunk_modalities": ["text", "text"],
+          "metadata_json": "{\"sender\":\"alice@example.com\"}",
+          "created_at": 1718000000
+        }
+      }
+    ]
+  }
+}`
+
 func TestParseVespaResponseClipMediaFields(t *testing.T) {
 	res, err := parseVespaResponse([]byte(clipFixture), retrieveCLIP)
 	if err != nil {
@@ -317,16 +347,46 @@ func TestMatchedClipChunkIndex(t *testing.T) {
 }
 
 func TestPopulateMediaFieldsTextDocStaysZero(t *testing.T) {
-	// A text document (no parallel arrays, a highlighted text chunk) gets no
-	// time offset attributed — the whole-document case the proto documents.
-	res, err := parseVespaResponse([]byte(vespaFixture), retrieveHybrid)
+	// A plain EMAIL doc, exactly as the index writer emits it: every chunk is
+	// labeled, and the matched (highlighted) chunk's modality is "text". Per
+	// the Hit contract that is the whole-document / non-media case — modality
+	// and offsets MUST come back zero rather than echoing the "text" label.
+	res, err := parseVespaResponse([]byte(textDocFixture), retrieveHybrid)
 	if err != nil {
 		t.Fatalf("parseVespaResponse: %v", err)
 	}
 	h := res.Hits[0]
-	if h.GetStartMs() != 0 || h.GetEndMs() != 0 || h.GetModality() != "" || h.GetThumbnailKey() != "" {
-		t.Errorf("text doc got media fields: start=%d end=%d modality=%q thumb=%q",
-			h.GetStartMs(), h.GetEndMs(), h.GetModality(), h.GetThumbnailKey())
+	if h.GetType() != askerv1.DocType_EMAIL {
+		t.Fatalf("Type = %v, want EMAIL (wrong fixture)", h.GetType())
+	}
+	if h.GetModality() != "" {
+		t.Errorf("Modality = %q, want \"\" for a non-media text hit", h.GetModality())
+	}
+	if h.GetStartMs() != 0 || h.GetEndMs() != 0 {
+		t.Errorf("start/end = %d/%d, want 0/0 for a non-media text hit", h.GetStartMs(), h.GetEndMs())
+	}
+	if h.GetThumbnailKey() != "" {
+		t.Errorf("ThumbnailKey = %q, want \"\" (text doc has no thumbnail)", h.GetThumbnailKey())
+	}
+}
+
+// TestPopulateMediaFieldsMediaStaysPopulated is the companion to the text-doc
+// case: a genuine media (asr) chunk must still be fully populated. The fix that
+// zeroes "text" modalities must not regress real media hits.
+func TestPopulateMediaFieldsMediaStaysPopulated(t *testing.T) {
+	res, err := parseVespaResponse([]byte(asrFixture), retrieveHybrid)
+	if err != nil {
+		t.Fatalf("parseVespaResponse(asr): %v", err)
+	}
+	h := res.Hits[0]
+	if h.GetModality() != "asr" {
+		t.Errorf("Modality = %q, want asr (matched media chunk)", h.GetModality())
+	}
+	if h.GetStartMs() <= 0 {
+		t.Errorf("StartMs = %d, want > 0 for the matched ASR chunk", h.GetStartMs())
+	}
+	if h.GetEndMs() != 90000 {
+		t.Errorf("EndMs = %d, want 90000 for the matched ASR chunk", h.GetEndMs())
 	}
 }
 

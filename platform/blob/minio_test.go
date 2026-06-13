@@ -34,8 +34,9 @@ type fakeS3 struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	buckets map[string]bool
-	objects map[string][]byte
+	buckets      map[string]bool
+	objects      map[string][]byte
+	contentTypes map[string]string // "<bucket>/<key>" -> Content-Type from the PUT
 
 	bucketPuts  int
 	headMissing bool   // force HEAD bucket -> 404 (simulates a creation race)
@@ -45,9 +46,10 @@ type fakeS3 struct {
 
 func newFakeS3(t *testing.T) *fakeS3 {
 	return &fakeS3{
-		t:       t,
-		buckets: make(map[string]bool),
-		objects: make(map[string][]byte),
+		t:            t,
+		buckets:      make(map[string]bool),
+		objects:      make(map[string][]byte),
+		contentTypes: make(map[string]string),
 	}
 }
 
@@ -93,6 +95,7 @@ func (s *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.objects[bucket+"/"+key] = bytes.Clone(body)
+		s.contentTypes[bucket+"/"+key] = r.Header.Get("Content-Type")
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet:
 		if s.failGet != "" {
@@ -103,6 +106,9 @@ func (s *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return
+		}
+		if ct := s.contentTypes[bucket+"/"+key]; ct != "" {
+			w.Header().Set("Content-Type", ct)
 		}
 		w.Header().Set("Last-Modified", time.Now().UTC().Format(http.TimeFormat))
 		_, _ = w.Write(data)
@@ -225,12 +231,15 @@ func TestPutGetObjectRoundTrip(t *testing.T) {
 	if stored, ok := srv.stored("bkt", key); !ok || !bytes.Equal(stored, data) {
 		t.Errorf("server stored %x, want raw payload %x", stored, data)
 	}
-	got, err := c.getObject(ctx, "bkt", key)
+	got, contentType, err := c.getObject(ctx, "bkt", key)
 	if err != nil {
 		t.Fatalf("getObject: %v", err)
 	}
 	if !bytes.Equal(got, data) {
 		t.Errorf("getObject = %x, want %x", got, data)
+	}
+	if contentType != "application/octet-stream" {
+		t.Errorf("getObject content-type = %q, want application/octet-stream", contentType)
 	}
 }
 
@@ -246,7 +255,7 @@ func TestPutObjectKeyNeedsEncoding(t *testing.T) {
 	if err := c.putObject(ctx, "bkt", key, "text/plain", data); err != nil {
 		t.Fatalf("putObject: %v", err)
 	}
-	got, err := c.getObject(ctx, "bkt", key)
+	got, _, err := c.getObject(ctx, "bkt", key)
 	if err != nil {
 		t.Fatalf("getObject: %v", err)
 	}
@@ -261,7 +270,7 @@ func TestGetObjectNotFound(t *testing.T) {
 	if err := c.ensureBucket(ctx, "bkt"); err != nil {
 		t.Fatalf("ensureBucket: %v", err)
 	}
-	if _, err := c.getObject(ctx, "bkt", "missing"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := c.getObject(ctx, "bkt", "missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("getObject(missing): err = %v, want ErrNotFound", err)
 	}
 }
@@ -285,7 +294,7 @@ func TestErrorStatusesSurface(t *testing.T) {
 	srv.mu.Lock()
 	srv.failGet = "AccessDenied"
 	srv.mu.Unlock()
-	if _, err := c.getObject(ctx, "bkt", "k"); err == nil {
+	if _, _, err := c.getObject(ctx, "bkt", "k"); err == nil {
 		t.Error("getObject succeeded despite 403")
 	} else if errors.Is(err, ErrNotFound) {
 		t.Errorf("getObject 403 mapped to ErrNotFound: %v", err)
@@ -339,7 +348,7 @@ func TestUnreachableEndpoint(t *testing.T) {
 	if err := c.putObject(ctx, "bkt", "k", "", nil); err == nil {
 		t.Error("putObject succeeded against closed port")
 	}
-	if _, err := c.getObject(ctx, "bkt", "k"); err == nil {
+	if _, _, err := c.getObject(ctx, "bkt", "k"); err == nil {
 		t.Error("getObject succeeded against closed port")
 	}
 }

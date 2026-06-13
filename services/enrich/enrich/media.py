@@ -197,7 +197,9 @@ class MediaHandler:
 
     async def _enrich_video(self, doc: document_pb2.Document, fetched: mc.FetchedMedia) -> None:
         info = await mc.to_thread(self._video.probe, fetched.data, fetched.content_type)
+        has_audio = False
         if isinstance(info, mc.VideoInfo):
+            has_audio = info.has_audio
             if info.duration_ms:
                 doc.media.duration_ms = info.duration_ms
             if info.width:
@@ -205,15 +207,31 @@ class MediaHandler:
             if info.height:
                 doc.media.height = info.height
 
-        # Audio track -> ASR chunks (time-anchored).
-        audio = await mc.to_thread(self._video.extract_audio, fetched.data, fetched.content_type)
-        if audio:
-            transcript = await mc.to_thread(self._transcriber, audio, "audio/wav")
-            await self._add_asr_chunks(doc, transcript)
-            if transcript.language and not doc.media.transcript_lang:
-                doc.media.transcript_lang = transcript.language
-            if transcript.duration_ms and not doc.media.duration_ms:
-                doc.media.duration_ms = transcript.duration_ms
+        # Audio track -> ASR chunks (time-anchored). A video with no audio stream
+        # (silent screen capture, GIF-style clip) is NOT transcribed: faster-whisper
+        # errors on an audio-less input, which would dead-letter the whole document
+        # and lose its keyframe/CLIP indexing. We skip straight to the visual arm so
+        # the doc still indexes its frames (ADR-013).
+        if has_audio:
+            audio = await mc.to_thread(
+                self._video.extract_audio, fetched.data, fetched.content_type
+            )
+            if audio:
+                transcript = await mc.to_thread(self._transcriber, audio, "audio/wav")
+                await self._add_asr_chunks(doc, transcript)
+                if transcript.language and not doc.media.transcript_lang:
+                    doc.media.transcript_lang = transcript.language
+                if transcript.duration_ms and not doc.media.duration_ms:
+                    doc.media.duration_ms = transcript.duration_ms
+        else:
+            log.info(
+                "video has no audio stream; skipping transcription, indexing visual content only",
+                extra={
+                    "doc_id": doc.doc_id,
+                    "tenant_id": doc.tenant_id,
+                    "content_type": doc.original.content_type,
+                },
+            )
 
         # Scene keyframes -> CLIP caption chunks + Keyframe entries.
         keyframes = await mc.to_thread(

@@ -38,14 +38,20 @@ describe("formatTimestamp", () => {
 });
 
 describe("modalityLabel", () => {
-  it("labels known modalities", () => {
-    expect(modalityLabel("transcript")).toBe("transcript");
-    expect(modalityLabel("caption")).toBe("caption");
+  // The query service emits "text" | "ocr" | "asr" | "caption" (query.proto,
+  // services/enrich). The friendly labels must map to those real values.
+  it("labels the modalities the pipeline actually emits", () => {
+    expect(modalityLabel("asr")).toBe("Transcript");
     expect(modalityLabel("ocr")).toBe("OCR");
-    expect(modalityLabel("visual")).toBe("visual");
+    expect(modalityLabel("caption")).toBe("Image");
   });
 
-  it("passes through unknown modalities as-is", () => {
+  it("does not render the ASR token raw (it is a friendly badge)", () => {
+    expect(modalityLabel("asr")).not.toBe("asr");
+  });
+
+  it("passes through 'text', unknown, and empty modalities as-is", () => {
+    expect(modalityLabel("text")).toBe("text");
     expect(modalityLabel("something-new")).toBe("something-new");
     expect(modalityLabel("")).toBe("");
   });

@@ -113,14 +113,18 @@ def fake_thumbnailer(width=800, height=600):
 
 class FakeVideo:
     def __init__(self, info=None, audio=b"wav-bytes", keyframes=None):
-        self._info = info or mc.VideoInfo(duration_ms=30000, width=1920, height=1080)
+        self._info = info or mc.VideoInfo(
+            duration_ms=30000, width=1920, height=1080, has_audio=True
+        )
         self._audio = audio
         self._keyframes = keyframes if keyframes is not None else []
+        self.extract_audio_calls = 0
 
     def probe(self, _video, _content_type):
         return self._info
 
     def extract_audio(self, _video, _content_type):
+        self.extract_audio_calls += 1
         return self._audio
 
     def extract_keyframes(self, _video, _content_type, max_keyframes):
@@ -327,7 +331,7 @@ async def test_video_produces_asr_and_keyframe_chunks_and_poster():
     clip = FakeClip()
     store = FakeStore(data=b"mp4-bytes", content_type="video/mp4")
     video = FakeVideo(
-        info=mc.VideoInfo(duration_ms=30000, width=1920, height=1080),
+        info=mc.VideoInfo(duration_ms=30000, width=1920, height=1080, has_audio=True),
         audio=b"wav",
         keyframes=[
             mc.KeyframeImage(ts_ms=2000, jpeg=b"frame-0"),
@@ -376,6 +380,52 @@ async def test_video_caps_keyframes_at_max():
     out = parse(await handler.enrich(doc))
     assert len(chunks_by_modality(out, MOD_CAPTION)) == 3
     assert len(out.media.keyframes) == 3
+
+
+async def test_video_with_no_audio_stream_indexes_visual_content_without_transcribing():
+    """A silent / audio-less video must index keyframes + metadata, NOT dead-letter.
+
+    faster-whisper errors on an audio-less input; if transcription were attempted
+    unconditionally the whole document would dead-letter and lose its keyframe/CLIP
+    indexing. With VideoInfo.has_audio=False the audio arm is skipped entirely (no
+    extract_audio, no transcribe) and the visual arm still produces.
+    """
+    clip = FakeClip()
+    store = FakeStore(data=b"mp4-bytes", content_type="video/mp4")
+    video = FakeVideo(
+        info=mc.VideoInfo(duration_ms=8000, width=1280, height=720, has_audio=False),
+        keyframes=[
+            mc.KeyframeImage(ts_ms=1000, jpeg=b"frame-0"),
+            mc.KeyframeImage(ts_ms=4000, jpeg=b"frame-1"),
+        ],
+    )
+
+    def transcriber_must_not_be_called(_audio, _content_type):
+        raise AssertionError("transcription must not be attempted on an audio-less video")
+
+    handler = make_handler(
+        clip=clip, store=store, video=video, transcriber=transcriber_must_not_be_called
+    )
+    doc = make_media_doc(document_pb2.VIDEO, content_type="video/mp4")
+
+    # Enrich succeeds (does NOT raise / dead-letter) and returns serialized bytes.
+    out = parse(await handler.enrich(doc))
+
+    # The audio arm was skipped entirely: no extract_audio, no transcription.
+    assert video.extract_audio_calls == 0
+    assert chunks_by_modality(out, MOD_ASR) == []
+    assert not out.media.transcript_lang
+
+    # The visual arm still produced keyframe/caption chunks + MediaInfo.
+    caption = chunks_by_modality(out, MOD_CAPTION)
+    assert len(caption) == 2
+    assert [c.start_ms for c in caption] == [1000, 4000]
+    assert all(len(c.embedding) == CLIP_DIM for c in caption)
+    assert clip.images == [b"frame-0", b"frame-1"]
+    assert out.media.width == 1280 and out.media.height == 720
+    assert out.media.duration_ms == 8000
+    assert len(out.media.keyframes) == 2
+    assert out.media.thumbnail.key == f"{TENANT}/thumb/doc-1.jpg"
 
 
 async def test_video_no_keyframes_still_produces_asr():

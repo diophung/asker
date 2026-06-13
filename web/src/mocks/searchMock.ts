@@ -52,7 +52,7 @@ export const imageHitMock: SearchResponse["hits"][number] = {
   thumbnail_key: "tenants/t1/thumbs/img1.jpg",
 };
 
-/** A VIDEO hit matched on a transcript chunk at 1:23 (83000ms). */
+/** A VIDEO hit matched on an ASR transcript chunk at 1:23 (83000ms). */
 export const videoHitMock: SearchResponse["hits"][number] = {
   doc_id: "vid00000000000000000000000000000000000000000000000000000000000002",
   connector_id: "upload",
@@ -65,7 +65,7 @@ export const videoHitMock: SearchResponse["hits"][number] = {
   metadata: {},
   start_ms: 83000,
   end_ms: 91000,
-  modality: "transcript",
+  modality: "asr",
   thumbnail_key: "tenants/t1/thumbs/vid2.jpg",
 };
 

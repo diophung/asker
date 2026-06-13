@@ -2,10 +2,14 @@
 // originals. Objects live under the key "<tenant_id>/<key>" inside a single
 // bucket and every payload is envelope-encrypted with the tenant's DEK
 // (platform/crypto) BEFORE it reaches the object store, so the store only
-// ever holds ciphertext. Reads fail closed: a Get whose BlobRef key is not
-// prefixed with the caller's tenant is rejected before any network I/O, the
-// tenant-bound AEAD refuses cross-tenant ciphertext, and the decrypted
-// plaintext must match the BlobRef's sha256.
+// ever holds ciphertext. Reads fail closed: a key that is not under the
+// caller's "<tenant>/" prefix — or that carries a "."/".."/empty path segment
+// that could traverse out of it — is rejected before any network I/O, the
+// tenant-bound AEAD refuses cross-tenant ciphertext, and Get additionally
+// requires the decrypted plaintext to match the BlobRef's sha256. GetByKey
+// reads by object key alone (for callers like the gateway that hold a
+// thumbnail key but no sha256); the AEAD's tenant-bound authentication makes a
+// separate digest check redundant there.
 //
 // The wire transport is github.com/minio/minio-go/v7 (minio.go); the
 // unexported objectAPI seam is exactly the three calls Store needs
@@ -29,6 +33,10 @@ import (
 
 // defaultBucket is used when Config.Bucket is empty.
 const defaultBucket = "asker-blobs"
+
+// defaultContentType is returned by GetByKey when the object store reports no
+// Content-Type for the object.
+const defaultContentType = "application/octet-stream"
 
 var (
 	// ErrNotFound is returned by Get when the referenced object does not
@@ -69,9 +77,10 @@ type objectAPI interface {
 	ensureBucket(ctx context.Context, bucket string) error
 	// putObject stores data (already ciphertext) under bucket/key.
 	putObject(ctx context.Context, bucket, key, contentType string, data []byte) error
-	// getObject fetches bucket/key, returning ErrNotFound (possibly
+	// getObject fetches bucket/key, returning the stored bytes and the
+	// object's stored Content-Type. It returns ErrNotFound (possibly
 	// wrapped) when the object does not exist.
-	getObject(ctx context.Context, bucket, key string) ([]byte, error)
+	getObject(ctx context.Context, bucket, key string) (data []byte, contentType string, err error)
 }
 
 // Store is a tenant-encrypted blob store over one S3-compatible bucket.
@@ -167,11 +176,11 @@ func (s *Store) Get(ctx context.Context, tc tenancy.Context, ref *askerv1.BlobRe
 	if ref.GetSha256() == "" {
 		return nil, errors.New("blob: get: blob ref carries no sha256")
 	}
-	if prefix := string(tc.TenantID()) + "/"; !strings.HasPrefix(ref.GetKey(), prefix) {
-		return nil, fmt.Errorf("blob: get %q for tenant %q: %w", ref.GetKey(), tc.TenantID(), ErrTenantMismatch)
+	if err := checkTenantKey(tc, ref.GetKey()); err != nil {
+		return nil, fmt.Errorf("blob: get %q for tenant %q: %w", ref.GetKey(), tc.TenantID(), err)
 	}
 
-	ciphertext, err := s.api.getObject(ctx, s.bucket, ref.GetKey())
+	ciphertext, _, err := s.api.getObject(ctx, s.bucket, ref.GetKey())
 	if err != nil {
 		return nil, fmt.Errorf("blob: get %q: %w", ref.GetKey(), err)
 	}
@@ -184,6 +193,64 @@ func (s *Store) Get(ctx context.Context, tc tenancy.Context, ref *askerv1.BlobRe
 		return nil, fmt.Errorf("blob: get %q: %w", ref.GetKey(), ErrChecksumMismatch)
 	}
 	return plaintext, nil
+}
+
+// GetByKey fetches and decrypts the blob at key for the tenant in tc, using
+// ONLY the object key — callers that hold a thumbnail/keyframe key (the
+// gateway, the UI) never have the plaintext sha256, so they cannot use Get.
+// It returns the decrypted bytes and the object's stored Content-Type,
+// defaulting to "application/octet-stream" when the store reports none.
+//
+// No sha256 is verified: the tenant ID is bound as AEAD additional data at
+// encrypt time, so a successful Decrypt already proves the ciphertext was
+// written for this tenant and is intact — a separate digest check would add
+// nothing. GetByKey still fails closed BEFORE any I/O: key must be non-empty,
+// must carry no "."/".."/empty path segments (no traversal out of the
+// prefix), and must lie under the caller's "<tenant>/" prefix; a foreign or
+// crafted key never reaches the object store.
+func (s *Store) GetByKey(ctx context.Context, tc tenancy.Context, key string) (data []byte, contentType string, err error) {
+	if tc.TenantID() == "" {
+		return nil, "", fmt.Errorf("blob: get by key: %w", tenancy.ErrNoTenant)
+	}
+	if key == "" {
+		return nil, "", errors.New("blob: get by key: empty key")
+	}
+	if err := checkTenantKey(tc, key); err != nil {
+		return nil, "", fmt.Errorf("blob: get by key %q for tenant %q: %w", key, tc.TenantID(), err)
+	}
+
+	ciphertext, storedContentType, err := s.api.getObject(ctx, s.bucket, key)
+	if err != nil {
+		return nil, "", fmt.Errorf("blob: get by key %q: %w", key, err)
+	}
+	plaintext, err := s.cipher.Decrypt(ctx, tc, ciphertext)
+	if err != nil {
+		return nil, "", fmt.Errorf("blob: get by key %q: %w", key, err)
+	}
+	if storedContentType == "" {
+		storedContentType = defaultContentType
+	}
+	return plaintext, storedContentType, nil
+}
+
+// checkTenantKey is the fail-closed gate every read shares: the key must lie
+// under the caller's "<tenant>/" prefix AND the remainder after that prefix
+// must be a valid (no "."/".."/empty-segment) key. The two checks together
+// reject both a foreign prefix and a "<tenant>/../<other>/x" traversal that
+// HasPrefix alone would wave through — without the segment check such a key
+// passes the prefix test yet resolves outside the tenant once the object
+// store normalizes the path. It returns ErrTenantMismatch so callers map a
+// crafted or foreign key to the same "not yours" outcome as a genuine
+// cross-tenant key. Pure: no I/O, so it can run before any network call.
+func checkTenantKey(tc tenancy.Context, key string) error {
+	prefix := string(tc.TenantID()) + "/"
+	if !strings.HasPrefix(key, prefix) {
+		return ErrTenantMismatch
+	}
+	if !validKey(key[len(prefix):]) {
+		return ErrTenantMismatch
+	}
+	return nil
 }
 
 // validKey accepts non-empty, relative, slash-separated keys with no empty,

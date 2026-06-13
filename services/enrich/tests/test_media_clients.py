@@ -8,6 +8,8 @@ ffmpeg, tesseract, Pillow) are NOT invoked here — only their pure helpers
 
 import base64
 import json
+import subprocess
+import sys
 
 import httpx
 import pytest
@@ -209,3 +211,88 @@ def test_parse_showinfo_pts():
 )
 def test_suffix_for(ct, default, expected):
     assert mc._suffix_for(ct, default) == expected
+
+
+# --- _run subprocess timeout ------------------------------------------------
+
+
+def test_run_passes_timeout_to_subprocess_and_returns_stdout():
+    """_run forwards an explicit timeout= to the runner so no call is unbounded."""
+    seen = {}
+
+    def fake_runner(args, *, capture_output, check, timeout):
+        seen["args"] = args
+        seen["capture_output"] = capture_output
+        seen["check"] = check
+        seen["timeout"] = timeout
+        return subprocess.CompletedProcess(args, 0, stdout=b"out-bytes", stderr=b"err-bytes")
+
+    out = mc._run(["ffprobe", "x"], "ffprobe", timeout=7.5, runner=fake_runner)
+    assert out == "out-bytes"
+    assert seen["timeout"] == 7.5  # an explicit bound is always passed
+    assert seen["capture_output"] is True
+    assert seen["check"] is True
+
+
+def test_run_timeout_raises_media_error_via_fake_runner():
+    """An expired subprocess (TimeoutExpired) becomes MediaError -> retry/dead-letter."""
+
+    def hanging_runner(args, *, capture_output, check, timeout):
+        raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+    with pytest.raises(mc.MediaError, match="timed out after"):
+        mc._run(["ffmpeg", "hang"], "ffmpeg keyframes", timeout=0.01, runner=hanging_runner)
+
+
+def test_run_timeout_raises_media_error_on_real_sleep():
+    """A real child that outlives a tiny timeout is killed and surfaces MediaError.
+
+    Uses the test interpreter to sleep — never spawns ffmpeg — so the timeout
+    path is exercised end-to-end through subprocess.run without any binary.
+    """
+    args = [sys.executable, "-c", "import time; time.sleep(5)"]
+    with pytest.raises(mc.MediaError, match="timed out after"):
+        mc._run(args, "ffmpeg audio extract", timeout=0.2)
+
+
+def test_ffmpeg_extractor_threads_timeout_into_run(monkeypatch):
+    """FFmpegVideoExtractor(timeout=...) reaches the underlying _run call."""
+    captured = {}
+
+    def fake_run(args, what, capture_stderr=False, timeout=mc._FFMPEG_TIMEOUT, runner=None):
+        captured["timeout"] = timeout
+        return json.dumps({"streams": [], "format": {}})
+
+    monkeypatch.setattr(mc, "_run", fake_run)
+    extractor = mc.FFmpegVideoExtractor(timeout=42)
+    extractor.probe(b"video-bytes", "video/mp4")
+    assert captured["timeout"] == 42
+
+
+# --- probe() audio-stream detection -----------------------------------------
+
+
+def test_probe_sets_has_audio_when_audio_stream_present(monkeypatch):
+    meta = {
+        "streams": [
+            {"codec_type": "video", "width": 1280, "height": 720},
+            {"codec_type": "audio"},
+        ],
+        "format": {"duration": "12.5"},
+    }
+    monkeypatch.setattr(mc, "_run", lambda *a, **k: json.dumps(meta))
+    info = mc.FFmpegVideoExtractor().probe(b"v", "video/mp4")
+    assert info.has_audio is True
+    assert info.width == 1280 and info.height == 720
+    assert info.duration_ms == 12500
+
+
+def test_probe_has_audio_false_when_no_audio_stream(monkeypatch):
+    meta = {
+        "streams": [{"codec_type": "video", "width": 640, "height": 480}],
+        "format": {"duration": "8"},
+    }
+    monkeypatch.setattr(mc, "_run", lambda *a, **k: json.dumps(meta))
+    info = mc.FFmpegVideoExtractor().probe(b"v", "video/mp4")
+    assert info.has_audio is False
+    assert info.width == 640 and info.height == 480

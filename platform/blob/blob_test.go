@@ -42,10 +42,11 @@ func testCipher(t *testing.T) *crypto.TenantCipher {
 
 // fakeAPI is an in-memory objectAPI standing in for MinIO.
 type fakeAPI struct {
-	mu          sync.Mutex
-	objects     map[string][]byte // "<bucket>/<key>" -> stored bytes
-	ensureCalls []string
-	getCalls    int
+	mu           sync.Mutex
+	objects      map[string][]byte // "<bucket>/<key>" -> stored bytes
+	contentTypes map[string]string // "<bucket>/<key>" -> stored Content-Type
+	ensureCalls  []string
+	getCalls     int
 
 	ensureErr error
 	putErr    error
@@ -53,7 +54,7 @@ type fakeAPI struct {
 }
 
 func newFakeAPI() *fakeAPI {
-	return &fakeAPI{objects: make(map[string][]byte)}
+	return &fakeAPI{objects: make(map[string][]byte), contentTypes: make(map[string]string)}
 }
 
 func (f *fakeAPI) ensureBucket(_ context.Context, bucket string) error {
@@ -63,28 +64,29 @@ func (f *fakeAPI) ensureBucket(_ context.Context, bucket string) error {
 	return f.ensureErr
 }
 
-func (f *fakeAPI) putObject(_ context.Context, bucket, key, _ string, data []byte) error {
+func (f *fakeAPI) putObject(_ context.Context, bucket, key, contentType string, data []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.putErr != nil {
 		return f.putErr
 	}
 	f.objects[bucket+"/"+key] = bytes.Clone(data)
+	f.contentTypes[bucket+"/"+key] = contentType
 	return nil
 }
 
-func (f *fakeAPI) getObject(_ context.Context, bucket, key string) ([]byte, error) {
+func (f *fakeAPI) getObject(_ context.Context, bucket, key string) ([]byte, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getCalls++
 	if f.getErr != nil {
-		return nil, f.getErr
+		return nil, "", f.getErr
 	}
 	data, ok := f.objects[bucket+"/"+key]
 	if !ok {
-		return nil, fmt.Errorf("get object %q: %w", key, ErrNotFound)
+		return nil, "", fmt.Errorf("get object %q: %w", key, ErrNotFound)
 	}
-	return bytes.Clone(data), nil
+	return bytes.Clone(data), f.contentTypes[bucket+"/"+key], nil
 }
 
 // stored returns the raw bytes the fake holds for bucket/key.
@@ -377,6 +379,140 @@ func TestGetInvalidInputs(t *testing.T) {
 	foreign := &askerv1.BlobRef{Bucket: "other-bucket", Key: "tenant-a/k", Sha256: "00"}
 	if _, err := s.Get(ctx, tc, foreign); err == nil {
 		t.Error("Get with foreign bucket succeeded, want fail-closed error")
+	}
+}
+
+func TestGetByKeyRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	s := newTestStore(t, api)
+	tc := testTenant(t, "tenant-a")
+	plaintext := []byte("the decrypted thumbnail bytes")
+
+	// Put then GetByKey returns the bytes WITHOUT any sha256 — the gateway/UI
+	// path holds only the thumbnail key.
+	ref, err := s.Put(ctx, tc, "thumb/abc.jpg", "image/jpeg", plaintext)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, contentType, err := s.GetByKey(ctx, tc, ref.GetKey())
+	if err != nil {
+		t.Fatalf("GetByKey: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Errorf("GetByKey = %q, want %q", got, plaintext)
+	}
+	if contentType != "image/jpeg" {
+		t.Errorf("GetByKey content-type = %q, want image/jpeg", contentType)
+	}
+}
+
+func TestGetByKeyDefaultsContentType(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	s := newTestStore(t, api)
+	tc := testTenant(t, "tenant-a")
+
+	// Object stored with no Content-Type: GetByKey defaults to octet-stream.
+	ref, err := s.Put(ctx, tc, "raw.bin", "", []byte("payload"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	_, contentType, err := s.GetByKey(ctx, tc, ref.GetKey())
+	if err != nil {
+		t.Fatalf("GetByKey: %v", err)
+	}
+	if contentType != defaultContentType {
+		t.Errorf("GetByKey content-type = %q, want %q", contentType, defaultContentType)
+	}
+}
+
+func TestGetByKeyFailsClosedWithoutTenant(t *testing.T) {
+	s := newTestStore(t, newFakeAPI())
+	if _, _, err := s.GetByKey(context.Background(), tenancy.Context{}, "tenant-a/k"); !errors.Is(err, tenancy.ErrNoTenant) {
+		t.Errorf("GetByKey with zero tenant: err = %v, want ErrNoTenant", err)
+	}
+}
+
+func TestGetByKeyRejectsEmptyKey(t *testing.T) {
+	s := newTestStore(t, newFakeAPI())
+	tc := testTenant(t, "tenant-a")
+	if _, _, err := s.GetByKey(context.Background(), tc, ""); err == nil {
+		t.Error("GetByKey with empty key succeeded, want fail-closed error")
+	}
+}
+
+func TestGetByKeyCrossTenantDenied(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	s := newTestStore(t, api)
+	tenantA := testTenant(t, "tenant-a")
+	tenantB := testTenant(t, "tenant-b")
+
+	ref, err := s.Put(ctx, tenantA, "thumb/x.jpg", "image/jpeg", []byte("tenant A thumbnail"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	// Tenant B asks for tenant A's key by key alone: must be denied before I/O.
+	if _, _, err := s.GetByKey(ctx, tenantB, ref.GetKey()); !errors.Is(err, ErrTenantMismatch) {
+		t.Errorf("cross-tenant GetByKey: err = %v, want ErrTenantMismatch", err)
+	}
+	if api.getCalls != 0 {
+		t.Errorf("cross-tenant GetByKey hit the object store %d times; must fail closed before I/O", api.getCalls)
+	}
+}
+
+// TestGetByKeyRejectsTraversal proves a crafted key cannot escape the tenant
+// prefix via "../": "<tenant>/../<other>/x" passes a naive HasPrefix yet
+// resolves outside the prefix, so it must be rejected (before any I/O) rather
+// than reaching the object store.
+func TestGetByKeyRejectsTraversal(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	s := newTestStore(t, api)
+	tc := testTenant(t, "tenant-a")
+
+	for _, key := range []string{
+		"tenant-a/../tenant-b/secret",
+		"tenant-a/..",
+		"tenant-a/./x",
+		"tenant-a//x",
+		"tenant-a/sub/../../tenant-b/x",
+	} {
+		if _, _, err := s.GetByKey(ctx, tc, key); !errors.Is(err, ErrTenantMismatch) {
+			t.Errorf("GetByKey(%q): err = %v, want ErrTenantMismatch", key, err)
+		}
+	}
+	if api.getCalls != 0 {
+		t.Errorf("traversal GetByKey hit the object store %d times; must fail closed before I/O", api.getCalls)
+	}
+
+	// A legitimate nested key still passes the gate (reaches I/O, then 404s).
+	if _, _, err := s.GetByKey(ctx, tc, "tenant-a/thumb/id.jpg"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("legitimate nested GetByKey: err = %v, want ErrNotFound (passed the gate)", err)
+	}
+}
+
+// TestGetRejectsTraversal proves Store.Get (the sha256 path) also rejects a
+// "../" traversal key before any I/O — defense in depth, not just the AAD at
+// decrypt time.
+func TestGetRejectsTraversal(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	s := newTestStore(t, api)
+	tc := testTenant(t, "tenant-a")
+
+	// Craft a ref whose key passes HasPrefix("tenant-a/") but traverses out.
+	forged := &askerv1.BlobRef{
+		Bucket: "test-bucket",
+		Key:    "tenant-a/../tenant-b/secret",
+		Sha256: strings.Repeat("00", 32),
+	}
+	if _, err := s.Get(ctx, tc, forged); !errors.Is(err, ErrTenantMismatch) {
+		t.Errorf("Get with traversal key: err = %v, want ErrTenantMismatch", err)
+	}
+	if api.getCalls != 0 {
+		t.Errorf("traversal Get hit the object store %d times; must fail closed before I/O", api.getCalls)
 	}
 }
 

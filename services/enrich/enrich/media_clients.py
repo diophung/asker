@@ -35,6 +35,13 @@ TENANT_HEADER = "x-asker-tenant"
 
 _HTTP_TIMEOUT = 120.0  # decrypt/store + a CLIP forward pass can be slow on CPU
 
+# Wall-clock bound on any single ffmpeg/ffprobe invocation. A malformed or
+# adversarial video can make ffmpeg spin or block forever; without a timeout it
+# would hang the worker (and its partition) indefinitely. On expiry the subprocess
+# is killed and the call raises MediaError, so the record flows through the
+# worker's retry/dead-letter loop instead (ADR-013).
+_FFMPEG_TIMEOUT = 120.0
+
 
 class MediaError(Exception):
     """A media collaborator failed; routed through the worker retry/dead-letter."""
@@ -95,11 +102,17 @@ class KeyframeImage:
 
 @dataclass(frozen=True)
 class VideoInfo:
-    """ffprobe-derived video metadata."""
+    """ffprobe-derived video metadata.
+
+    has_audio reflects whether ffprobe reported any audio stream; a video with
+    none (silent screen capture, GIF-style clip) must still index its visual
+    content rather than dead-letter on a doomed transcription attempt (ADR-013).
+    """
 
     duration_ms: int = 0
     width: int = 0
     height: int = 0
+    has_audio: bool = False
 
 
 @dataclass(frozen=True)
@@ -382,10 +395,16 @@ class WhisperTranscriber:
 
 
 class FFmpegVideoExtractor:
-    """VideoExtractor shelling out to ffmpeg/ffprobe (the binaries in the image)."""
+    """VideoExtractor shelling out to ffmpeg/ffprobe (the binaries in the image).
 
-    def __init__(self, scene_threshold: float = 0.4) -> None:
+    ``timeout`` caps each ffmpeg/ffprobe invocation so a malformed or adversarial
+    video cannot hang the worker indefinitely (ADR-013); on expiry the call raises
+    MediaError and the record routes to retry/dead-letter.
+    """
+
+    def __init__(self, scene_threshold: float = 0.4, timeout: float = _FFMPEG_TIMEOUT) -> None:
         self._scene_threshold = scene_threshold
+        self._timeout = timeout
 
     def probe(self, video: bytes, content_type: str) -> VideoInfo:
         suffix = _suffix_for(content_type, default=".mp4")
@@ -402,23 +421,32 @@ class FFmpegVideoExtractor:
                 "-show_streams",
                 tmp.name,
             ]
-            out = _run(args, "ffprobe")
+            out = _run(args, "ffprobe", timeout=self._timeout)
         try:
             meta = json.loads(out)
         except ValueError as exc:
             raise MediaError(f"ffprobe returned non-JSON: {exc}") from exc
         width = height = 0
+        has_video = has_audio = False
         for stream in meta.get("streams", []):
-            if stream.get("codec_type") == "video":
+            codec_type = stream.get("codec_type")
+            if codec_type == "video" and not has_video:
                 width = int(stream.get("width", 0) or 0)
                 height = int(stream.get("height", 0) or 0)
-                break
+                has_video = True
+            elif codec_type == "audio":
+                has_audio = True
         duration_s = 0.0
         try:
             duration_s = float(meta.get("format", {}).get("duration", 0.0) or 0.0)
         except (TypeError, ValueError):
             duration_s = 0.0
-        return VideoInfo(duration_ms=int(duration_s * 1000), width=width, height=height)
+        return VideoInfo(
+            duration_ms=int(duration_s * 1000),
+            width=width,
+            height=height,
+            has_audio=has_audio,
+        )
 
     def extract_audio(self, video: bytes, content_type: str) -> bytes:
         in_suffix = _suffix_for(content_type, default=".mp4")
@@ -442,7 +470,7 @@ class FFmpegVideoExtractor:
                 "wav",
                 str(dst),
             ]
-            _run(args, "ffmpeg audio extract")
+            _run(args, "ffmpeg audio extract", timeout=self._timeout)
             if not dst.exists():
                 raise MediaError("ffmpeg produced no audio track")
             return dst.read_bytes()
@@ -486,7 +514,7 @@ class FFmpegVideoExtractor:
             str(max_keyframes),
             pattern,
         ]
-        stderr = _run(args, "ffmpeg keyframes", capture_stderr=True)
+        stderr = _run(args, "ffmpeg keyframes", capture_stderr=True, timeout=self._timeout)
         timestamps = _parse_showinfo_pts(stderr)
         files = sorted(workdir.glob("kf-*.jpg"))
         out: list[KeyframeImage] = []
@@ -537,19 +565,34 @@ def _parse_showinfo_pts(stderr: str) -> list[float]:
     return times
 
 
-def _run(args: list[str], what: str, capture_stderr: bool = False) -> str:
+def _run(
+    args: list[str],
+    what: str,
+    capture_stderr: bool = False,
+    timeout: float = _FFMPEG_TIMEOUT,
+    runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+) -> str:
     """Run a trusted, fixed-arg ffmpeg/ffprobe command; raise MediaError on failure.
 
     Returns stdout, or stderr when capture_stderr (ffmpeg writes showinfo there).
+    A per-call ``timeout`` (seconds) bounds the wall clock: on expiry the child
+    is killed and MediaError is raised, so a hung/adversarial video routes to
+    retry/dead-letter rather than blocking the worker forever. ``runner`` is the
+    subprocess.run-shaped callable, injectable so tests can simulate a timeout
+    without spawning a real process.
     """
     try:
-        proc = subprocess.run(  # noqa: S603 — args are fixed, not shell-interpolated
+        # args are fixed, not shell-interpolated (the default runner is subprocess.run).
+        proc = runner(
             args,
             capture_output=True,
             check=True,
+            timeout=timeout,
         )
     except FileNotFoundError as exc:
         raise MediaError(f"{what}: binary not found ({args[0]})") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise MediaError(f"{what} timed out after {timeout:g}s") from exc
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b"").decode("utf-8", "replace")[-500:]
         raise MediaError(f"{what} exited {exc.returncode}: {tail}") from exc

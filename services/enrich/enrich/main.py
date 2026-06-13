@@ -132,7 +132,7 @@ async def run(config: Config) -> None:
         clip=clip_client,
         ocr=tesseract_ocr,
         transcriber=WhisperTranscriber(config.whisper_model, config.whisper_compute_type),
-        video=FFmpegVideoExtractor(),
+        video=FFmpegVideoExtractor(timeout=config.ffmpeg_timeout_s),
         thumbnailer=pillow_thumbnailer(config.thumbnail_max_px),
         max_keyframes=config.max_keyframes,
     )

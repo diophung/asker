@@ -23,6 +23,7 @@ def test_defaults_with_required_dims():
     assert config.whisper_compute_type == "int8"
     assert config.max_keyframes == 20
     assert config.thumbnail_max_px == 512
+    assert config.ffmpeg_timeout_s == 120  # ffmpeg/ffprobe wall-clock bound (ADR-013)
 
 
 def test_embedding_dim_missing_fails_fast():
@@ -51,6 +52,7 @@ def test_media_urls_and_knob_overrides():
             "WHISPER_COMPUTE_TYPE": "float32",
             "MAX_KEYFRAMES": "5",
             "THUMBNAIL_MAX_PX": "256",
+            "FFMPEG_TIMEOUT_S": "30",
         }
     )
     assert config.clip_url == "http://clip.local:9800"  # trailing slash stripped
@@ -59,9 +61,10 @@ def test_media_urls_and_knob_overrides():
     assert config.whisper_compute_type == "float32"
     assert config.max_keyframes == 5
     assert config.thumbnail_max_px == 256
+    assert config.ffmpeg_timeout_s == 30
 
 
-@pytest.mark.parametrize("name", ["MAX_KEYFRAMES", "THUMBNAIL_MAX_PX"])
+@pytest.mark.parametrize("name", ["MAX_KEYFRAMES", "THUMBNAIL_MAX_PX", "FFMPEG_TIMEOUT_S"])
 @pytest.mark.parametrize("raw", ["abc", "0", "-3"])
 def test_optional_int_knobs_reject_bad_values(name, raw):
     with pytest.raises(ConfigError, match=name):

@@ -70,7 +70,7 @@ describe("ResultCard — IMAGE hits", () => {
 });
 
 describe("ResultCard — VIDEO hits", () => {
-  it("renders a formatted timestamp deep-link and a transcript badge", async () => {
+  it("renders a formatted timestamp deep-link and an ASR transcript badge", async () => {
     const fetchThumbnail = vi.fn(async () => "blob:mock-video-poster");
 
     const { container } = render(
@@ -86,7 +86,7 @@ describe("ResultCard — VIDEO hits", () => {
     expect(jump?.getAttribute("href")).toBe("#t=83");
 
     expect(container.querySelector(".badge-modality")?.textContent).toBe(
-      "transcript",
+      "Transcript",
     );
 
     // Poster still loads via fetchThumbnail.

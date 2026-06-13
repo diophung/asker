@@ -100,6 +100,9 @@ class Config:
     max_keyframes: int = 20
     # Longest edge of a generated thumbnail / poster frame, in pixels.
     thumbnail_max_px: int = 512
+    # Wall-clock bound (seconds) on each ffmpeg/ffprobe invocation so a malformed
+    # or adversarial video cannot hang the worker indefinitely (ADR-013).
+    ffmpeg_timeout_s: int = 120
     health_host: str = "0.0.0.0"  # noqa: S104 — container-internal health listener
     health_port: int = 9601
     max_poll_records: int = 32
@@ -142,6 +145,7 @@ class Config:
 
         max_keyframes = cls._optional_positive_int(env, "MAX_KEYFRAMES", 20)
         thumbnail_max_px = cls._optional_positive_int(env, "THUMBNAIL_MAX_PX", 512)
+        ffmpeg_timeout_s = cls._optional_positive_int(env, "FFMPEG_TIMEOUT_S", 120)
 
         host, port = health_addr_from_env(env)
         return cls(
@@ -155,6 +159,7 @@ class Config:
             whisper_compute_type=whisper_compute_type,
             max_keyframes=max_keyframes,
             thumbnail_max_px=thumbnail_max_px,
+            ffmpeg_timeout_s=ffmpeg_timeout_s,
             health_host=host,
             health_port=port,
         )

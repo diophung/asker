@@ -33,19 +33,20 @@ export function formatTimestamp(ms: number): string {
 }
 
 /**
- * Human label for the chunk modality reported by the query service. Unknown
- * values fall through to the raw string (already plain text, rendered safely).
+ * Human label for the chunk modality reported by the query service. The query
+ * service emits one of "text" | "ocr" | "asr" | "caption" (see query.proto and
+ * services/enrich). "text" is the default arm and carries no badge-worthy label,
+ * so it (and any unknown value) falls through to the raw string, which is
+ * already plain text and rendered safely.
  */
 export function modalityLabel(modality: string): string {
   switch (modality) {
-    case "transcript":
-      return "transcript";
-    case "caption":
-      return "caption";
+    case "asr":
+      return "Transcript";
     case "ocr":
       return "OCR";
-    case "visual":
-      return "visual";
+    case "caption":
+      return "Image";
     default:
       return modality;
   }
