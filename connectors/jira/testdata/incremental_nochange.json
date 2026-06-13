@@ -3,7 +3,8 @@
     {
       "request": {
         "method": "POST",
-        "path": "/rest/api/3/search"
+        "path": "/rest/api/3/search",
+        "body": "{\"jql\":\"updated \\u003e= '2026/06/10 10:30' order by updated asc\",\"startAt\":0,\"maxResults\":50,\"fields\":[\"summary\",\"description\",\"status\",\"issuetype\",\"priority\",\"project\",\"reporter\",\"assignee\",\"creator\",\"created\",\"updated\",\"comment\"]}"
       },
       "response": {
         "status": 200,

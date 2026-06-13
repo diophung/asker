@@ -47,6 +47,14 @@
         "headers": {"Content-Type": ["application/json"]},
         "body": "{\"ok\":true,\"messages\":[{\"type\":\"message\",\"user\":\"U_BOB\",\"text\":\"hey can you review my PR?\",\"ts\":\"1700000075.000075\",\"team\":\"T1\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
       }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.info", "query": "channel=C100"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"channel\":{\"id\":\"C100\",\"name\":\"general\",\"is_private\":false,\"is_im\":false,\"members\":[\"U_ALICE\",\"U_BOB\"]}}"
+      }
     }
   ]
 }

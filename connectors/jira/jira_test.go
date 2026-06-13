@@ -101,6 +101,12 @@ func TestValidate(t *testing.T) {
 		if strings.Contains(err.Error(), "decrypted-oauth-token") {
 			t.Errorf("Validate error leaked the token: %v", err)
 		}
+		// The error must not echo the upstream Jira response body. The
+		// validate_unauthorized cassette returns this errorMessages string;
+		// surfacing it to the user is an information leak.
+		if strings.Contains(err.Error(), "Client must be authenticated") {
+			t.Errorf("Validate error leaked the upstream Jira response body: %v", err)
+		}
 	})
 
 	t.Run("no token skips round-trip", func(t *testing.T) {

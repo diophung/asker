@@ -9,8 +9,9 @@ import (
 	"github.com/asker/asker/connectors/sdk/connectortest"
 )
 
-// docID is the canonical doc_id for a Jira issue key.
-func docID(key string) string { return sdk.DocID(connectorID, key) }
+// docID is the canonical doc_id for a Jira issue's immutable numeric id (NOT
+// its mutable key) — see issueDocument.
+func docID(id string) string { return sdk.DocID(connectorID, id) }
 
 // TestContract is the M2 exit-criterion contract test: it drives FullSync,
 // IncrementalSync (a change + a tombstone, with the inclusive JQL boundary
@@ -32,7 +33,9 @@ func TestContract(t *testing.T) {
 		ConfigJSON: json.RawMessage(`{}`),
 		Token:      []byte("decrypted-oauth-token"),
 		FullSync: &connectortest.SyncExpectation{
-			WantDocIDs: []string{docID("DEMO-1"), docID("DEMO-2"), docID("DEMO-3")},
+			// doc_ids derive from the immutable numeric issue ids:
+			// DEMO-1=10001, DEMO-2=10002, DEMO-3=10003.
+			WantDocIDs: []string{docID("10001"), docID("10002"), docID("10003")},
 			WantCursor: &fullCursor,
 		},
 	})
@@ -49,8 +52,10 @@ func TestContract(t *testing.T) {
 		Incremental: &connectortest.IncrementalExpectation{
 			FromCursor: sdk.Cursor("updated:2026/06/10 10:30|key:DEMO-2"),
 			SyncExpectation: connectortest.SyncExpectation{
-				WantDocIDs:          []string{docID("DEMO-3"), docID("DEMO-4")},
-				WantTombstoneDocIDs: []string{docID("DEMO-5")},
+				// DEMO-3=10003 changed, DEMO-4=10004 is new, DEMO-5=10005
+				// reached the "Removed" status -> tombstone (all by immutable id).
+				WantDocIDs:          []string{docID("10003"), docID("10004")},
+				WantTombstoneDocIDs: []string{docID("10005")},
 				WantCursor:          &incCursor,
 			},
 		},

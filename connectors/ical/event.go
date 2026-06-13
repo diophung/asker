@@ -23,15 +23,19 @@ const (
 	noTitle = "(no title)"
 )
 
-// nativeID is the source-native id used in the doc_id: "<feedURL>:<UID>". Scoping
-// by feed URL keeps the same UID distinct across two feeds an instance might
-// sync, exactly as the build contract requires.
-func nativeID(feedURL, uid string) string {
-	return feedURL + ":" + uid
+// nativeID is the source-native id used in the doc_id: "<instanceID>:<UID>".
+// Scoping by the hub's stable per-instance id (rather than the raw feed URL)
+// keeps doc_ids stable across feed-URL rotations — many providers embed a
+// rotating private token in the feed URL, so scoping by URL would orphan every
+// document the moment the token rotated. The instance id is stable for the life
+// of the configured instance and still keeps the same UID distinct across two
+// feeds a tenant connects (they are two separate instances).
+func nativeID(instanceID, uid string) string {
+	return instanceID + ":" + uid
 }
 
 // eventDocument maps one VEVENT to the canonical Document: type CALENDAR_EVENT,
-// doc_id sdk.DocID("ical", feedURL+":"+UID), title from SUMMARY, body from
+// doc_id sdk.DocID("ical", instanceID+":"+UID), title from SUMMARY, body from
 // DESCRIPTION + LOCATION, participants from ORGANIZER + ATTENDEE,
 // ts.created/modified from CREATED/LAST-MODIFIED, and a version_etag that changes
 // iff the event changed (SEQUENCE, else LAST-MODIFIED, else a sha256 of the
@@ -39,11 +43,11 @@ func nativeID(feedURL, uid string) string {
 //
 // A canceled event (the statusCancelled STATUS value) yields a tombstone
 // instead (no body) so the pipeline removes the document.
-func (c *Connector) eventDocument(tenant, feedURL string, ev *vevent) *askerv1.Document {
+func (c *Connector) eventDocument(tenant, instanceID string, ev *vevent) *askerv1.Document {
 	uid := strings.TrimSpace(ev.value("UID"))
 
 	if strings.EqualFold(strings.TrimSpace(ev.value("STATUS")), statusCancelled) {
-		return c.tombstoneDocument(tenant, feedURL, ev, uid)
+		return c.tombstoneDocument(tenant, instanceID, ev, uid)
 	}
 
 	title := strings.TrimSpace(ev.value("SUMMARY"))
@@ -53,9 +57,9 @@ func (c *Connector) eventDocument(tenant, feedURL string, ev *vevent) *askerv1.D
 
 	doc := &askerv1.Document{
 		TenantId:       tenant,
-		DocId:          sdk.DocID(connectorID, nativeID(feedURL, uid)),
+		DocId:          sdk.DocID(connectorID, nativeID(instanceID, uid)),
 		ConnectorId:    connectorID,
-		SourceNativeId: nativeID(feedURL, uid),
+		SourceNativeId: nativeID(instanceID, uid),
 		Type:           askerv1.DocType_CALENDAR_EVENT,
 		Title:          title,
 		BodyText:       eventBody(ev),
@@ -71,12 +75,12 @@ func (c *Connector) eventDocument(tenant, feedURL string, ev *vevent) *askerv1.D
 
 // tombstoneDocument builds the deletion Document for a canceled/disappeared
 // event: identity fields plus tombstone.deleted and deleted_at — no body.
-func (c *Connector) tombstoneDocument(tenant, feedURL string, ev *vevent, uid string) *askerv1.Document {
+func (c *Connector) tombstoneDocument(tenant, instanceID string, ev *vevent, uid string) *askerv1.Document {
 	return &askerv1.Document{
 		TenantId:       tenant,
-		DocId:          sdk.DocID(connectorID, nativeID(feedURL, uid)),
+		DocId:          sdk.DocID(connectorID, nativeID(instanceID, uid)),
 		ConnectorId:    connectorID,
-		SourceNativeId: nativeID(feedURL, uid),
+		SourceNativeId: nativeID(instanceID, uid),
 		Type:           askerv1.DocType_CALENDAR_EVENT,
 		VersionEtag:    versionEtag(ev),
 		Tombstone: &askerv1.Tombstone{
@@ -89,13 +93,13 @@ func (c *Connector) tombstoneDocument(tenant, feedURL string, ev *vevent, uid st
 // disappearedTombstone builds a tombstone for a UID that was present at the
 // cursor baseline but is absent from the current feed. We only know its UID, so
 // the version_etag is a stable hash of the UID; the deleted_at marks the poll.
-func (c *Connector) disappearedTombstone(tenant, feedURL, uid string) *askerv1.Document {
+func (c *Connector) disappearedTombstone(tenant, instanceID, uid string) *askerv1.Document {
 	sum := sha256.Sum256([]byte("deleted:" + uid))
 	return &askerv1.Document{
 		TenantId:       tenant,
-		DocId:          sdk.DocID(connectorID, nativeID(feedURL, uid)),
+		DocId:          sdk.DocID(connectorID, nativeID(instanceID, uid)),
 		ConnectorId:    connectorID,
-		SourceNativeId: nativeID(feedURL, uid),
+		SourceNativeId: nativeID(instanceID, uid),
 		Type:           askerv1.DocType_CALENDAR_EVENT,
 		VersionEtag:    hex.EncodeToString(sum[:]),
 		Tombstone: &askerv1.Tombstone{

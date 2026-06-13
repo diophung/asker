@@ -30,6 +30,11 @@
 // the first IncrementalSync continues exactly where the backfill stopped. A
 // chat whose delta endpoint returns 410 Gone reports sdk.ErrCursorExpired, and
 // the hub restarts FullSync (the connector never silently full-syncs itself).
+//
+// Each IncrementalSync pass re-lists the user's chats so it can (a) resolve every
+// replayed chat to its full topic + members (so an edited message keeps its ACL
+// and member participants) and (b) discover, backfill, and prime any chat created
+// after the backfill, adding it to the returned cursor's delta map.
 package msteams
 
 import (

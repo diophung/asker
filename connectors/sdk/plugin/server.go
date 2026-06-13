@@ -58,20 +58,40 @@ func ListenAndServe(ctx context.Context, addr string, c sdk.Connector) error {
 	if err != nil {
 		return err
 	}
+	return serveOn(ctx, lis, c)
+}
+
+// serveOn is the body of ListenAndServe once a listener exists. It is separated
+// so tests can drive a listener whose Accept fails (forcing gs.Serve to return
+// on its own with ctx still live) without racing on real network conditions.
+func serveOn(ctx context.Context, lis net.Listener, c sdk.Connector) error {
 	gs := grpc.NewServer()
 	pluginv1.RegisterConnectorPluginServiceServer(gs, NewServer(c))
+
+	// stopCtx lets the stop goroutine unblock on EITHER ctx cancellation (the
+	// caller shutting us down) OR Serve returning on its own (a listener/serve
+	// error). Without the defer cancel(), a Serve error with ctx still live
+	// would leave the goroutine parked on <-ctx.Done() forever and the <-done
+	// wait would deadlock. Canceling once Serve returns guarantees the
+	// goroutine always unblocks; GracefulStop is a no-op if Serve already
+	// exited.
+	stopCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		<-ctx.Done()
+		<-stopCtx.Done()
 		gs.GracefulStop()
 	}()
 
 	serveErr := gs.Serve(lis)
+	cancel()
 	<-done
-	// A graceful stop returns grpc.ErrServerStopped (or nil); surface ctx
-	// cancellation as a clean shutdown rather than an error.
+	// A graceful stop returns grpc.ErrServerStopped (or nil); surface caller
+	// ctx cancellation as a clean shutdown rather than an error. We check the
+	// caller's ctx (not stopCtx, which we just canceled) so a genuine Serve
+	// failure with the caller ctx still live is reported, not swallowed.
 	if serveErr != nil && ctx.Err() != nil {
 		return nil
 	}

@@ -55,18 +55,37 @@ func newSQLite3Reader(dbPath string) (*sqlite3Reader, error) {
 	return &sqlite3Reader{sqlite3Path: sqlite3Path, dbPath: dbPath}, nil
 }
 
+// sqlite3DBURI builds the connection string the agent hands to sqlite3 for a
+// read-only open of chat.db.
+//
+// We open with mode=ro (a normal read transaction) and NOT immutable=1.
+// immutable=1 promises SQLite the file never changes, so it skips locking and
+// the WAL entirely: against the live, concurrently-written Messages database
+// that risks torn reads and silently drops recently-sent (WAL-resident,
+// not-yet-checkpointed) messages — the freshest ones we most want. mode=ro
+// keeps SQLite's integrity checks and WAL handling on, so a normal read sees
+// WAL-committed recent messages, while still guaranteeing we never write.
+func sqlite3DBURI(dbPath string) string {
+	return "file:" + dbPath + "?mode=ro"
+}
+
+// sqlite3Args builds the argv (after the binary) for a read-only chat query.
+// The -readonly flag is the belt-and-suspenders companion to mode=ro: even if
+// the URI were ever altered, sqlite3 still refuses to open the DB for writing.
+func sqlite3Args(dbURI, query string) []string {
+	return []string{"-json", "-readonly", dbURI, query}
+}
+
 // ReadSince runs the chat query through sqlite3 -json and parses the rows. The
 // database is attached read-only. A non-zero exit from sqlite3 surfaces its
 // stderr (which, for a locked/unauthorized database, names the Full Disk
 // Access problem) — but never the row contents.
 func (r *sqlite3Reader) ReadSince(ctx context.Context, sinceRowID int64) ([]imsg.Row, error) {
 	query := fmt.Sprintf(chatQuery, sinceRowID)
-	// "file:<path>?mode=ro&immutable=1" opens the DB read-only and tolerates
-	// the WAL of the live Messages app without taking a write lock.
-	dbURI := "file:" + r.dbPath + "?mode=ro&immutable=1"
+	dbURI := sqlite3DBURI(r.dbPath)
 
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, r.sqlite3Path, "-json", "-readonly", dbURI, query)
+	cmd := exec.CommandContext(ctx, r.sqlite3Path, sqlite3Args(dbURI, query)...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

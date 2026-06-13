@@ -8,17 +8,23 @@ import (
 // message is one parsed logical WhatsApp message: a sender (empty for a system
 // line), the timestamp the export recorded, and the full text (continuation
 // lines joined with "\n"). lineIndex is the message's ordinal position in the
-// export (0-based), used as a stable per-message id component. format records
+// export (0-based), kept for diagnostics/metadata only — it is deliberately NOT
+// part of the source-native id (a middle insert/delete shifts every later index
+// but must not renumber every later doc_id). occurrence disambiguates EXACT
+// duplicate messages (same sender+timestamp+text) within one export: it is the
+// 0-based count of identical messages seen before this one, so two byte-for-byte
+// identical messages still get distinct, position-independent ids. format records
 // which header shape matched ("bracket" or "dash") for diagnostics.
 type message struct {
-	sender    string
-	text      string
-	sentAt    time.Time
-	hasTime   bool // sentAt parsed successfully
-	rawSentAt string
-	lineIndex int
-	system    bool
-	format    string
+	sender     string
+	text       string
+	sentAt     time.Time
+	hasTime    bool // sentAt parsed successfully
+	rawSentAt  string
+	lineIndex  int
+	occurrence int
+	system     bool
+	format     string
 }
 
 // headerLayouts are the timestamp+sender header shapes WhatsApp's "Export chat"
@@ -123,7 +129,35 @@ func parseExport(body string) []message {
 		})
 		cur = &msgs[len(msgs)-1]
 	}
+	assignOccurrences(msgs)
 	return msgs
+}
+
+// assignOccurrences stamps each message's occurrence index: the 0-based count of
+// byte-for-byte identical messages (same identity tuple as nativeID) seen earlier
+// in the export. This makes a legitimate duplicate (the same person sending the
+// same text at the same timestamp twice) resolve to a distinct, stable id, while
+// a unique message always keeps occurrence 0 regardless of how many UNRELATED
+// messages precede it — so a middle insert/delete cannot renumber it.
+func assignOccurrences(msgs []message) {
+	seen := make(map[string]int, len(msgs))
+	for i := range msgs {
+		key := identityKey(msgs[i])
+		msgs[i].occurrence = seen[key]
+		seen[key]++
+	}
+}
+
+// identityKey is the position-independent identity of a message: the same
+// content/identity tuple nativeID hashes (sender, raw timestamp, text), with
+// sender and text sanitized to valid UTF-8 exactly as toDocument sanitizes them
+// before hashing. Two messages share a key iff they are exact duplicates that
+// the occurrence index must disambiguate — and iff they would otherwise produce
+// the same nativeID hash, so the occurrence count tracks real id collisions.
+func identityKey(m message) string {
+	return strings.ToValidUTF8(m.sender, "") + "\x00" +
+		m.rawSentAt + "\x00" +
+		strings.ToValidUTF8(m.text, "")
 }
 
 // parsedTime carries a parsed timestamp plus the raw header text and whether the

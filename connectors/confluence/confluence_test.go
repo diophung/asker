@@ -124,6 +124,81 @@ func TestValidate(t *testing.T) {
 	if strings.Contains(err.Error(), "bad-token") {
 		t.Errorf("Validate error leaked the token: %v", err)
 	}
+	// The error must NOT echo the upstream Confluence response body back to the
+	// tenant: that is an info leak and a confusing surface. The 401 cassette
+	// body is {"statusCode":401,"message":"Unauthorized; scope does not match"};
+	// none of its distinctive fragments may appear in the user-facing message.
+	for _, leaked := range []string{
+		"Unauthorized; scope does not match",
+		"scope does not match",
+		"statusCode",
+		"message",
+	} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Errorf("Validate error leaked upstream response body fragment %q: %v", leaked, err)
+		}
+	}
+	// And it must still be a usable, generic credential/reachability message.
+	if !strings.Contains(err.Error(), "credential") {
+		t.Errorf("Validate error should be a generic credential/reachability message, got: %v", err)
+	}
+}
+
+// TestAPIErrorMessageGeneric locks in that the type returned for a non-2xx
+// upstream response carries only a generic, credential-free message and never
+// any upstream-response detail.
+func TestAPIErrorMessageGeneric(t *testing.T) {
+	msg := apiError{}.Error()
+	if !strings.Contains(msg, "credential") {
+		t.Errorf("apiError message should be a generic credential/reachability message, got %q", msg)
+	}
+	for _, banned := range []string{"HTTP", "401", "404", "statusCode", "Unauthorized", "/rest/api"} {
+		if strings.Contains(msg, banned) {
+			t.Errorf("apiError message leaked upstream detail %q: %q", banned, msg)
+		}
+	}
+}
+
+// TestValidateUpstreamBodyToDebugOnly proves that on an upstream 4xx/5xx the
+// upstream response body is moved to a server-side debug log and is NOT present
+// in the error returned to the tenant. It fails against the old behavior, which
+// echoed the upstream body into the error string.
+func TestValidateUpstreamBodyToDebugOnly(t *testing.T) {
+	cas, err := connectortest.LoadCassette("testdata/validate.json")
+	if err != nil {
+		t.Fatalf("LoadCassette: %v", err)
+	}
+	rs := connectortest.NewReplayServer(t, cas)
+
+	var buf strings.Builder
+	dbgLog := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c := New(WithLogger(dbgLog))
+
+	// First cassette interaction is the 200 success; consume it.
+	if err := c.Validate(context.Background(), testConfig(t, rs.URL(), "good-token")); err != nil {
+		t.Fatalf("Validate success: unexpected error %v", err)
+	}
+
+	// Second interaction is the 401; the body is
+	// {"statusCode":401,"message":"Unauthorized; scope does not match"}.
+	err = c.Validate(context.Background(), testConfig(t, rs.URL(), "bad-token"))
+	if err == nil {
+		t.Fatalf("Validate failure: want error, got nil")
+	}
+	// The error returned to the tenant must be generic and body-free.
+	for _, leaked := range []string{"Unauthorized; scope does not match", "scope does not match", "statusCode"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Errorf("Validate error leaked upstream body fragment %q: %v", leaked, err)
+		}
+	}
+	// The upstream detail must instead be captured server-side at debug.
+	logged := buf.String()
+	if !strings.Contains(logged, "scope does not match") {
+		t.Errorf("upstream response body should be logged at debug; log was: %q", logged)
+	}
+	if !strings.Contains(logged, "status=401") {
+		t.Errorf("upstream status should be logged at debug; log was: %q", logged)
+	}
 }
 
 func TestHandleWebhookUnsupported(t *testing.T) {

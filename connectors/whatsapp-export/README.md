@@ -90,7 +90,7 @@ hits. The body is the system phrase verbatim.
 | :---------------- | :---- |
 | `type`            | `CHAT_MESSAGE` |
 | `connector_id`    | `whatsapp-export` |
-| `source_native_id`| `<chat_name>:<line_index>:<sha256(text)[:8]>` |
+| `source_native_id`| `sha256(chat_name + "\|" + raw_timestamp + "\|" + sender + "\|" + text)`, plus a `:<occurrence>` suffix for the 2nd+ exact duplicate in the export (position-independent — no line index) |
 | `doc_id`          | `sdk.DocID("whatsapp-export", source_native_id)` |
 | `title`           | first ~60 chars of the text (newlines collapsed); `"<chat_name> message"` when the body is empty |
 | `body_text`       | the message text (continuation lines joined with `\n`) |
@@ -101,17 +101,26 @@ hits. The body is the system phrase verbatim.
 
 `ts.ingested` is never set (the hub stamps it).
 
-### doc_id scheme — stable under re-import
+### doc_id scheme — stable under re-import and under middle edits
 
-The native id binds `chat_name` + `line_index` + a short content digest. WhatsApp
-"Export chat" is **append-only** in normal use: a later, larger export of the
-same chat reproduces every earlier message at the same line index with the same
-text, so each already-seen message re-derives the **same** `doc_id`, making
-re-import upserts idempotent and emitting only the new tail. The content digest
-keeps two different messages at the same index (across distinct chats, or after a
-prefix change) distinct. An edit/delete that shifts earlier line indices changes
-the prefix and triggers a full re-import (see cursor), which converges via the
-`(doc_id, version_etag)` merge.
+The native id is **position-independent**: it hashes `chat_name` + the raw header
+timestamp + sender + text — **not** the line index. WhatsApp "Export chat" is
+**append-only** in normal use, so a later, larger export of the same chat
+reproduces every earlier message with the same identity and re-derives the
+**same** `doc_id`, making re-import upserts idempotent and emitting only the new
+tail. Crucially, if a re-export *inserts or deletes a message in the middle*,
+every later message's line index shifts but its `doc_id` does **not** change — so
+no already-indexed document is orphaned and no duplicate is re-emitted. (The
+previous scheme embedded the line index, which made a single middle insert
+renumber every later `doc_id`; that bug is fixed.) `chat_name` scopes the id so
+two chats in one tenant never collide.
+
+A **legitimate duplicate** — the same sender sending the byte-for-byte same text
+at the same timestamp twice — would otherwise collapse to one id, so it is
+disambiguated by an **occurrence index**: the 0-based count of identical messages
+seen earlier in the same export, appended as `:<n>` for the 2nd and later copy.
+This is assigned among *exact duplicates only*, so it never renumbers an unrelated
+message when the export shifts.
 
 There are **no tombstones**: an export is a point-in-time snapshot with no delete
 signal, and a prefix change is handled as a full re-import rather than as

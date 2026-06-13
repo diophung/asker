@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/asker/asker/connectors/sdk"
@@ -41,10 +42,13 @@ func newTestConnector() sdk.Connector {
 	return New(WithLogger(slog.New(slog.DiscardHandler)))
 }
 
-// did derives the expected doc_id for message text at lineIndex in testChat,
-// exactly as the connector does (sdk.DocID over the same native id).
-func did(lineIndex int, text string) string {
-	return sdk.DocID(connectorID, nativeID(testChat, lineIndex, text))
+// did derives the expected doc_id for a parsed message in testChat exactly as
+// the connector does (sdk.DocID over the position-independent native id, which
+// folds in the message's timestamp, sender, text, and duplicate-occurrence index
+// but NOT its line index).
+func did(m message) string {
+	return sdk.DocID(connectorID, nativeID(testChat,
+		m.rawSentAt, strings.ToValidUTF8(m.sender, ""), strings.ToValidUTF8(m.text, ""), m.occurrence))
 }
 
 // The six messages of the bracket FullSync cassette, in order. Index 0 and 4
@@ -62,10 +66,12 @@ var (
 )
 
 func fullSyncDocIDs() []string {
-	return []string{
-		did(0, mEncrypted), did(1, mKickoff), did(2, mSync),
-		did(3, mMedia), did(4, mAdded), did(5, mCafe),
+	six := parseSix()
+	ids := make([]string, len(six))
+	for i := range six {
+		ids[i] = did(six[i])
 	}
+	return ids
 }
 
 func TestSpec(t *testing.T) {
@@ -148,7 +154,7 @@ func TestContractIncrementalAppend(t *testing.T) {
 		Incremental: &connectortest.IncrementalExpectation{
 			FromCursor: fromCursor,
 			SyncExpectation: connectortest.SyncExpectation{
-				WantDocIDs: []string{did(6, mStandup), did(7, mOnWay)},
+				WantDocIDs: func() []string { eight := parseEight(); return []string{did(eight[6]), did(eight[7])} }(),
 				WantCursor: &wantCursor,
 			},
 		},
@@ -211,17 +217,24 @@ func TestContractUnparseableCursorExpires(t *testing.T) {
 func TestContractDashFormat(t *testing.T) {
 	t.Parallel()
 	body, _ := json.Marshal(map[string]string{"chat_name": testChat})
-	// 3 messages: system (idx0), Alice (idx1), Bob multi-line (idx2).
-	dSystem := "Messages and calls are end-to-end encrypted."
-	dHello := "hello from the dash format"
-	dMulti := "line one\nline two continues here"
+	// 3 messages: system (idx0), Alice (idx1), Bob multi-line (idx2). The dash
+	// timestamps "3/15/24, 09:0X" are the raw header text the dash cassette
+	// carries (see testdata/dash_fullsync.json); did folds them into the id.
+	dash := buildMsgs([]struct {
+		sender, text, raw string
+		system            bool
+	}{
+		{"", "Messages and calls are end-to-end encrypted.", "3/15/24, 09:00", true},
+		{"Alice", "hello from the dash format", "3/15/24, 09:42", false},
+		{"Bob", "line one\nline two continues here", "3/15/24, 09:43", false},
+	})
 	connectortest.RunConnectorContract(t, newTestConnector(), connectortest.ContractCase{
 		Name:         "dash-fullsync",
 		Cassette:     "testdata/dash_fullsync.json",
 		BaseURLField: "export_url",
 		ConfigJSON:   body,
 		FullSync: &connectortest.SyncExpectation{
-			WantDocIDs: []string{did(0, dSystem), did(1, dHello), did(2, dMulti)},
+			WantDocIDs: []string{did(dash[0]), did(dash[1]), did(dash[2])},
 		},
 	})
 }

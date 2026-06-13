@@ -24,26 +24,41 @@ const (
 	titleMaxRunes = 60
 )
 
-// nativeID is the stable source-native id for a message:
-// "<chatName>:<lineIndex>:<sha256(text)[:8]>". It binds the message to its chat
-// and ordinal position while folding in a short content digest, so:
+// nativeID is the stable, POSITION-INDEPENDENT source-native id for a message:
+// sha256(chatName + "|" + rawSentAt + "|" + sender + "|" + text) in lowercase
+// hex, with a ":<occurrence>" suffix appended ONLY for the 2nd and later exact
+// duplicate within the same export. It binds the message to its chat and to its
+// content/identity (timestamp, sender, text) but NOT to its ordinal position, so:
 //
 //   - re-importing a larger export of the same chat re-derives the SAME id for
-//     each already-seen message (same chat, same line index, same text), making
-//     upserts idempotent and the append-only tail the only new docs; and
-//   - two different messages that happen to share a line index across distinct
-//     chats stay distinct (the chat name scopes them).
+//     each already-seen message (same chat, timestamp, sender, text), making
+//     upserts idempotent and the append-only tail the only new docs;
+//   - inserting or deleting a message in the MIDDLE of a re-export shifts every
+//     later message's line index but does NOT change any later id — the bug this
+//     replaces, where lineIndex was part of the id, orphaned/duplicated every
+//     message after the edit point; and
+//   - two different messages stay distinct (different content => different hash),
+//     while a LEGITIMATE duplicate (same sender+timestamp+text sent twice) is
+//     disambiguated by the occurrence index assigned at parse time among exact
+//     duplicates, so identical messages still get distinct, stable ids.
 //
-// The text digest guards against a benign re-export shifting indices: if a
-// message's text is unchanged its id is unchanged even if a leading system line
-// was added/removed and nudged the index — no, the index is part of the id, so
-// an index shift DOES change the id; that case is treated as a changed prefix
-// (sdk.ErrCursorExpired) and a full re-import, which converges. The digest's job
-// is to make ids readable-stable and to differentiate same-index different-text.
-func nativeID(chatName string, lineIndex int, text string) string {
-	sum := sha256.Sum256([]byte(text))
-	short := hex.EncodeToString(sum[:])[:8]
-	return chatName + ":" + strconv.Itoa(lineIndex) + ":" + short
+// chatName scopes the id so two chats imported into the same tenant never
+// collide. The "|" separators are unambiguous because the components are hashed,
+// not parsed back out.
+func nativeID(chatName, rawSentAt, sender, text string, occurrence int) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(chatName))
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(rawSentAt))
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(sender))
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(text))
+	id := hex.EncodeToString(h.Sum(nil))
+	if occurrence > 0 {
+		id += ":" + strconv.Itoa(occurrence)
+	}
+	return id
 }
 
 // messageEtag is the per-message version etag: sha256(sender + "\x00" +
@@ -66,7 +81,7 @@ func messageEtag(m message) string {
 func toDocument(tenant, chatName string, m message) *askerv1.Document {
 	text := strings.ToValidUTF8(m.text, "")
 	sender := strings.ToValidUTF8(m.sender, "")
-	native := nativeID(chatName, m.lineIndex, text)
+	native := nativeID(chatName, m.rawSentAt, sender, text, m.occurrence)
 
 	doc := &askerv1.Document{
 		TenantId:       tenant,

@@ -174,12 +174,26 @@ func (c *Connector) primeDelta(ctx context.Context, gc *graphClient, chatID stri
 	}
 }
 
-// IncrementalSync implements sdk.Connector. For each chat in the cursor it
-// replays /messages/delta from the stored deltaLink, emitting an upsert for
-// each changed message and a tombstone for each deletion (deletedDateTime or
-// "@removed"), then advances that chat's deltaLink. A 410 Gone on any chat's
-// delta link means the source can no longer replay it, so the whole pass
-// returns sdk.ErrCursorExpired and the hub restarts FullSync.
+// IncrementalSync implements sdk.Connector. It first re-lists the user's chats
+// (GET /me/chats?$expand=members) so two things hold:
+//
+//  1. Every replayed chat is resolved to its FULL graphChat (topic + expanded
+//     members), so an edited message re-emitted on this pass retains its ACL and
+//     member participants exactly as the backfill emitted it. (A delta payload
+//     carries only the message, not the chat, so a bare graphChat{ID} would
+//     strip the ACL and chat-member participants — and the index-writer's full
+//     PUT replace would then overwrite the well-formed FullSync document with the
+//     degraded one.)
+//  2. Chats created AFTER the initial backfill — ones not yet in the cursor —
+//     are discovered, backfilled, and primed, so their messages start flowing on
+//     the very next poll instead of waiting for a full re-sync (the freshness
+//     SLA gap). They are added to the returned cursor's delta map.
+//
+// For each chat already in the cursor it replays /messages/delta from the stored
+// deltaLink, emitting an upsert for each changed message and a tombstone for each
+// deletion (deletedDateTime or "@removed"), then advances that chat's deltaLink.
+// A 410 Gone on any chat's delta link means the source can no longer replay it,
+// so the whole pass returns sdk.ErrCursorExpired and the hub restarts FullSync.
 func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk.Cursor, emit sdk.Emit) (sdk.Cursor, error) {
 	conf, err := parseConfig(cfg.ConfigJSON)
 	if err != nil {
@@ -192,19 +206,62 @@ func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk
 	gc := newGraphClient(conf, cfg.Token)
 	tenant := string(cfg.Tenant.TenantID())
 
-	// Stable iteration order makes emission deterministic for tests.
-	chatIDs := make([]string, 0, len(dc.Deltas))
+	// Re-list chats so we can resolve each replayed chat to its full topic +
+	// members (Finding 1) and discover chats created after the backfill
+	// (Finding 2). Cache per-chat info for this pass to avoid refetching.
+	chats, err := c.listChats(ctx, gc)
+	if err != nil {
+		return "", err
+	}
+	byID := make(map[string]graphChat, len(chats))
+	for _, chat := range chats {
+		byID[chat.ID] = chat
+	}
+
+	// The set of chats to advance this pass is the union of chats already in the
+	// cursor and chats discovered now. Stable iteration order keeps emission
+	// deterministic for tests.
+	chatIDs := make([]string, 0, len(dc.Deltas)+len(chats))
+	seen := make(map[string]bool, len(dc.Deltas)+len(chats))
 	for id := range dc.Deltas {
 		chatIDs = append(chatIDs, id)
+		seen[id] = true
+	}
+	for _, chat := range chats {
+		if !seen[chat.ID] {
+			chatIDs = append(chatIDs, chat.ID)
+			seen[chat.ID] = true
+		}
 	}
 	sort.Strings(chatIDs)
 
-	next := make(map[string]string, len(dc.Deltas))
+	next := make(map[string]string, len(chatIDs))
 	for _, chatID := range chatIDs {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		link, err := c.replayChatDelta(ctx, gc, tenant, chatID, dc.Deltas[chatID], emit)
+		// Resolve the full chat for accurate ACL + member participants. A chat
+		// in the cursor that Graph no longer lists (e.g. the user left it) falls
+		// back to the bare id so its delta still drains.
+		chat, ok := byID[chatID]
+		if !ok {
+			chat = graphChat{ID: chatID}
+		}
+		startLink, inCursor := dc.Deltas[chatID]
+		if !inCursor {
+			// A chat created after the backfill: backfill its current messages,
+			// then prime its delta link so future passes resume from here.
+			if err := c.backfillChat(ctx, gc, tenant, chat, emit); err != nil {
+				return "", err
+			}
+			link, err := c.primeDelta(ctx, gc, chatID)
+			if err != nil {
+				return "", err
+			}
+			next[chatID] = link
+			continue
+		}
+		link, err := c.replayChatDelta(ctx, gc, tenant, chat, startLink, emit)
 		if err != nil {
 			return "", err
 		}
@@ -214,10 +271,11 @@ func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk
 }
 
 // replayChatDelta walks one chat's delta feed from startLink, emitting upserts
-// and tombstones, and returns the new deltaLink. A 410 Gone is translated to
-// sdk.ErrCursorExpired.
-func (c *Connector) replayChatDelta(ctx context.Context, gc *graphClient, tenant, chatID, startLink string, emit sdk.Emit) (string, error) {
-	chat := graphChat{ID: chatID}
+// and tombstones, and returns the new deltaLink. The full chat (topic +
+// expanded members) is passed in so an edited message retains its ACL and
+// member participants. A 410 Gone is translated to sdk.ErrCursorExpired.
+func (c *Connector) replayChatDelta(ctx context.Context, gc *graphClient, tenant string, chat graphChat, startLink string, emit sdk.Emit) (string, error) {
+	chatID := chat.ID
 	next := startLink
 	if next == "" {
 		next = "/chats/" + chatID + "/messages/delta"

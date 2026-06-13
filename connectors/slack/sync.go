@@ -80,6 +80,22 @@ func (c *Connector) listChannels(ctx context.Context, cl *client) ([]channelInfo
 	return out, nil
 }
 
+// channelInfoByID fetches a single channel's metadata (conversations.info) so a
+// webhook-delivered message — which names its channel only by id — can be mapped
+// with the same channel_name and ACL the backfill (conversations.list) captured.
+func (c *Connector) channelInfoByID(ctx context.Context, cl *client, channelID string) (channelInfo, error) {
+	params := url.Values{}
+	params.Set("channel", channelID)
+	var resp struct {
+		apiResponse
+		Channel channelInfo `json:"channel"`
+	}
+	if err := cl.get(ctx, "conversations.info", params, &resp); err != nil {
+		return channelInfo{}, err
+	}
+	return resp.Channel, nil
+}
+
 // backfillChannel pages a channel's full history oldest-to-newest, emitting a
 // Document per message and advancing state to the channel's newest ts.
 func (c *Connector) backfillChannel(ctx context.Context, cl *client, tenant string, ch channelInfo, state cursorState, emit sdk.Emit) error {

@@ -88,8 +88,8 @@ restarts a full sync rather than looping on a poison cursor.
 | Document field | Source |
 | :--- | :--- |
 | `type` | `TICKET` |
-| `doc_id` | `sdk.DocID("jira", <issue key>)` |
-| `source_native_id` | issue key (e.g. `DEMO-1`) |
+| `doc_id` | `sdk.DocID("jira", <issue id>)` — the immutable numeric id (`fields`-level `id`, e.g. `10001`), so a key rename / project move does not orphan the document |
+| `source_native_id` | immutable numeric issue id (e.g. `10001`); the mutable key (e.g. `DEMO-1`) lives in `title` and `issue_key` metadata |
 | `title` | `"<key>: <summary>"` (just `<key>` when summary is empty) |
 | `body_text` | ADF `description` rendered to plain text, then each comment as `"<author>: <text>"`, separated by blank lines |
 | `participants` | `reporter`, `assignee`, `creator` → `Participant{name=displayName, email=emailAddress, handle=accountId, role}` |

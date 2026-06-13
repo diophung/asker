@@ -56,7 +56,9 @@ func TestContractFullSync(t *testing.T) {
 }
 
 func TestContractIncremental(t *testing.T) {
-	wantCursor := sdk.Cursor(`{"deltas":{"19:group-a":"https://graph.microsoft.com/v1.0/chats/19:group-a/messages/delta?$deltatoken=DELTA-A-2","19:oneone-b":"https://graph.microsoft.com/v1.0/chats/19:oneone-b/messages/delta?$deltatoken=DELTA-B-2"}}`)
+	// The advanced cursor advances both pre-existing chats AND adds the chat
+	// (19:group-c) discovered on this pass. encoding/json sorts the keys.
+	wantCursor := sdk.Cursor(`{"deltas":{"19:group-a":"https://graph.microsoft.com/v1.0/chats/19:group-a/messages/delta?$deltatoken=DELTA-A-2","19:group-c":"https://graph.microsoft.com/v1.0/chats/19:group-c/messages/delta?$deltatoken=DELTA-C-1","19:oneone-b":"https://graph.microsoft.com/v1.0/chats/19:oneone-b/messages/delta?$deltatoken=DELTA-B-2"}}`)
 	connectortest.RunConnectorContract(t, New(), connectortest.ContractCase{
 		Name:     "incremental",
 		Cassette: "testdata/incremental.json",
@@ -64,12 +66,101 @@ func TestContractIncremental(t *testing.T) {
 		Incremental: &connectortest.IncrementalExpectation{
 			FromCursor: sdk.Cursor(fullSyncCursor),
 			SyncExpectation: connectortest.SyncExpectation{
-				WantDocIDs:          []string{docID("19:group-a", "1001")}, // edited
+				WantDocIDs: []string{
+					docID("19:group-a", "1001"), // edited in an existing chat
+					docID("19:group-c", "3001"), // first message of a chat created after backfill
+				},
 				WantTombstoneDocIDs: []string{docID("19:group-a", "1002")}, // deleted
 				WantCursor:          &wantCursor,
 			},
 		},
 	})
+}
+
+// TestIncrementalRetainsACLAndMembers proves Finding 1: an edited message
+// re-emitted by IncrementalSync RETAINS the chat's ACL and member participants
+// (it must not degrade to a bare graphChat{ID}). It also proves Finding 2: a
+// chat created after the backfill is discovered, its message emitted, and the
+// chat added to the advanced cursor.
+func TestIncrementalRetainsACLAndMembers(t *testing.T) {
+	cas, err := connectortest.LoadCassette("testdata/incremental.json")
+	if err != nil {
+		t.Fatalf("load cassette: %v", err)
+	}
+	rs := connectortest.NewReplayServer(t, cas)
+	cfg := buildConfig(t, rs.URL(), "tenant-a")
+
+	conn := New()
+	var rec connectortest.EmitRecorder
+	cur, err := conn.IncrementalSync(context.Background(), cfg, sdk.Cursor(fullSyncCursor), rec.Emit)
+	if err != nil {
+		t.Fatalf("IncrementalSync: %v", err)
+	}
+
+	byID := map[string]*askerv1.Document{}
+	for _, d := range rec.Docs() {
+		connectortest.ValidateDocument(t, cfg, d)
+		byID[d.GetSourceNativeId()] = d
+	}
+
+	// Finding 1: the edited group-chat message keeps its ACL and members.
+	edited := byID["19:group-a:1001"]
+	if edited == nil {
+		t.Fatal("missing edited document for 19:group-a:1001")
+	}
+	if edited.GetTombstone().GetDeleted() {
+		t.Error("edited message must be a live upsert, not a tombstone")
+	}
+	if edited.GetAcl() == nil || !edited.GetAcl().GetIsPrivate() {
+		t.Fatal("edited group-chat message lost its Acl on incremental re-emit (Finding 1)")
+	}
+	if got := len(edited.GetAcl().GetAllowedPrincipals()); got != 2 {
+		t.Errorf("edited message Acl principals = %d, want 2 (members stripped — Finding 1)", got)
+	}
+	var fromCount, memberCount int
+	for _, p := range edited.GetParticipants() {
+		switch p.GetRole() {
+		case "from":
+			fromCount++
+		case "member":
+			memberCount++
+		}
+	}
+	if fromCount != 1 {
+		t.Errorf("edited message from-participants = %d, want 1", fromCount)
+	}
+	if memberCount != 1 { // 2 members; the author (Alice) is deduped from the member list
+		t.Errorf("edited message member-participants = %d, want 1 (chat members stripped — Finding 1)", memberCount)
+	}
+
+	// Finding 2: the chat created after the backfill is discovered and its
+	// message emitted, carrying that chat's ACL + members too.
+	newChatMsg := byID["19:group-c:3001"]
+	if newChatMsg == nil {
+		t.Fatal("missing document for new chat 19:group-c:3001 (Finding 2: new chats not discovered)")
+	}
+	if newChatMsg.GetAcl() == nil || len(newChatMsg.GetAcl().GetAllowedPrincipals()) != 2 {
+		t.Error("new-chat message should carry the chat's Acl with its members")
+	}
+	var newMembers int
+	for _, p := range newChatMsg.GetParticipants() {
+		if p.GetRole() == "member" {
+			newMembers++
+		}
+	}
+	if newMembers != 1 { // Alice + Dave; Dave is the author and deduped
+		t.Errorf("new-chat message member-participants = %d, want 1", newMembers)
+	}
+
+	// The advanced cursor must include the newly discovered chat so its delta
+	// keeps flowing on the next pass.
+	dc, err := decodeCursor(cur)
+	if err != nil {
+		t.Fatalf("decode advanced cursor: %v", err)
+	}
+	if _, ok := dc.Deltas["19:group-c"]; !ok {
+		t.Error("advanced cursor missing the newly discovered chat 19:group-c (Finding 2)")
+	}
 }
 
 func TestContractStaleCursor(t *testing.T) {

@@ -40,7 +40,7 @@ func (c *Connector) FullSync(ctx context.Context, cfg sdk.Config, emit sdk.Emit)
 			c.log.Warn("ical: skipping VEVENT without UID", "instance_id", cfg.InstanceID)
 			continue
 		}
-		if err := emit(ctx, c.eventDocument(tenant, conf.FeedURL, ev)); err != nil {
+		if err := emit(ctx, c.eventDocument(tenant, cfg.InstanceID, ev)); err != nil {
 			return "", err
 		}
 	}
@@ -109,12 +109,12 @@ func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk
 		switch {
 		case canceled:
 			// A canceled event is always a tombstone (eventDocument handles it).
-			if err := emit(ctx, c.eventDocument(tenant, conf.FeedURL, ev)); err != nil {
+			if err := emit(ctx, c.eventDocument(tenant, cfg.InstanceID, ev)); err != nil {
 				return "", err
 			}
 		case !known || prevEtag != etag:
 			// New or changed event -> upsert.
-			if err := emit(ctx, c.eventDocument(tenant, conf.FeedURL, ev)); err != nil {
+			if err := emit(ctx, c.eventDocument(tenant, cfg.InstanceID, ev)); err != nil {
 				return "", err
 			}
 		default:
@@ -130,7 +130,7 @@ func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if err := emit(ctx, c.disappearedTombstone(tenant, conf.FeedURL, uid)); err != nil {
+		if err := emit(ctx, c.disappearedTombstone(tenant, cfg.InstanceID, uid)); err != nil {
 			return "", err
 		}
 	}

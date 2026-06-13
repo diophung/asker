@@ -57,6 +57,14 @@
       }
     },
     {
+      "request": {"method": "GET", "path": "/me/chats", "query": "$expand=members"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"value\":[{\"id\":\"19:group-a\",\"topic\":\"Project Apollo\",\"chatType\":\"group\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:group-a\",\"members\":[{\"id\":\"m1\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m2\",\"displayName\":\"Bob Roe\",\"userId\":\"u-bob\",\"email\":\"bob@example.com\"}]},{\"id\":\"19:oneone-b\",\"topic\":\"\",\"chatType\":\"oneOnOne\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:oneone-b\",\"members\":[{\"id\":\"m3\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m4\",\"displayName\":\"Carol Coe\",\"userId\":\"u-carol\",\"email\":\"carol@example.com\"}]}]}"
+      }
+    },
+    {
       "request": {"method": "GET", "path": "/chats/19:group-a/messages/delta", "query": "$deltatoken=DELTA-A-1"},
       "response": {
         "status": 200,

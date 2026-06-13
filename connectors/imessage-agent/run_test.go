@@ -134,11 +134,47 @@ func TestRunSyncUploadErrorStopsAndDoesNotAdvanceState(t *testing.T) {
 	if !errors.Is(err, errUploadFailed) {
 		t.Errorf("error = %v, want it to wrap errUploadFailed", err)
 	}
-	// The caller (main) only persists state on a clean pass; the partial result
-	// still reports highWaterMove so callers can choose, but main checks err
-	// first. Assert the upload count reflects the early stop.
+	// Nothing uploaded, so the high-water must not move off the starting
+	// cursor: the next run retries every message.
 	if up.count() != 0 {
 		t.Errorf("uploads recorded = %d, want 0 (failed before success)", up.count())
 	}
-	_ = res
+	if res.highWaterMove {
+		t.Error("high-water moved despite zero successful uploads")
+	}
+	if res.newHighWater != 0 {
+		t.Errorf("newHighWater = %d, want unchanged 0 after a total failure", res.newHighWater)
+	}
+}
+
+// TestRunSyncPartialUploadDoesNotAdvancePastUnsent is the regression test for
+// the over-advanced high-water bug: the first chat (g1, max ROWID 3) uploads,
+// then the second chat (g2, ROWID 5) fails. The high-water must advance only to
+// 3 — the max of the SENT messages — never to 5, or the next run would skip the
+// unsent g2 message (ROWID 5) forever. The pre-fix code set newHighWater to
+// maxRowID(allRows)==5 up front, which this asserts against.
+func TestRunSyncPartialUploadDoesNotAdvancePastUnsent(t *testing.T) {
+	reader := &fakeReader{rows: sampleRows()}
+	up := &fakeUploader{failAt: 2} // g1 uploads, g2 fails
+	res, err := runSync(context.Background(), discardLogger(), reader, up, io.Discard, options{since: 0})
+	if err == nil {
+		t.Fatal("runSync should return the upload error from the second chat")
+	}
+	if !errors.Is(err, errUploadFailed) {
+		t.Errorf("error = %v, want it to wrap errUploadFailed", err)
+	}
+	if up.count() != 1 {
+		t.Errorf("uploads recorded = %d, want 1 (g1 succeeded, g2 failed)", up.count())
+	}
+	if res.uploaded != 1 {
+		t.Errorf("res.uploaded = %d, want 1", res.uploaded)
+	}
+	// The crux: advance only to the max ROWID of the SENT chat (g1 -> 3), never
+	// past the unsent g2 message (ROWID 5).
+	if res.newHighWater != 3 {
+		t.Errorf("newHighWater = %d, want 3 (max ROWID among uploaded chats, not 5)", res.newHighWater)
+	}
+	if !res.highWaterMove {
+		t.Error("highWaterMove = false, want true (g1 advanced the cursor to 3)")
+	}
 }

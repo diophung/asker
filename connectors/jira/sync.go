@@ -18,7 +18,7 @@ func (c *Connector) FullSync(ctx context.Context, cfg sdk.Config, emit sdk.Emit)
 	if err != nil {
 		return "", err
 	}
-	cl := newClient(conf, cfg.Token)
+	cl := c.newClient(conf, cfg.Token)
 	c.log.Info("jira full sync starting", "instance_id", cfg.InstanceID)
 	// FullSync starts from the empty cursor (whole site) and never expires:
 	// the empty bound is always valid, so a search error is a real failure.
@@ -39,7 +39,7 @@ func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk
 	if err != nil {
 		return "", fmt.Errorf("%v: %w", err, sdk.ErrCursorExpired)
 	}
-	cl := newClient(conf, cfg.Token)
+	cl := c.newClient(conf, cfg.Token)
 	c.log.Info("jira incremental sync starting",
 		"instance_id", cfg.InstanceID, "from_updated", st.updatedJQL)
 	return c.scan(ctx, cfg, conf, cl, emit, st, true)
@@ -74,7 +74,10 @@ func (c *Connector) scan(ctx context.Context, cfg sdk.Config, conf instanceConfi
 		}
 
 		for _, iss := range page.Issues {
-			if iss == nil || iss.Key == "" {
+			// doc_id derives from the immutable iss.ID, so an issue missing it
+			// cannot produce a valid Document; the key is still needed for the
+			// boundary dedupe and the display title.
+			if iss == nil || iss.ID == "" || iss.Key == "" {
 				continue
 			}
 			// Dedupe the inclusive JQL boundary issue from the previous pass.

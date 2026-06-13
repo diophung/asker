@@ -50,11 +50,20 @@ func TestIssueDocumentGolden(t *testing.T) {
 	if doc.GetType() != askerv1.DocType_TICKET {
 		t.Errorf("type = %v, want TICKET", doc.GetType())
 	}
-	if doc.GetConnectorId() != "jira" || doc.GetSourceNativeId() != "PROJ-42" {
-		t.Errorf("identity = (%q, %q), want (jira, PROJ-42)", doc.GetConnectorId(), doc.GetSourceNativeId())
+	// Identity uses the IMMUTABLE numeric id (10010), not the mutable key.
+	if doc.GetConnectorId() != "jira" || doc.GetSourceNativeId() != "10010" {
+		t.Errorf("identity = (%q, %q), want (jira, 10010)", doc.GetConnectorId(), doc.GetSourceNativeId())
 	}
-	if want := docID("PROJ-42"); doc.GetDocId() != want {
+	if want := docID("10010"); doc.GetDocId() != want {
 		t.Errorf("doc_id = %q, want %q", doc.GetDocId(), want)
+	}
+	// A key rename must NOT change the doc_id: the same id-keyed doc_id wins the
+	// idempotent merge, so a moved/renamed issue updates in place instead of
+	// orphaning the old document and creating a duplicate.
+	renamed := sampleIssue()
+	renamed.Key = "MOVED-7"
+	if got := issueDocument("tenant-x", base, renamed).GetDocId(); got != doc.GetDocId() {
+		t.Errorf("doc_id changed on key rename: %q != %q (key must not feed doc_id)", got, doc.GetDocId())
 	}
 	if want := "PROJ-42: Payment retries exhaust the queue"; doc.GetTitle() != want {
 		t.Errorf("title = %q, want %q", doc.GetTitle(), want)
@@ -155,8 +164,20 @@ func TestTombstoneDocument(t *testing.T) {
 	if doc.GetBodyText() != "" || len(doc.GetChunks()) != 0 {
 		t.Error("tombstone carries a body")
 	}
-	if want := docID("DEMO-9"); doc.GetDocId() != want {
+	// Tombstone doc_id derives from the immutable id (9), matching
+	// issueDocument, so a delete converges on the same indexed document even
+	// after the issue's key changed.
+	if want := docID("9"); doc.GetDocId() != want {
 		t.Errorf("doc_id = %q, want %q", doc.GetDocId(), want)
+	}
+	if doc.GetSourceNativeId() != "9" {
+		t.Errorf("source_native_id = %q, want 9", doc.GetSourceNativeId())
+	}
+	// A live doc and its tombstone for the same issue must share a doc_id even
+	// when the key was renamed between the upsert and the delete.
+	live := issueDocument("t", "https://x.atlassian.net", &issue{ID: "9", Key: "OLD-9"})
+	if doc.GetDocId() != live.GetDocId() {
+		t.Errorf("tombstone doc_id %q != live doc_id %q for the same issue id", doc.GetDocId(), live.GetDocId())
 	}
 	if doc.GetVersionEtag() == "" {
 		t.Error("tombstone version_etag empty")

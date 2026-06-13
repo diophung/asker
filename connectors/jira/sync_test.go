@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/asker/asker/connectors/sdk"
@@ -93,9 +94,17 @@ func TestWithLogger(t *testing.T) {
 
 func TestAPIErrorMessage(t *testing.T) {
 	t.Parallel()
-	e := &apiError{status: 400, messages: []string{"jql: bad bound"}}
-	if got := e.Error(); got == "" {
+	// The upstream detail must NOT appear in the error string: apiError is
+	// surfaced to the user (via Validate/IncrementalSync) and would otherwise
+	// leak field names / account ids / filter detail from the source.
+	const secret = "user 'acc-secret' lacks BROWSE on project SECRET"
+	e := &apiError{status: 400, messages: []string{secret, "jql: bad bound"}}
+	got := e.Error()
+	if got == "" {
 		t.Error("apiError.Error() empty")
+	}
+	if strings.Contains(got, secret) || strings.Contains(got, "jql: bad bound") {
+		t.Errorf("apiError.Error() leaked upstream detail: %q", got)
 	}
 	bare := &apiError{status: 503}
 	if got := bare.Error(); got == "" {

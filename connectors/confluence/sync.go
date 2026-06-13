@@ -21,7 +21,7 @@ func (c *Connector) FullSync(ctx context.Context, cfg sdk.Config, emit sdk.Emit)
 	if err != nil {
 		return "", err
 	}
-	client := newClient(conf, cfg.Token)
+	client := newClient(conf, cfg.Token, c.log)
 	tenant := string(cfg.Tenant.TenantID())
 
 	c.log.Info("confluence full sync starting",
@@ -118,7 +118,7 @@ func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk
 			"instance_id", cfg.InstanceID, "cursor", string(cur))
 		since = time.Time{}
 	}
-	client := newClient(conf, cfg.Token)
+	client := newClient(conf, cfg.Token, c.log)
 	tenant := string(cfg.Tenant.TenantID())
 
 	newest := since

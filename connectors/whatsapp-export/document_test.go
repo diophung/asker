@@ -104,16 +104,153 @@ func TestTitleTruncationAndFallback(t *testing.T) {
 
 func TestNativeIDStableAndDistinct(t *testing.T) {
 	t.Parallel()
-	a := nativeID("Falcon", 3, "hello")
-	b := nativeID("Falcon", 3, "hello")
+	const (
+		chat   = "Falcon"
+		raw    = "2024-03-15, 9:42:13 AM"
+		sender = "Alice"
+	)
+	a := nativeID(chat, raw, sender, "hello", 0)
+	b := nativeID(chat, raw, sender, "hello", 0)
 	if a != b {
 		t.Errorf("nativeID not stable: %q vs %q", a, b)
 	}
-	if nativeID("Falcon", 3, "hello") == nativeID("Falcon", 3, "world") {
-		t.Error("different text produced the same native id at the same index")
+	if nativeID(chat, raw, sender, "hello", 0) == nativeID(chat, raw, sender, "world", 0) {
+		t.Error("different text produced the same native id")
 	}
-	if nativeID("Falcon", 3, "hello") == nativeID("Other", 3, "hello") {
+	if nativeID(chat, raw, sender, "hello", 0) == nativeID("Other", raw, sender, "hello", 0) {
 		t.Error("different chat produced the same native id")
+	}
+	if nativeID(chat, raw, sender, "hello", 0) == nativeID(chat, "2024-03-15, 9:43:00 AM", sender, "hello", 0) {
+		t.Error("different timestamp produced the same native id")
+	}
+	if nativeID(chat, raw, sender, "hello", 0) == nativeID(chat, raw, "Bob", "hello", 0) {
+		t.Error("different sender produced the same native id")
+	}
+
+	// The id is POSITION-INDEPENDENT: it takes no line index, so the same message
+	// gets the same id no matter where it sits in the export. This is the whole
+	// point of the fix — a middle insert/delete must not renumber later ids.
+
+	// An exact duplicate (same chat+timestamp+sender+text) is disambiguated ONLY
+	// by the occurrence index, so two identical messages still get distinct ids.
+	if nativeID(chat, raw, sender, "hello", 0) == nativeID(chat, raw, sender, "hello", 1) {
+		t.Error("duplicate occurrences collided; occurrence index must distinguish them")
+	}
+}
+
+// docIDsByText maps each message's body text to its emitted doc_id, by running
+// the full parse -> toDocument path the connector uses. It is the regression
+// harness for the "doc_id must not embed line index" fix.
+func docIDsByText(chat, body string) map[string]string {
+	msgs := parseExport(body)
+	out := make(map[string]string, len(msgs))
+	for _, m := range msgs {
+		out[m.text] = toDocument("tenant-a", chat, m).GetDocId()
+	}
+	return out
+}
+
+// TestDocIDStableAcrossMiddleInsert is the regression test for the MAJOR finding:
+// the old scheme embedded lineIndex in the doc_id, so inserting a message in the
+// MIDDLE of a re-exported chat shifted every later message's line index and thus
+// every later doc_id — orphaning the already-indexed documents and re-emitting
+// duplicates. With the position-independent id, inserting a middle message must
+// leave the doc_id of every message AFTER the insertion point UNCHANGED.
+func TestDocIDStableAcrossMiddleInsert(t *testing.T) {
+	t.Parallel()
+	const chat = "Falcon"
+	before := "[2024-03-15, 9:00:00 AM] Alice: first\n" +
+		"[2024-03-15, 9:01:00 AM] Bob: second\n" +
+		"[2024-03-15, 9:02:00 AM] Alice: third\n"
+	// Same chat, re-exported with a NEW message inserted between "first" and
+	// "second" (so "second" and "third" shift from index 1,2 to index 2,3).
+	after := "[2024-03-15, 9:00:00 AM] Alice: first\n" +
+		"[2024-03-15, 9:00:30 AM] Bob: inserted in the middle\n" +
+		"[2024-03-15, 9:01:00 AM] Bob: second\n" +
+		"[2024-03-15, 9:02:00 AM] Alice: third\n"
+
+	idsBefore := docIDsByText(chat, before)
+	idsAfter := docIDsByText(chat, after)
+
+	// The messages that existed before the insert keep their doc_id even though
+	// their line index shifted. The old (lineIndex-based) scheme failed here.
+	for _, text := range []string{"first", "second", "third"} {
+		if idsBefore[text] != idsAfter[text] {
+			t.Errorf("doc_id for %q changed after a middle insert: %q -> %q (a middle insert must not renumber later ids)",
+				text, idsBefore[text], idsAfter[text])
+		}
+	}
+	// The inserted message is genuinely new (no pre-insert id to collide with).
+	if idsAfter["inserted in the middle"] == "" {
+		t.Fatal("inserted message produced no doc_id")
+	}
+	for text, id := range idsBefore {
+		if id == idsAfter["inserted in the middle"] {
+			t.Errorf("inserted message reused the doc_id of existing message %q", text)
+		}
+	}
+}
+
+// TestDocIDStableAcrossMiddleDelete is the delete-side mirror: deleting a middle
+// message shifts later line indices but must not change any surviving message's
+// doc_id.
+func TestDocIDStableAcrossMiddleDelete(t *testing.T) {
+	t.Parallel()
+	const chat = "Falcon"
+	before := "[2024-03-15, 9:00:00 AM] Alice: keep one\n" +
+		"[2024-03-15, 9:01:00 AM] Bob: delete me\n" +
+		"[2024-03-15, 9:02:00 AM] Alice: keep two\n"
+	after := "[2024-03-15, 9:00:00 AM] Alice: keep one\n" +
+		"[2024-03-15, 9:02:00 AM] Alice: keep two\n"
+
+	idsBefore := docIDsByText(chat, before)
+	idsAfter := docIDsByText(chat, after)
+	for _, text := range []string{"keep one", "keep two"} {
+		if idsBefore[text] != idsAfter[text] {
+			t.Errorf("doc_id for %q changed after a middle delete: %q -> %q",
+				text, idsBefore[text], idsAfter[text])
+		}
+	}
+}
+
+// TestDocIDDuplicateMessagesAreDistinctAndStable checks the legitimate-duplicate
+// case: the same sender sending the byte-for-byte same text at the same timestamp
+// twice must yield TWO distinct, stable doc_ids (via the occurrence index), and a
+// middle insert before the duplicates must not change either of their ids.
+func TestDocIDDuplicateMessagesAreDistinctAndStable(t *testing.T) {
+	t.Parallel()
+	const chat = "Falcon"
+	// Two exact-duplicate "ok" messages (same sender, timestamp, text).
+	body := "[2024-03-15, 9:00:00 AM] Alice: hi\n" +
+		"[2024-03-15, 9:01:00 AM] Bob: ok\n" +
+		"[2024-03-15, 9:01:00 AM] Bob: ok\n"
+	msgs := parseExport(body)
+	if len(msgs) != 3 {
+		t.Fatalf("got %d messages, want 3", len(msgs))
+	}
+	dup0 := toDocument("tenant-a", chat, msgs[1]).GetDocId()
+	dup1 := toDocument("tenant-a", chat, msgs[2]).GetDocId()
+	if dup0 == dup1 {
+		t.Fatal("two exact-duplicate messages collapsed to one doc_id; the occurrence index must split them")
+	}
+	if msgs[1].occurrence != 0 || msgs[2].occurrence != 1 {
+		t.Errorf("duplicate occurrences = %d,%d, want 0,1", msgs[1].occurrence, msgs[2].occurrence)
+	}
+
+	// Insert a NEW message before the duplicates; both duplicate ids must survive.
+	withInsert := "[2024-03-15, 9:00:00 AM] Alice: hi\n" +
+		"[2024-03-15, 9:00:30 AM] Alice: inserted\n" +
+		"[2024-03-15, 9:01:00 AM] Bob: ok\n" +
+		"[2024-03-15, 9:01:00 AM] Bob: ok\n"
+	after := parseExport(withInsert)
+	if len(after) != 4 {
+		t.Fatalf("got %d messages after insert, want 4", len(after))
+	}
+	if got := toDocument("tenant-a", chat, after[2]).GetDocId(); got != dup0 {
+		t.Errorf("first duplicate doc_id changed after a middle insert: %q -> %q", dup0, got)
+	}
+	if got := toDocument("tenant-a", chat, after[3]).GetDocId(); got != dup1 {
+		t.Errorf("second duplicate doc_id changed after a middle insert: %q -> %q", dup1, got)
 	}
 }
 

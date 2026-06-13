@@ -188,7 +188,7 @@ func (c *Connector) Validate(ctx context.Context, cfg sdk.Config) error {
 		// completes): config-only validation.
 		return nil
 	}
-	client := newClient(conf, cfg.Token)
+	client := newClient(conf, cfg.Token, c.log)
 	// One cheap authed call: list a single page. A non-2xx is a credential or
 	// reachability failure surfaced credential-free.
 	q := url.Values{}
@@ -209,18 +209,25 @@ func (c *Connector) Validate(ctx context.Context, cfg sdk.Config) error {
 type apiClient struct {
 	http    *http.Client
 	baseURL string // "<base_url>/rest/api"
+	log     *slog.Logger
 }
 
 // newClient builds an apiClient whose transport adds the bearer credential
 // from token to every request. The hub owns refresh; the connector only sees a
-// valid token.
-func newClient(conf instanceConfig, token []byte) *apiClient {
+// valid token. The logger receives server-side debug detail about non-2xx
+// responses (status + body snippet); that detail never reaches the user-facing
+// error string.
+func newClient(conf instanceConfig, token []byte, log *slog.Logger) *apiClient {
+	if log == nil {
+		log = slog.Default()
+	}
 	return &apiClient{
 		http: &http.Client{
 			Transport: &bearerTransport{token: string(token), base: http.DefaultTransport},
 			Timeout:   httpTimeout,
 		},
 		baseURL: conf.resolvedBaseURL() + apiPrefix,
+		log:     log,
 	}
 }
 
@@ -239,25 +246,27 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(clone)
 }
 
-// apiError is a non-2xx response from Confluence. statusCode lets callers
-// detect 404 (a deleted page) without string matching.
-type apiError struct {
-	statusCode int
-	method     string
-	path       string
-	snippet    string
+// apiError is a non-2xx response from Confluence. The user-facing Error string
+// is deliberately generic: it never echoes the upstream Confluence response
+// body, which can carry account/configuration detail and is a confusing,
+// info-leaking surface to hand back to a tenant. The upstream status and body
+// snippet are logged server-side at debug instead (see getJSON).
+type apiError struct{}
+
+// Error returns a generic, credential-free credential/reachability message.
+// The upstream response status and body are intentionally omitted from the
+// user-facing string; getJSON logs them server-side at debug.
+func (apiError) Error() string {
+	return "confluence: source request failed: the credential may be invalid or the Confluence site unreachable"
 }
 
-func (e *apiError) Error() string {
-	return fmt.Sprintf("confluence: %s %s returned HTTP %d: %s", e.method, e.path, e.statusCode, e.snippet)
-}
-
-// maxErrorSnippet bounds how much of an error response body is echoed into an
-// error message (kept small and credential-free).
+// maxErrorSnippet bounds how much of an error response body is captured for the
+// server-side debug log. It is never placed in a user-facing error message.
 const maxErrorSnippet = 512
 
 // getJSON issues GET <baseURL><path>?<query>, honors ctx, and decodes a 2xx
-// JSON body into out. A non-2xx becomes an *apiError.
+// JSON body into out. A non-2xx becomes a generic apiError (the upstream status
+// and body are logged at debug, never returned to the user).
 func (c *apiClient) getJSON(ctx context.Context, path string, query url.Values, out any) error {
 	full := c.baseURL + path
 	if len(query) > 0 {
@@ -274,13 +283,17 @@ func (c *apiClient) getJSON(ctx context.Context, path string, query url.Values, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Read the upstream body only for the server-side debug log; it is never
+		// surfaced to the tenant (see apiError.Error). The credential is in the
+		// request Authorization header, not in this response body, so logging the
+		// body does not log the credential.
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorSnippet))
-		return &apiError{
-			statusCode: resp.StatusCode,
-			method:     http.MethodGet,
-			path:       path,
-			snippet:    strings.TrimSpace(string(snippet)),
-		}
+		c.log.Debug("confluence source request returned non-2xx",
+			"method", http.MethodGet,
+			"path", path,
+			"status", resp.StatusCode,
+			"body_snippet", strings.TrimSpace(string(snippet)))
+		return apiError{}
 	}
 	if out == nil {
 		_, _ = io.Copy(io.Discard, resp.Body)

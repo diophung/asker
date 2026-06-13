@@ -333,12 +333,138 @@ func TestIncrementalResumesMidBackfillCheckpoint(t *testing.T) {
 	resume := checkpointCursor("docs/a.txt", lm, []string{"docs/a.txt"})
 	c := New()
 	var rec connectortest.EmitRecorder
-	if _, err := c.IncrementalSync(context.Background(), testConfig(t, srv.URL, "docs/", nil), resume, rec.Emit); err != nil {
+	cur, err := c.IncrementalSync(context.Background(), testConfig(t, srv.URL, "docs/", nil), resume, rec.Emit)
+	if err != nil {
 		t.Fatalf("IncrementalSync resume: %v", err)
 	}
 	if got := len(rec.Docs()); got != 2 {
 		t.Errorf("resumed backfill emitted %d docs, want 2 (b, c)", got)
 	}
+	// The completed cursor must carry the FULL keyset: the pre-resume key
+	// (docs/a.txt, already in the checkpoint) plus the post-resume keys
+	// (docs/b.txt, docs/c.txt). Dropping docs/a.txt here is the resume-loses-
+	// keyset bug that silently disables deletion detection for pre-resume keys.
+	st, err := parseCursor(cur)
+	if err != nil {
+		t.Fatalf("parseCursor: %v", err)
+	}
+	if st.LastKey != "" {
+		t.Errorf("completed cursor LastKey = %q, want empty", st.LastKey)
+	}
+	wantKeys := map[string]bool{"docs/a.txt": false, "docs/b.txt": false, "docs/c.txt": false}
+	for _, k := range st.Keys {
+		if _, ok := wantKeys[k]; !ok {
+			t.Errorf("unexpected key %q in resumed cursor", k)
+			continue
+		}
+		wantKeys[k] = true
+	}
+	for k, seen := range wantKeys {
+		if !seen {
+			t.Errorf("resumed cursor keyset is missing %q; pre-resume keys were dropped", k)
+		}
+	}
+}
+
+// TestIncrementalResumeKeepsPreResumeKeysForDeletion is the regression test for
+// the resume-loses-keyset bug: a backfill that checkpoints partway, resumes
+// from that checkpoint, and must end with a cursor whose keyset includes BOTH
+// the pre-resume keys (listed before the interruption) and the post-resume
+// keys. A later IncrementalSync that finds a pre-resume key gone must then
+// tombstone it. Before the fix the resumed backfill dropped the pre-resume
+// keys, so the vanished pre-resume key was never tombstoned.
+func TestIncrementalResumeKeepsPreResumeKeysForDeletion(t *testing.T) {
+	t.Parallel()
+	lm := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// More objects than checkpointEvery so a real FullSync emits a mid-backfill
+	// checkpoint we can resume from. Binary objects: no body GET needed.
+	const n = checkpointEvery + 50
+	objs := make([]fakeObject, n)
+	for i := range objs {
+		objs[i] = fakeObject{
+			key:          fmt.Sprintf("docs/obj-%04d.bin", i),
+			body:         "x",
+			contentType:  "application/octet-stream",
+			lastModified: lm.Add(time.Duration(i) * time.Minute),
+		}
+	}
+	f, srv := newFakeS3(t, "my-bucket", objs)
+	f.maxPerPage = 100 // several list pages
+
+	// 1. Run a FullSync that interrupts right after the first mid-backfill
+	//    checkpoint, simulating a crash partway through the backfill.
+	var midCheckpoint sdk.Cursor
+	errInterrupt := fmt.Errorf("simulated interruption")
+	capturing := func(_ context.Context, cur sdk.Cursor) error {
+		midCheckpoint = cur
+		return errInterrupt // abort the backfill at the first checkpoint
+	}
+	var firstPass connectortest.EmitRecorder
+	if _, err := New().FullSync(context.Background(), testConfig(t, srv.URL, "docs/", capturing), firstPass.Emit); err == nil {
+		t.Fatal("FullSync should have aborted at the interruption checkpoint")
+	}
+	mid, err := parseCursor(midCheckpoint)
+	if err != nil {
+		t.Fatalf("parseCursor(mid checkpoint): %v", err)
+	}
+	if mid.LastKey == "" {
+		t.Fatal("mid-backfill checkpoint has no LastKey; not resumable")
+	}
+	preResumeKeys := len(mid.Keys)
+	if preResumeKeys == 0 || preResumeKeys >= n {
+		t.Fatalf("mid checkpoint recorded %d keys, want a partial keyset (0 < x < %d)", preResumeKeys, n)
+	}
+
+	// 2. Resume from that checkpoint via IncrementalSync (the hub replays
+	//    checkpoints into IncrementalSync). The completed cursor must hold the
+	//    FULL keyset: pre-resume + post-resume = every object.
+	var resumePass connectortest.EmitRecorder
+	resumedCur, err := New().IncrementalSync(context.Background(), testConfig(t, srv.URL, "docs/", nil), midCheckpoint, resumePass.Emit)
+	if err != nil {
+		t.Fatalf("IncrementalSync resume: %v", err)
+	}
+	resumed, err := parseCursor(resumedCur)
+	if err != nil {
+		t.Fatalf("parseCursor(resumed): %v", err)
+	}
+	if len(resumed.Keys) != n {
+		t.Fatalf("resumed cursor keyset = %d, want %d (full pre+post keyset)", len(resumed.Keys), n)
+	}
+	// The very first object (a pre-resume key) must survive into the cursor.
+	preResumeKey := "docs/obj-0000.bin"
+	if !contains(resumed.Keys, preResumeKey) {
+		t.Fatalf("resumed cursor is missing pre-resume key %q", preResumeKey)
+	}
+
+	// 3. Now that pre-resume key vanishes from the source. A fresh
+	//    IncrementalSync against the resumed cursor must tombstone it. Without
+	//    the seeded keyset the cursor never knew about it, so no tombstone.
+	survivors := objs[1:] // drop docs/obj-0000.bin
+	_, srv2 := newFakeS3(t, "my-bucket", survivors)
+	var delPass connectortest.EmitRecorder
+	if _, err := New().IncrementalSync(context.Background(), testConfig(t, srv2.URL, "docs/", nil), resumedCur, delPass.Emit); err != nil {
+		t.Fatalf("IncrementalSync deletion pass: %v", err)
+	}
+	var tombstonedPreResume bool
+	for _, d := range delPass.Docs() {
+		if d.GetTombstone().GetDeleted() && d.GetSourceNativeId() == "my-bucket/"+preResumeKey {
+			tombstonedPreResume = true
+		}
+	}
+	if !tombstonedPreResume {
+		t.Errorf("vanished pre-resume key %q was not tombstoned; resume dropped it from the cursor keyset", preResumeKey)
+	}
+}
+
+// contains reports whether s contains v.
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIncrementalStaleCursor(t *testing.T) {

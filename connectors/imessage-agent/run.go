@@ -46,10 +46,6 @@ func runSync(ctx context.Context, log *slog.Logger, reader messageReader, up upl
 		messages:     len(rows),
 		newHighWater: opts.since,
 	}
-	if hw := maxRowID(rows); hw > res.newHighWater {
-		res.newHighWater = hw
-		res.highWaterMove = true
-	}
 	if len(rows) == 0 {
 		log.Info("no new messages", "since_rowid", opts.since)
 		return res, nil
@@ -57,6 +53,12 @@ func runSync(ctx context.Context, log *slog.Logger, reader messageReader, up upl
 
 	groups := groupByChat(rows)
 	res.chats = len(groups)
+
+	// uploadedHighWater is the max ROWID among messages in chats that uploaded
+	// successfully. We advance the high-water only from this — never from rows
+	// in chats that were not (yet) uploaded — so an upload failure leaves the
+	// unsent messages below the cursor and the next run retries them.
+	var uploadedHighWater int64
 
 	for _, g := range groups {
 		body := imsg.RenderTranscript(g.rows)
@@ -67,24 +69,43 @@ func runSync(ctx context.Context, log *slog.Logger, reader messageReader, up upl
 		}
 
 		if opts.dryRun {
-			// Dry-run is the only path allowed to print message bodies.
+			// Dry-run is the only path allowed to print message bodies. It
+			// uploads nothing, so it never advances the high-water.
 			_, _ = fmt.Fprintf(out, "===== %s (%d messages) =====\n%s\n", t.title, len(g.rows), body)
 			continue
 		}
 
 		docID, err := up.Upload(ctx, t)
 		if err != nil {
-			// Return after partial progress: res.newHighWater is NOT advanced
-			// to cover unsent chats, because we recompute the high-water only
-			// from successfully handled work below.
+			// Stop at the first failure. The high-water recomputed below
+			// covers only the chats already uploaded, so res.newHighWater does
+			// NOT advance past this chat's (or any later chat's) unsent
+			// messages and the next run retries them.
+			res.newHighWater, res.highWaterMove = advanceHighWater(opts.since, uploadedHighWater)
 			return res, fmt.Errorf("upload chat transcript: %w", err)
 		}
 		res.uploaded++
+		if hw := maxRowID(g.rows); hw > uploadedHighWater {
+			uploadedHighWater = hw
+		}
 		// doc_id is safe to log; message bodies are not.
 		log.Info("uploaded chat transcript", "chat", t.title, "messages", len(g.rows), "doc_id", docID)
 	}
 
+	// Recompute the high-water from successfully-uploaded messages only.
+	res.newHighWater, res.highWaterMove = advanceHighWater(opts.since, uploadedHighWater)
 	return res, nil
+}
+
+// advanceHighWater computes the new high-water mark and whether it moved, given
+// the run's starting cursor and the max ROWID among successfully-uploaded
+// messages. It never regresses below since and only reports a move when an
+// upload actually pushed the cursor forward.
+func advanceHighWater(since, uploadedHighWater int64) (newHighWater int64, moved bool) {
+	if uploadedHighWater > since {
+		return uploadedHighWater, true
+	}
+	return since, false
 }
 
 // transcriptTitle is the document title for a chat's transcript upload: the

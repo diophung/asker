@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -126,6 +127,63 @@ func TestListenAndServeBadAddr(t *testing.T) {
 	err := ListenAndServe(context.Background(), "256.256.256.256:99999", &fakeConnector{})
 	if err == nil {
 		t.Fatal("ListenAndServe with a bad addr returned nil, want an error")
+	}
+}
+
+// failingListener is a net.Listener whose Accept returns a permanent error
+// immediately, so a grpc.Server's Serve loop gives up and returns that error.
+// It models a serve-time failure that is NOT triggered by ctx cancellation.
+type failingListener struct {
+	addr   net.Addr
+	closed chan struct{}
+}
+
+func newFailingListener() *failingListener {
+	return &failingListener{
+		addr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
+		closed: make(chan struct{}),
+	}
+}
+
+// errAcceptFatal is the non-temporary error Accept reports so Serve stops.
+var errAcceptFatal = errors.New("plugin_test: accept failed permanently")
+
+func (l *failingListener) Accept() (net.Conn, error) { return nil, errAcceptFatal }
+
+func (l *failingListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *failingListener) Addr() net.Addr { return l.addr }
+
+// TestServeOnSurfacesServeErrorWithoutLeaking is the regression guard for the
+// stop-goroutine deadlock: when gs.Serve returns on its own (a listener/serve
+// failure) while ctx is NOT canceled, serveOn must still unblock its stop
+// goroutine and return the Serve error promptly instead of parking forever on
+// <-done. Before the fix the stop goroutine waited only on ctx.Done(), so this
+// call would hang until the test deadline.
+func TestServeOnSurfacesServeErrorWithoutLeaking(t *testing.T) {
+	t.Parallel()
+	// A live, never-canceled context: the failure must come from Serve, not ctx.
+	ctx := context.Background()
+
+	ret := make(chan error, 1)
+	go func() { ret <- serveOn(ctx, newFailingListener(), &fakeConnector{}) }()
+
+	select {
+	case err := <-ret:
+		// gs.Serve surfaces the Accept error; with ctx live it must NOT be
+		// swallowed as a clean shutdown.
+		if err == nil {
+			t.Fatal("serveOn returned nil, want the serve error surfaced (ctx was never canceled)")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serveOn did not return after Serve failed; the stop goroutine deadlocked")
 	}
 }
 

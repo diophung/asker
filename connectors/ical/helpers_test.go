@@ -10,9 +10,11 @@ import (
 // docTypeCalendarEvent returns the expected DocType for an event document.
 func docTypeCalendarEvent() askerv1.DocType { return askerv1.DocType_CALENDAR_EVENT }
 
-// wantDocID is the doc_id the connector produces for (feedURL, uid).
-func wantDocID(feedURL, uid string) string {
-	return sdk.DocID(connectorID, nativeID(feedURL, uid))
+// wantDocID is the doc_id the connector produces for (instanceID, uid). The
+// native id is scoped by the stable instance id, NOT the feed URL, so a feed-URL
+// rotation does not change any doc_id.
+func wantDocID(instanceID, uid string) string {
+	return sdk.DocID(connectorID, nativeID(instanceID, uid))
 }
 
 // indexByDocID maps emitted documents by their doc_id for lookup.

@@ -14,8 +14,8 @@
 //     where <cursor> is the last-seen issue's updated time formatted to Jira's
 //     JQL minute precision ("yyyy/MM/dd HH:mm"). Because JQL "updated >=" is
 //     minute-granular and inclusive, the boundary issue is re-returned every
-//     poll; the connector dedupes it by skipping any issue whose doc_id equals
-//     the cursor's boundary issue (carried in the cursor) so steady-state polls
+//     poll; the connector dedupes it by skipping any issue whose key equals the
+//     cursor's boundary issue key (carried in the cursor) so steady-state polls
 //     with no changes emit nothing.
 //
 // Each issue is requested with the fields the mapping needs and
@@ -195,9 +195,13 @@ func (c *Connector) Validate(ctx context.Context, cfg sdk.Config) error {
 		// completes): config-only validation.
 		return nil
 	}
-	cl := newClient(conf, cfg.Token)
+	cl := c.newClient(conf, cfg.Token)
 	if _, err := cl.search(ctx, "order by updated asc", 0, 1); err != nil {
-		return fmt.Errorf("jira: credential check failed: %w", err)
+		// The upstream Jira body may name fields, accounts, or filter detail;
+		// it is logged server-side by search and must not reach the user. Surface
+		// only a generic, credential-free reachability message.
+		c.log.Debug("jira validate credential check failed", "instance_id", cfg.InstanceID, "error", err)
+		return errors.New("jira: could not reach Jira with the supplied credentials; check the site URL and that the connection is authorized")
 	}
 	return nil
 }
@@ -207,18 +211,22 @@ func (c *Connector) Validate(ctx context.Context, cfg sdk.Config) error {
 type client struct {
 	http *http.Client
 	base string
+	// log records server-side diagnostics (e.g. the upstream error detail on a
+	// non-200) at debug level. The user-facing error never carries that detail.
+	log *slog.Logger
 }
 
 // newClient builds a Jira REST client that adds "Authorization: Bearer
 // <token>" to every request. The hub owns refresh; the connector only ever
 // sees a currently-valid token.
-func newClient(conf instanceConfig, token []byte) *client {
+func (c *Connector) newClient(conf instanceConfig, token []byte) *client {
 	return &client{
 		http: &http.Client{
 			Transport: &bearerTransport{token: string(token), base: http.DefaultTransport},
 			Timeout:   clientTimeout,
 		},
 		base: conf.baseURL(),
+		log:  c.log,
 	}
 }
 
@@ -271,7 +279,15 @@ func (cl *client) search(ctx context.Context, jql string, startAt, maxResults in
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, readAPIError(resp)
+		ae := readAPIError(resp)
+		// Log the upstream detail server-side only; the apiError surfaced to the
+		// caller (and on to the user via Validate/IncrementalSync) is
+		// credential- and body-free.
+		if cl.log != nil && len(ae.messages) > 0 {
+			cl.log.Debug("jira API returned a non-200 response",
+				"status", ae.status, "upstream_messages", ae.messages)
+		}
+		return nil, ae
 	}
 	var out searchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -280,24 +296,26 @@ func (cl *client) search(ctx context.Context, jql string, startAt, maxResults in
 	return &out, nil
 }
 
-// apiError is a non-200 response from the Jira REST API.
+// apiError is a non-200 response from the Jira REST API. The upstream error
+// detail (messages) is retained for server-side logging only; Error() never
+// includes it, so echoing an apiError to the user cannot leak field names,
+// account ids, filter detail, or other upstream content.
 type apiError struct {
 	status   int
 	messages []string
 }
 
-// Error implements error.
+// Error implements error. It is intentionally generic — status-only — because
+// this string can reach the user via Validate/IncrementalSync. The upstream
+// messages are logged server-side at debug (see client.search), not surfaced.
 func (e *apiError) Error() string {
-	if len(e.messages) > 0 {
-		return fmt.Sprintf("jira: API returned %d: %s", e.status, strings.Join(e.messages, "; "))
-	}
-	return fmt.Sprintf("jira: API returned %d", e.status)
+	return fmt.Sprintf("jira: API returned status %d", e.status)
 }
 
 // readAPIError builds an apiError from a non-200 response, parsing the
 // standard Jira error envelope ({"errorMessages":[...],"errors":{...}}) when
-// present.
-func readAPIError(resp *http.Response) error {
+// present. The parsed messages are kept for server-side logging only.
+func readAPIError(resp *http.Response) *apiError {
 	var env struct {
 		ErrorMessages []string          `json:"errorMessages"`
 		Errors        map[string]string `json:"errors"`

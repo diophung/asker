@@ -97,7 +97,7 @@ func (c *Connector) HandleWebhook(ctx context.Context, cfg sdk.Config, r *http.R
 			"instance_id", cfg.InstanceID)
 		return nil
 	case "event_callback":
-		return c.handleEvent(ctx, cfg, env.Event, emit)
+		return c.handleEvent(ctx, cfg, conf, env.Event, emit)
 	default:
 		c.log.Debug("slack webhook ignored unhandled envelope type",
 			"instance_id", cfg.InstanceID, "type", env.Type)
@@ -107,7 +107,7 @@ func (c *Connector) HandleWebhook(ctx context.Context, cfg sdk.Config, r *http.R
 
 // handleEvent decodes the inner event and emits the affected Document for a
 // "message" event (created/edited/deleted). Non-message events are ignored.
-func (c *Connector) handleEvent(_ context.Context, cfg sdk.Config, raw json.RawMessage, emit sdk.Emit) error {
+func (c *Connector) handleEvent(ctx context.Context, cfg sdk.Config, conf instanceConfig, raw json.RawMessage, emit sdk.Emit) error {
 	if len(raw) == 0 {
 		return errors.New("slack: event_callback has no event")
 	}
@@ -127,13 +127,17 @@ func (c *Connector) handleEvent(_ context.Context, cfg sdk.Config, raw json.RawM
 		if ev.DeletedTS == "" || ev.Channel == "" {
 			return errors.New("slack: message_deleted event missing channel or deleted_ts")
 		}
-		return emit(context.Background(), c.tombstoneDocument(tenant, ev.Channel, ev.DeletedTS, ev.EventTS))
+		return emit(ctx, c.tombstoneDocument(tenant, ev.Channel, ev.DeletedTS, ev.EventTS))
 	case "message_changed":
 		if ev.Message == nil || ev.Channel == "" {
 			return errors.New("slack: message_changed event missing channel or message")
 		}
-		ch := channelInfo{ID: ev.Channel}
-		return emit(context.Background(), messageDocument(tenant, ch, *ev.Message))
+		// An edit re-emits the whole document and downstream replaces the prior
+		// version, so the re-emit must carry the same channel facets (name, ACL)
+		// the backfill captured. The webhook payload only names the channel by
+		// id, so resolve it (conversations.info) before mapping.
+		ch := c.resolveChannel(ctx, conf, cfg, ev.Channel)
+		return emit(ctx, messageDocument(tenant, ch, *ev.Message))
 	case "", "bot_message", "thread_broadcast", "me_message", "file_share":
 		if ev.TS == "" || ev.Channel == "" {
 			return errors.New("slack: message event missing channel or ts")
@@ -148,13 +152,41 @@ func (c *Connector) handleEvent(_ context.Context, cfg sdk.Config, raw json.RawM
 			ThreadTS: ev.ThreadTS,
 			Team:     ev.Team,
 		}
-		ch := channelInfo{ID: ev.Channel}
-		return emit(context.Background(), messageDocument(tenant, ch, m))
+		// A freshly-posted message likewise carries only the channel id; resolve
+		// it so the document gets channel_name and the channel ACL, matching
+		// what the backfill emits for the same channel.
+		ch := c.resolveChannel(ctx, conf, cfg, ev.Channel)
+		return emit(ctx, messageDocument(tenant, ch, m))
 	default:
 		c.log.Debug("slack webhook ignored message subtype",
 			"instance_id", cfg.InstanceID, "subtype", ev.Subtype)
 		return nil
 	}
+}
+
+// resolveChannel returns the full channelInfo for channelID so a webhook-driven
+// document retains the channel_name and ACL the backfill captured. It calls
+// conversations.info; if that fails (network, missing scope, channel gone) it
+// degrades to an id-only channelInfo so a live edit/post is still emitted rather
+// than dropped — but logs the degradation (never the token or signature) so the
+// missing facet is observable. The id-only result still produces the correct
+// doc_id, so a later full/incremental sync re-emits the complete document.
+func (c *Connector) resolveChannel(ctx context.Context, conf instanceConfig, cfg sdk.Config, channelID string) channelInfo {
+	if len(cfg.Token) == 0 {
+		// No credential to call the Web API with; emit with what we have.
+		return channelInfo{ID: channelID}
+	}
+	cl := newClient(conf, cfg.Token)
+	ch, err := c.channelInfoByID(ctx, cl, channelID)
+	if err != nil {
+		c.log.Warn("slack webhook could not resolve channel; emitting without channel name/ACL",
+			"instance_id", cfg.InstanceID, "channel", channelID, "error", err)
+		return channelInfo{ID: channelID}
+	}
+	if ch.ID == "" {
+		ch.ID = channelID
+	}
+	return ch
 }
 
 // verifySignature checks the X-Slack-Signature HMAC over the raw body and the

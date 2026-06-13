@@ -78,23 +78,28 @@ type comment struct {
 }
 
 // issueDocument maps one Jira issue to the canonical Document: type TICKET,
-// doc_id sdk.DocID("jira", key), title "<key>: <summary>", body from the ADF
+// doc_id sdk.DocID("jira", iss.ID), title "<key>: <summary>", body from the ADF
 // description plus comment text, participants from reporter/assignee/creator,
 // and version_etag from fields.updated (changes on any update).
+//
+// The doc_id / source_native_id are derived from the IMMUTABLE numeric issue ID
+// (iss.ID), not the issue Key: a Jira issue keeps its id forever, but its key
+// changes on a project move or key rename, which would otherwise orphan the
+// indexed document. The (mutable) key is preserved in the title and the
+// issue_key metadata for display and search.
 func issueDocument(tenant, base string, iss *issue) *askerv1.Document {
-	key := iss.Key
 	summary := iss.Fields.Summary
 
-	title := key
+	title := iss.Key
 	if summary != "" {
-		title = key + ": " + summary
+		title = iss.Key + ": " + summary
 	}
 
 	doc := &askerv1.Document{
 		TenantId:       tenant,
-		DocId:          sdk.DocID(connectorID, key),
+		DocId:          sdk.DocID(connectorID, iss.ID),
 		ConnectorId:    connectorID,
-		SourceNativeId: key,
+		SourceNativeId: iss.ID,
 		Type:           askerv1.DocType_TICKET,
 		Title:          title,
 		BodyText:       issueBody(iss),
@@ -109,7 +114,9 @@ func issueDocument(tenant, base string, iss *issue) *askerv1.Document {
 // tombstoneDocument builds the deletion Document for one issue: identity
 // fields plus tombstone.deleted and deleted_at, no body. The version_etag is
 // the issue's updated time, which is newer than any prior live etag because
-// transitioning to the deleted-like status bumps updated.
+// transitioning to the deleted-like status bumps updated. The doc_id is derived
+// from the immutable iss.ID (matching issueDocument) so a delete converges on
+// the same indexed document even after a key rename or project move.
 func (c *Connector) tombstoneDocument(tenant string, iss *issue) *askerv1.Document {
 	etag := iss.Fields.Updated
 	if etag == "" {
@@ -117,9 +124,9 @@ func (c *Connector) tombstoneDocument(tenant string, iss *issue) *askerv1.Docume
 	}
 	return &askerv1.Document{
 		TenantId:       tenant,
-		DocId:          sdk.DocID(connectorID, iss.Key),
+		DocId:          sdk.DocID(connectorID, iss.ID),
 		ConnectorId:    connectorID,
-		SourceNativeId: iss.Key,
+		SourceNativeId: iss.ID,
 		Type:           askerv1.DocType_TICKET,
 		VersionEtag:    etag,
 		Tombstone: &askerv1.Tombstone{

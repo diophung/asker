@@ -3,7 +3,6 @@ package s3
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/asker/asker/connectors/sdk"
 	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
@@ -25,21 +24,30 @@ func (c *Connector) FullSync(ctx context.Context, cfg sdk.Config, emit sdk.Emit)
 		return "", err
 	}
 	c.log.Info("s3 full sync starting", "instance_id", cfg.InstanceID, "bucket", conf.Bucket, "prefix", conf.Prefix)
-	return c.backfill(ctx, cfg, cl, emit, conf.Bucket, "")
+	// A fresh FullSync seeds nothing: empty startAfter, empty keyset, zero max.
+	return c.backfill(ctx, cfg, cl, emit, conf.Bucket, cursorState{})
 }
 
 // checkpointEvery is how many emitted objects pass between FullSync checkpoints.
 const checkpointEvery = 200
 
-// backfill lists from startAfter (empty = beginning), emits a Document per
+// backfill lists from seed.LastKey (empty = beginning), emits a Document per
 // object, accumulates the keyset + max LastModified, and checkpoints
-// periodically. It is shared by FullSync (startAfter "") and by IncrementalSync
-// when the hub replays a mid-backfill checkpoint cursor.
-func (c *Connector) backfill(ctx context.Context, cfg sdk.Config, cl *client, emit sdk.Emit, bucket, startAfter string) (sdk.Cursor, error) {
+// periodically. It is shared by FullSync (a zero-value seed) and by
+// IncrementalSync when the hub replays a mid-backfill checkpoint cursor.
+//
+// On a resumed backfill the seed carries the progress already recorded in the
+// checkpoint cursor: backfill MUST start from that progress (the keys listed
+// and the max LastModified before the interruption), not from scratch, so the
+// completed cursor holds the FULL keyset. Otherwise a key listed before the
+// interruption is dropped from the cursor and a later IncrementalSync never
+// tombstones it when it vanishes.
+func (c *Connector) backfill(ctx context.Context, cfg sdk.Config, cl *client, emit sdk.Emit, bucket string, seed cursorState) (sdk.Cursor, error) {
 	tenant := string(cfg.Tenant.TenantID())
+	startAfter := seed.LastKey
 	var (
-		keys    []string
-		maxMod  time.Time
+		keys    = append([]string(nil), seed.Keys...)
+		maxMod  = seed.maxModifiedTime()
 		lastKey = startAfter
 		since   int
 	)
@@ -108,7 +116,11 @@ func (c *Connector) IncrementalSync(ctx context.Context, cfg sdk.Config, cur sdk
 	}
 	if st.LastKey != "" {
 		c.log.Info("resuming interrupted s3 backfill", "instance_id", cfg.InstanceID, "after_key", st.LastKey)
-		return c.backfill(ctx, cfg, cl, emit, conf.Bucket, st.LastKey)
+		// Seed the resumed backfill with the checkpoint's recorded progress so
+		// the completed cursor carries the FULL keyset (pre- + post-resume) and
+		// the highest LastModified across the whole pass; otherwise pre-resume
+		// keys are dropped and their later deletions are never tombstoned.
+		return c.backfill(ctx, cfg, cl, emit, conf.Bucket, st)
 	}
 	return c.reconcile(ctx, cfg, cl, emit, conf.Bucket, st)
 }

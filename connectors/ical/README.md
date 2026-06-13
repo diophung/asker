@@ -98,8 +98,8 @@ looping on a poison cursor.
 
 | Document field     | Source |
 |--------------------|--------|
-| `doc_id`           | `sdk.DocID("ical", "<feed_url>:<UID>")` |
-| `source_native_id` | `"<feed_url>:<UID>"` (feed-scoped so two feeds never collide) |
+| `doc_id`           | `sdk.DocID("ical", "<instance_id>:<UID>")` |
+| `source_native_id` | `"<instance_id>:<UID>"` (scoped by the hub's stable per-instance id, **not** the feed URL: providers often embed a rotating private token in the URL, so a URL-scoped id would orphan every document on rotation; the instance id is stable and still keeps two feeds a tenant connects — two separate instances — distinct) |
 | `type`             | `CALENDAR_EVENT` |
 | `title`            | `SUMMARY` (falls back to `(no title)`) |
 | `body_text`        | `DESCRIPTION` + `LOCATION` |
@@ -133,11 +133,14 @@ and the hub polls on its freshness schedule.
 ## Testing
 
 Contract tests run against committed cassette fixtures (`.ics` bodies served by
-`connectortest.ReplayServer`) — **no live API, ever** (ADR-011). Because the feed
-URL is the dynamic replay-server URL, exact `doc_id` assertions are made in the
-`NewReplayServer` + `EmitRecorder` tests where the URL is known;
-`RunConnectorContract` pins the emission count and runs `ValidateDocument` on
-every emitted document. Fixtures under `testdata/`:
+`connectortest.ReplayServer`) — **no live API, ever** (ADR-011). doc_ids are
+scoped by the stable instance id (not the dynamic replay-server URL), so exact
+`doc_id` assertions are made directly against `sdk.DocID("ical", instanceID+":"+UID)`
+in the `NewReplayServer` + `EmitRecorder` tests; `RunConnectorContract` pins the
+emission count and runs `ValidateDocument` on every emitted document.
+`TestDocIDStableAcrossFeedURLRotation` is the regression guard that the same event
+under two different feed URLs (same instance) keeps one doc_id. Fixtures under
+`testdata/`:
 
 - `fullsync.json` — a 3-event backfill: escaping, folded params, organizer +
   attendees with `ROLE`, an all-day `RRULE` master event.

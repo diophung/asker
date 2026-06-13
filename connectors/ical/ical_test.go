@@ -5,12 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/asker/asker/connectors/sdk"
 	"github.com/asker/asker/connectors/sdk/connectortest"
 	"github.com/asker/asker/platform/tenancy"
 )
+
+// testInstanceID is the stable per-instance id the test configs carry. doc_ids
+// are scoped by it (not the feed URL), so it appears in every wantDocID call.
+const testInstanceID = "inst-1"
 
 // newTestConnector returns a connector with a quiet logger.
 func newTestConnector() sdk.Connector {
@@ -30,7 +36,7 @@ func configFor(t *testing.T, baseURL string) sdk.Config {
 	}
 	return sdk.Config{
 		Tenant:     tc,
-		InstanceID: "inst-1",
+		InstanceID: testInstanceID,
 		ConfigJSON: raw,
 		Checkpoint: sdk.NopCheckpoint,
 	}
@@ -148,14 +154,13 @@ func TestValidate(t *testing.T) {
 }
 
 // TestFullSync runs the backfill against the recorded feed and asserts the exact
-// emitted doc_ids, types, mapped fields, and the checkpointed cursor. The feed
-// URL is the (dynamic) replay server URL, so doc_ids are computed from it.
+// emitted doc_ids, types, mapped fields, and the checkpointed cursor. doc_ids are
+// scoped by the stable instance id (testInstanceID), NOT the dynamic replay URL.
 func TestFullSync(t *testing.T) {
 	t.Parallel()
 	rs := loadServer(t, "testdata/fullsync.json")
 	c := newTestConnector()
 	cfg := configFor(t, rs.URL())
-	feedURL := rs.URL()
 
 	var rec connectortest.EmitRecorder
 	cur, err := c.FullSync(context.Background(), cfg, rec.Emit)
@@ -177,7 +182,7 @@ func TestFullSync(t *testing.T) {
 
 	// evt-standup: escaped DESCRIPTION, two attendees (CHAIR + REQ-PARTICIPANT),
 	// organizer, timed event.
-	standup := byID[wantDocID(feedURL, "evt-standup@example.com")]
+	standup := byID[wantDocID(testInstanceID, "evt-standup@example.com")]
 	if standup == nil {
 		t.Fatal("evt-standup not emitted")
 	}
@@ -201,7 +206,7 @@ func TestFullSync(t *testing.T) {
 	assertParticipant(t, standup, 2, "Bob Brown", "bob@example.com", "req-participant")
 
 	// evt-launch: SEQUENCE:2 version etag.
-	launch := byID[wantDocID(feedURL, "evt-launch@example.com")]
+	launch := byID[wantDocID(testInstanceID, "evt-launch@example.com")]
 	if launch == nil {
 		t.Fatal("evt-launch not emitted")
 	}
@@ -212,7 +217,7 @@ func TestFullSync(t *testing.T) {
 	// evt-allhands: all-day (VALUE=DATE), RRULE recorded, no SEQUENCE -> etag from
 	// LAST-MODIFIED absent too, so a sha256 fingerprint; metadata records rrule +
 	// all_day.
-	allhands := byID[wantDocID(feedURL, "evt-allhands@example.com")]
+	allhands := byID[wantDocID(testInstanceID, "evt-allhands@example.com")]
 	if allhands == nil {
 		t.Fatal("evt-allhands not emitted")
 	}
@@ -239,6 +244,62 @@ func TestFullSync(t *testing.T) {
 	}
 }
 
+// TestDocIDStableAcrossFeedURLRotation is the regression test for the doc_id
+// orphaning bug: many calendar providers embed a rotating private token in the
+// feed URL, so a doc_id scoped by the raw feed URL changes on every rotation and
+// orphans every previously indexed document. The doc_id must be scoped by the
+// stable instance id instead, so the SAME VEVENT synced under TWO different feed
+// URLs (same InstanceID) yields the SAME doc_id.
+//
+// Before the fix (nativeID == feedURL+":"+UID) the two passes produced different
+// doc_ids and this test fails.
+func TestDocIDStableAcrossFeedURLRotation(t *testing.T) {
+	t.Parallel()
+
+	const feedBody = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:evt-rotate@example.com\r\nSUMMARY:Weekly sync\r\nSEQUENCE:0\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	serve := func() *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(feedBody))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+
+	c := newTestConnector()
+
+	// Two distinct feed URLs (e.g. before and after a token rotation), both for
+	// the same configured instance (configFor stamps InstanceID = testInstanceID).
+	srvA, srvB := serve(), serve()
+	if srvA.URL == srvB.URL {
+		t.Fatalf("test setup: the two feed servers share a URL %q", srvA.URL)
+	}
+
+	syncOne := func(rawURL string) string {
+		t.Helper()
+		var rec connectortest.EmitRecorder
+		if _, err := c.FullSync(context.Background(), configFor(t, rawURL), rec.Emit); err != nil {
+			t.Fatalf("FullSync(%s): %v", rawURL, err)
+		}
+		docs := rec.Docs()
+		if len(docs) != 1 {
+			t.Fatalf("emitted %d docs, want 1", len(docs))
+		}
+		return docs[0].GetDocId()
+	}
+
+	gotA := syncOne(srvA.URL)
+	gotB := syncOne(srvB.URL)
+
+	if gotA != gotB {
+		t.Errorf("doc_id changed across a feed-URL rotation: %q (url A) != %q (url B); "+
+			"the native id must be scoped by the stable instance id, not the feed URL", gotA, gotB)
+	}
+	// And it is exactly the instance-scoped id, never a URL-scoped one.
+	if want := wantDocID(testInstanceID, "evt-rotate@example.com"); gotA != want {
+		t.Errorf("doc_id = %q, want %q (sdk.DocID over instanceID+\":\"+UID)", gotA, want)
+	}
+}
+
 // TestIncrementalChangeDelete proves IncrementalSync emits a changed event as an
 // upsert, a new event as an upsert, a canceled-STATUS event as a tombstone, and
 // a disappeared event as a tombstone.
@@ -247,7 +308,6 @@ func TestIncrementalChangeDelete(t *testing.T) {
 	rs := loadServer(t, "testdata/incremental.json")
 	c := newTestConnector()
 	cfg := configFor(t, rs.URL())
-	feedURL := rs.URL()
 
 	// Baseline cursor: standup@seq:0, launch@seq:2, allhands present.
 	baseline := cursorState{
@@ -272,12 +332,12 @@ func TestIncrementalChangeDelete(t *testing.T) {
 	live, tomb := splitIDs(docs)
 
 	wantLive := map[string]bool{
-		wantDocID(feedURL, "evt-standup@example.com"): true, // changed (seq 0 -> 1)
-		wantDocID(feedURL, "evt-retro@example.com"):   true, // brand new
+		wantDocID(testInstanceID, "evt-standup@example.com"): true, // changed (seq 0 -> 1)
+		wantDocID(testInstanceID, "evt-retro@example.com"):   true, // brand new
 	}
 	wantTomb := map[string]bool{
-		wantDocID(feedURL, "evt-launch@example.com"):   true, // canceled STATUS
-		wantDocID(feedURL, "evt-allhands@example.com"): true, // disappeared
+		wantDocID(testInstanceID, "evt-launch@example.com"):   true, // canceled STATUS
+		wantDocID(testInstanceID, "evt-allhands@example.com"): true, // disappeared
 	}
 	assertIDSet(t, "live upserts", live, wantLive)
 	assertIDSet(t, "tombstones", tomb, wantTomb)
@@ -303,7 +363,6 @@ func TestIncrementalPartial(t *testing.T) {
 	rs := loadServer(t, "testdata/incremental_partial.json")
 	c := newTestConnector()
 	cfg := configFor(t, rs.URL())
-	feedURL := rs.URL()
 
 	baseline := cursorState{
 		Hash: "old-hash-differs",
@@ -321,7 +380,7 @@ func TestIncrementalPartial(t *testing.T) {
 	if len(docs) != 1 {
 		t.Fatalf("emitted %d docs, want 1 (only the changed event)", len(docs))
 	}
-	if docs[0].GetDocId() != wantDocID(feedURL, "evt-moved@example.com") {
+	if docs[0].GetDocId() != wantDocID(testInstanceID, "evt-moved@example.com") {
 		t.Errorf("re-emitted the wrong event: %q", docs[0].GetDocId())
 	}
 }
