@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { ApiError, ConnectorClient, type FetchFn } from "./api";
 import {
   connectorsMock,
+  connectorsWire,
   createdInstance,
+  createdInstanceWire,
   jsonResponse,
 } from "./mocks/connectorsMock";
 
@@ -37,7 +39,7 @@ function recorder(response: () => Response): {
 
 describe("ConnectorClient.listConnectors", () => {
   it("GETs /v1/connectors with a bearer token and parses rows", async () => {
-    const { fetchFn, calls } = recorder(() => jsonResponse(connectorsMock));
+    const { fetchFn, calls } = recorder(() => jsonResponse(connectorsWire));
     const client = new ConnectorClient({
       baseUrl: "http://gw:8080/",
       getToken: token,
@@ -55,7 +57,7 @@ describe("ConnectorClient.listConnectors", () => {
 
 describe("ConnectorClient.createConnector", () => {
   it("POSTs the {connector_id, display_name, config} shape", async () => {
-    const { fetchFn, calls } = recorder(() => jsonResponse(createdInstance));
+    const { fetchFn, calls } = recorder(() => jsonResponse(createdInstanceWire));
     const client = new ConnectorClient({
       baseUrl: "http://gw:8080",
       getToken: token,

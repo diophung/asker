@@ -206,6 +206,71 @@ export interface ConnectorInstanceStatus {
   sync: ConnectorSync;
 }
 
+// --- wire normalization ------------------------------------------------------
+// The gateway serializes the connector endpoints with protojson, which — unlike
+// the rest of its (snake_case) JSON API — emits lowerCamelCase field names,
+// renders int64 as a STRING, and carries the instance config as a base64
+// `configJson` blob. Normalize that wire shape into the web's internal
+// snake_case model in ONE place so the components/types stay simple and a missing
+// field can never throw (e.g. `undefined.toLocaleString()` blanked the page).
+interface RawConnectorInstance {
+  id?: string;
+  connectorId?: string;
+  displayName?: string;
+  configJson?: string;
+  status?: string;
+  created?: string;
+  updated?: string;
+}
+interface RawConnectorSync {
+  phase?: string;
+  lastSyncStarted?: string;
+  lastSyncCompleted?: string | null;
+  lastError?: string;
+  docsEmitted?: string | number;
+}
+interface RawConnectorRow {
+  instance?: RawConnectorInstance;
+  sync?: RawConnectorSync;
+}
+
+function decodeConfig(b64?: string): Record<string, unknown> {
+  if (!b64) {
+    return {};
+  }
+  try {
+    return JSON.parse(atob(b64)) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function normalizeInstance(r: RawConnectorInstance = {}): ConnectorInstance {
+  return {
+    id: r.id ?? "",
+    connector_id: r.connectorId ?? "",
+    display_name: r.displayName ?? "",
+    config: decodeConfig(r.configJson),
+    status: r.status ?? "",
+    created: r.created ?? "",
+    updated: r.updated ?? "",
+  };
+}
+
+function normalizeSync(r: RawConnectorSync = {}): ConnectorSync {
+  return {
+    phase: r.phase ?? "",
+    last_sync_started: r.lastSyncStarted ?? "",
+    last_sync_completed: r.lastSyncCompleted ?? "",
+    last_error: r.lastError ?? "",
+    docs_emitted: Number(r.docsEmitted ?? 0) || 0,
+  };
+}
+
+function normalizeRow(r: RawConnectorRow = {}): ConnectorInstanceStatus {
+  return { instance: normalizeInstance(r.instance), sync: normalizeSync(r.sync) };
+}
+
 /**
  * Client for the gateway's connector-management endpoints. Each call attaches a
  * fresh bearer token and supports cancellation via an injected AbortSignal so
@@ -228,7 +293,8 @@ export class ConnectorClient {
     signal?: AbortSignal,
   ): Promise<ConnectorInstanceStatus[]> {
     const res = await this.request("/v1/connectors", { method: "GET" }, signal);
-    return (await res.json()) as ConnectorInstanceStatus[];
+    const raw = (await res.json()) as RawConnectorRow[] | null;
+    return (raw ?? []).map(normalizeRow);
   }
 
   /** Create a new connector instance; returns the created instance. */
@@ -250,7 +316,7 @@ export class ConnectorClient {
       },
       signal,
     );
-    return (await res.json()) as ConnectorInstance;
+    return normalizeInstance((await res.json()) as RawConnectorInstance);
   }
 
   /** Delete a connector instance by id. */

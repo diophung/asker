@@ -58,6 +58,65 @@ export const createdInstance: ConnectorInstance = {
   updated: "2026-06-12T10:00:00Z",
 };
 
+// The RAW gateway wire shape for the connector endpoints (protojson:
+// lowerCamelCase field names, int64 rendered as a STRING, config as a base64
+// `configJson` blob, lastSyncCompleted null when never completed). The api
+// client normalizes this into the snake_case fixtures above; the API tests feed
+// the wire form and assert the normalized result — so they verify against what
+// the gateway actually returns, not a hand-matched mock.
+function b64(o: unknown): string {
+  return btoa(JSON.stringify(o));
+}
+
+export const connectorsWire: unknown[] = [
+  {
+    instance: {
+      id: "inst-gmail-1",
+      connectorId: "gmail",
+      displayName: "Work Gmail",
+      configJson: b64({ user_email: "alice@example.com" }),
+      status: "active",
+      created: "2026-06-01T08:00:00Z",
+      updated: "2026-06-12T09:00:00Z",
+    },
+    sync: {
+      phase: "incremental",
+      lastSyncStarted: "2026-06-12T09:00:00Z",
+      lastSyncCompleted: "2026-06-12T09:01:30Z",
+      lastError: "",
+      docsEmitted: "1284",
+    },
+  },
+  {
+    instance: {
+      id: "inst-jira-1",
+      connectorId: "jira",
+      displayName: "Eng Jira",
+      configJson: b64({ base_url: "https://acme.atlassian.net" }),
+      status: "error",
+      created: "2026-06-02T08:00:00Z",
+      updated: "2026-06-12T08:30:00Z",
+    },
+    sync: {
+      phase: "full",
+      lastSyncStarted: "2026-06-12T08:25:00Z",
+      lastSyncCompleted: null,
+      lastError: "token expired — re-authenticate",
+      docsEmitted: "0",
+    },
+  },
+];
+
+export const createdInstanceWire: unknown = {
+  id: "inst-new-1",
+  connectorId: "gmail",
+  displayName: "Work Gmail",
+  configJson: b64({ user_email: "alice@example.com" }),
+  status: "pending",
+  created: "2026-06-12T10:00:00Z",
+  updated: "2026-06-12T10:00:00Z",
+};
+
 /** Build a JSON Response with the given body and status. */
 export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
