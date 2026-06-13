@@ -256,6 +256,34 @@ func TestTenantIDsDistinctAndPrefixed(t *testing.T) {
 	}
 }
 
+func TestTenantIDOverrideSeedsExactTenant(t *testing.T) {
+	// The load suite seeds the EXACT tenant its OIDC token resolves to (an opaque
+	// id, not synthgen-NNNNNNNN) so queries actually hit. PlanTenants must honor
+	// the override and produce exactly that one group.
+	const want = "a1b2c3d4-5e6f-7890-abcd-ef0123456789" // a sub-UUID-shaped id
+	spec := testSpec()
+	spec.Tenants = 1
+	spec.TenantIDOverride = want
+	plans := PlanTenants(spec)
+	if len(plans) != 1 {
+		t.Fatalf("override should yield 1 tenant, got %d", len(plans))
+	}
+	if plans[0].TenantID != want {
+		t.Errorf("tenant id = %q, want override %q", plans[0].TenantID, want)
+	}
+	// Every generated doc must be scoped to the override group (queryability +
+	// isolation depend on this).
+	docs, _ := GenerateTenant(spec, plans[0], 0)
+	if len(docs) == 0 {
+		t.Fatal("override tenant generated zero docs")
+	}
+	for _, g := range docs {
+		if got := g.Doc.GetTenantId(); got != want {
+			t.Fatalf("doc tenant_id = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestDocsPerTenantSkew(t *testing.T) {
 	spec := Spec{
 		Tenants:           500,

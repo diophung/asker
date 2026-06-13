@@ -36,7 +36,8 @@ import (
 // default. See main() for the precedence wiring.
 type config struct {
 	tenants       int
-	docsPerTenant int // sets both min and max to this when >0 (uniform); 0 => use min/max
+	tenantID      string // explicit single-tenant id override (forces tenants=1); empty => synthgen-NNNNNNNN
+	docsPerTenant int    // sets both min and max to this when >0 (uniform); 0 => use min/max
 	minDocs       int
 	maxDocs       int
 	skewLarge     float64 // fraction of tenants drawn from the upper docs-per-tenant half
@@ -91,6 +92,7 @@ func loadConfig() config {
 
 	fs := flag.CommandLine
 	fs.IntVar(&cfg.tenants, "tenants", cfg.tenants, "number of tenants to generate")
+	fs.StringVar(&cfg.tenantID, "tenant-id", cfg.tenantID, "explicit single-tenant id to seed into (forces --tenants 1); use to seed the EXACT tenant the load suite authenticates as so queries actually hit. Empty => synthgen-NNNNNNNN multi-tenant.")
 	fs.IntVar(&cfg.docsPerTenant, "docs-per-tenant", cfg.docsPerTenant, "uniform docs per tenant (0 => use --min-docs/--max-docs skew distribution)")
 	fs.IntVar(&cfg.minDocs, "min-docs", cfg.minDocs, "minimum docs per tenant (skew distribution)")
 	fs.IntVar(&cfg.maxDocs, "max-docs", cfg.maxDocs, "maximum docs per tenant (skew distribution)")
@@ -156,6 +158,7 @@ func applyEnv(cfg *config) {
 		}
 	}
 	envInt("SYNTHGEN_TENANTS", &cfg.tenants)
+	envStr("SYNTHGEN_TENANT_ID", &cfg.tenantID)
 	envInt("SYNTHGEN_DOCS_PER_TENANT", &cfg.docsPerTenant)
 	envInt("SYNTHGEN_MIN_DOCS", &cfg.minDocs)
 	envInt("SYNTHGEN_MAX_DOCS", &cfg.maxDocs)
@@ -213,8 +216,15 @@ func run(ctx context.Context, cfg config, out *os.File) error {
 
 // specFromConfig validates the config and produces a Spec.
 func specFromConfig(cfg config) (Spec, error) {
-	if cfg.tenants < 1 {
-		return Spec{}, fmt.Errorf("--tenants must be >= 1, got %d", cfg.tenants)
+	tenants := cfg.tenants
+	// An explicit --tenant-id seeds a SINGLE tenant with that exact id (so the
+	// load suite can query the tenant its OIDC token resolves to). It overrides
+	// --tenants to 1; seeding many tenants into one id would collide the groups.
+	if cfg.tenantID != "" {
+		tenants = 1
+	}
+	if tenants < 1 {
+		return Spec{}, fmt.Errorf("--tenants must be >= 1, got %d", tenants)
 	}
 	if cfg.rareRate < 0 || cfg.rareRate > 1 {
 		return Spec{}, fmt.Errorf("--rare-token-rate must be in [0,1], got %v", cfg.rareRate)
@@ -237,7 +247,8 @@ func specFromConfig(cfg config) (Spec, error) {
 		return Spec{}, err
 	}
 	return Spec{
-		Tenants:           cfg.tenants,
+		Tenants:           tenants,
+		TenantIDOverride:  cfg.tenantID,
 		Seed:              cfg.seed,
 		DocTypeMix:        mix,
 		RareTokenRate:     cfg.rareRate,

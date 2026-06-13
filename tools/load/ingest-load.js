@@ -31,7 +31,9 @@
 //
 // THRESHOLDS (PASS/FAIL)
 //   - freshness_seconds: p(90) < FRESHNESS_SLO_MS/1000 (the 30-min SLA).
-//   - upload_failed:     rate < UPLOAD_FAIL_MAX (uploads must be accepted).
+//   - upload_ok_total / docs_searchable_total: count > 0 — at least one upload
+//     succeeded AND at least one doc was observed searchable, so a total upload
+//     failure cannot pass the freshness SLO vacuously (an empty histogram).
 //   - freshness_timeouts:count == 0 is NOT enforced as a hard threshold by
 //     default (a single straggler beyond budget under a tiny dev VM should not
 //     mask the P90 signal); set STRICT_TIMEOUTS=true to also assert zero
@@ -39,7 +41,7 @@
 //
 // PARAMETERS (env; see README): BASE_URL, TOKEN | KC_*, INGEST_VUS,
 //   INGEST_DURATION, FRESHNESS_SLO_MS, POLL_INTERVAL_MS, POLL_TIMEOUT_MS,
-//   UPLOAD_FAIL_MAX, STRICT_TIMEOUTS, RUN_ID.
+//   STRICT_TIMEOUTS, RUN_ID.
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -55,12 +57,6 @@ function envInt(name, dflt) {
   const n = parseInt(v, 10);
   return Number.isNaN(n) ? dflt : n;
 }
-function envFloat(name, dflt) {
-  const v = __ENV[name];
-  if (v === undefined || v === '') return dflt;
-  const n = parseFloat(v);
-  return Number.isNaN(n) ? dflt : n;
-}
 function envBool(name, dflt) {
   const v = __ENV[name];
   if (v === undefined || v === '') return dflt;
@@ -73,7 +69,6 @@ const INGEST_DURATION = envStr('INGEST_DURATION', '5m');
 const FRESHNESS_SLO_MS = envInt('FRESHNESS_SLO_MS', 1800000); // 30 min
 const POLL_INTERVAL_MS = envInt('POLL_INTERVAL_MS', 3000);
 const POLL_TIMEOUT_MS = envInt('POLL_TIMEOUT_MS', FRESHNESS_SLO_MS);
-const UPLOAD_FAIL_MAX = envFloat('UPLOAD_FAIL_MAX', 0.01);
 const STRICT_TIMEOUTS = envBool('STRICT_TIMEOUTS', false);
 const RUN_ID = envStr('RUN_ID', String(Date.now()));
 
@@ -95,8 +90,15 @@ export const options = {
   thresholds: (function () {
     const t = {
       freshness_seconds: [`p(90)<${FRESHNESS_SLO_MS / 1000}`],
-      // http_req_failed covers BOTH uploads and search polls; the dedicated
-      // upload gate is the per-upload check below feeding upload_failed_total.
+      // CRITICAL: a freshness_seconds threshold over a metric with ZERO samples
+      // does NOT fail in k6 — so if every upload failed (gateway down/auth/quota),
+      // freshness_seconds would be empty and the SLO would "pass" vacuously (M5
+      // review). Require real end-to-end progress: at least one successful upload
+      // AND at least one doc observed searchable. (A per-upload FAILURE-FRACTION
+      // gate would need a Rate metric; the per-upload http checks + these
+      // count>0 gates already make a total/near-total upload failure a hard FAIL.)
+      upload_ok_total: ['count>0'],
+      docs_searchable_total: ['count>0'],
     };
     if (STRICT_TIMEOUTS) {
       t.freshness_timeouts = ['count==0'];

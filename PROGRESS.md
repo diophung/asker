@@ -17,6 +17,68 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — M5 scale & SLO verification (complete; full-scale load + soak run in CI)
+
+- Done: **M5 complete — the SLO instrumentation, the load/soak tooling, and the observability
+  stack are built, and the adversarial review's findings are fixed so the SLO verification
+  actually measures real work.** Built in 2 waves + an integration pass + a 6-dimension review
+  (20 agents): **13 confirmed / 3 refuted**, all 13 fixed (the headline one was a vacuous load
+  suite — see below).
+  - **SLO metrics (wave 0, platform/telemetry + services):** a Prometheus exporter is always
+    installed (so `/metrics` works with no collector; OTLP coexists when an endpoint is set),
+    served on each service's health port. New low-cardinality OTel instruments (NO tenant/doc/
+    query labels — that would explode Prometheus at ~10M tenants): query search-duration
+    histogram {mode,degraded,cache,outcome} with buckets straddling the P90≤5s SLO, cache
+    hit/miss, degradation-rung counters; pipeline records/stage-duration + the
+    `asker_index_doc_age_seconds` freshness proxy (1800s SLA bucket); the authoritative
+    `asker_pipeline_deadletter_total{origin_topic}` zero-data-loss signal (kafkautil quarantine
+    site); otelgrpc on query.
+  - **Synthetic data generator (wave 0, tools/synthgen):** deterministic, resume-safe, mixed-type
+    per-tenant corpus, planned to 100K tenants / TB via `--dry-run` (defaults true so it can't
+    feed by accident); vespa-direct + gateway-upload feeders; qzx rare tokens + per-tenant
+    isolation markers. Added a `--tenant-id` override (the review fix below).
+  - **Observability (wave 1, OPT-IN — not in `make dev-up`, gated in Helm, memory-capped):** a
+    Prometheus+Grafana compose overlay + gated chart templates; 2 Grafana SLO dashboards + 12
+    Prometheus alerts committed IN the chart (`files/observability/**`, embedded via .Files.Glob,
+    same files the compose overlay mounts — single source of truth); a Prometheus→health-port
+    scrape NetworkPolicy per service.
+  - **Load suites + reporting (wave 1):** k6 stepped query suite (P90≤5s gate + max-sustained-RPS
+    read-out for the 50K-TPS extrapolation) and ingest/freshness suite (edit→searchable P90<30min);
+    run-load.sh orchestrator + soak; docs/capacity.md scaling model; docs/loadtest-report.md
+    template; ADR-017; a nightly/manual load.yml.
+  - **Review fixes (all 13):** the BLOCKER — the load suite seeded `synthgen-*` tenants but queried
+    as `alice` (a different streaming group) so **every query returned 0 hits**, measuring
+    empty-result no-ops, not search. Fixed end-to-end: synthgen `--tenant-id`, run-load.sh now
+    resolves the querying tenant via `GET /v1/me` and seeds the corpus INTO it, and
+    `CHECK_EXACT_HITS` (now wired to a hard `asker_exact_hit_mismatch==0` threshold) asserts
+    exactly 1 hit so a regression to empty fails loudly. The soak now drives **concurrent ingest**
+    (a read-only soak can't exercise the deadletter path it gates on). The freshness suite now
+    requires `upload_ok_total>0` + `docs_searchable_total>0` (total upload failure was passing
+    vacuously). The query latency histogram now records **failed** searches too (outcome=error),
+    so the P90 SLO alert sees slow-error brownouts. index-writer's health mux is wrapped in the RED
+    middleware (its 5xx alert was silently uncovered). A Grafana→Prometheus ingress NetworkPolicy
+    was added (under default-deny the dashboards couldn't reach Prometheus). ADR-017 corrected
+    (`doc_type` is index-writer-only). 3 findings refuted (a topic-label nit, unauth `/metrics` on
+    the gateway, an fp32/fp16 wording quibble).
+- Next: **M6 — Hardening.** Pen-test-style security review checklist (authz matrix, SSRF in
+  connector fetchers, token vault, injection), GDPR delete drill, quota/abuse controls, admin
+  console, runbooks for the top-10 failure modes. Exit: ship-review doc signed off; a new engineer
+  can deploy + operate from docs alone.
+- Known issues:
+  - The full-scale load (k6 stepped to cluster max) + the 2-hour soak + a live Prometheus/Grafana
+    + NetworkPolicy enforcement run in CI / on a real cluster, NOT on the 8GB dev VM (k6 isn't even
+    installed locally). The k6 scripts are validated with `node --check`, run-load.sh with
+    `bash -n`, the chart with helm-lint+kubeconform, dashboards with json.tool, and alert rules
+    with promtool (in CI). `docs/loadtest-report.md` is a TEMPLATE the CI run fills; its numbers
+    are clearly-marked samples until a real run lands.
+  - The query SLO is measured on ONE representative tenant (each query scans exactly one streaming
+    group, so per-tenant corpus size is the right unit); multi-tenant storage scale is the
+    capacity-model's job (`docs/capacity.md`), and the soak's zero-data-loss deadletter scrape
+    needs index-writer `:9701/metrics` reachable (compose doesn't publish health ports → it
+    degrades to a warning unless run in-network).
+  - Observability is opt-in (`make obs-up`; Grafana 127.0.0.1:13000, Prometheus :19090; dev-only
+    creds). The OTLP push path is still available but no collector is deployed by default.
+
 ## 2026-06-13 — M4 production deployment (complete; kind chaos runs in CI)
 
 - Done: **M4 complete — cloud-agnostic Helm umbrella chart `deploy/helm/asker` deploys the full

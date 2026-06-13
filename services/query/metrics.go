@@ -88,9 +88,14 @@ func newQueryMetrics() *queryMetrics {
 	}
 }
 
-// recordSearch records the Search latency labeled by mode, degraded marker and
-// cache result. ms is the measured duration in milliseconds.
-func (m *queryMetrics) recordSearch(ctx context.Context, ms float64, mode, degraded, cache string) {
+// recordSearch records the Search latency labeled by mode, degraded marker,
+// cache result, and outcome (ok|error). ms is the measured duration in ms.
+// CRITICAL: failed searches MUST be recorded too — a Vespa/embed brownout that
+// takes 4.9s and then returns codes.Unavailable still consumes the latency
+// budget, and the HARD P90<=5s SLO alert reads only this histogram (M5 review).
+// outcome="error" lets a dashboard split healthy vs failed latency while the
+// SLO alert (sum by le, no label filter) sees both.
+func (m *queryMetrics) recordSearch(ctx context.Context, ms float64, mode, degraded, cache, outcome string) {
 	if m == nil || m.searchDuration == nil {
 		return
 	}
@@ -101,6 +106,7 @@ func (m *queryMetrics) recordSearch(ctx context.Context, ms float64, mode, degra
 		attribute.String("mode", mode),
 		attribute.String("degraded", degraded),
 		attribute.String("cache", cache),
+		attribute.String("outcome", outcome),
 	))
 }
 

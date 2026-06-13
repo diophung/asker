@@ -56,7 +56,7 @@ port-forwarded gateway/keycloak/vespa) and a Prometheus-scrapeable index-writer
 `/metrics` for the soak's data-loss check:
 
 ```sh
-SYNTH_TENANTS=2000 SYNTH_DOCS_PER_TENANT=500 \
+SYNTH_DOCS_PER_TENANT=5000 \
 RPS_START=50 RPS_MAX=2000 RPS_STEP=50 STAGE_HOLD=60s \
 INGEST_VUS=16 INGEST_DURATION=20m \
 BASE_URL=https://gw.internal KEYCLOAK_URL=https://kc.internal \
@@ -67,8 +67,10 @@ INDEX_WRITER_METRICS=http://index-writer:9701/metrics \
 
 The corpus is **deterministic** (same `SYNTH_SEED` + params ⇒ byte-identical),
 so the query suite re-derives the rare-token range (`qzx00000000…`) without
-observing the corpus. `RARE_TOKEN_COUNT` is auto-derived from the seed params
-(`tenants × docs/tenant × rare_rate`) unless you pin it.
+observing the corpus. `RARE_TOKEN_COUNT` is read from synthgen's exact
+`rare tokens: N` summary (fallback: `docs/tenant` at the default rate 1.0).
+`SYNTH_DOCS_PER_TENANT` is the representative per-tenant corpus size the query
+SLO is measured at (see the seeding note below).
 
 ### The 2-hour soak (zero data loss)
 
@@ -132,10 +134,10 @@ surfaces as the stage where P90 crosses the SLO. Feed the measured
 | `K6` | `k6` | k6 binary |
 | `RUN_QUERY` / `RUN_INGEST` | `true` / `true` | which suites to run |
 | `SOAK` | `false` | run the soak instead of the stepped suites |
-| `SEED_CORPUS` | `true` | seed via synthgen before running |
-| `SYNTH_TENANTS` | `20` | seed tenants |
-| `SYNTH_DOCS_PER_TENANT` | `50` | seed docs/tenant |
-| `SYNTH_RARE_RATE` | `1.0` | rare-token rate (1.0 ⇒ every doc) |
+| `SEED_CORPUS` | `true` | seed via synthgen (into the `/v1/me` tenant) before running |
+| `QUERY_TENANT` | (from `/v1/me`) | streaming group to seed+query; auto-resolved from the token |
+| `SYNTH_DOCS_PER_TENANT` | `50` | seed docs into the querying tenant (the per-tenant corpus size the SLO is measured at) |
+| `SYNTH_RARE_RATE` | `1.0` | rare-token rate (1.0 ⇒ every doc; keeps `RARE_TOKEN_COUNT` exact) |
 | `SYNTH_SEED` | `1` | deterministic seed |
 | `RPS_START`/`RPS_MAX`/`RPS_STEP` | `10`/`100`/`10` | stepped ramp |
 | `STAGE_HOLD` | `30s` | hold per stage |
@@ -162,7 +164,7 @@ surfaces as the stage where P90 crosses the SLO. Feed the measured
 ### `ingest-load.js`
 
 `BASE_URL`, `TOKEN` | `KC_*`, `INGEST_VUS`, `INGEST_DURATION`,
-`FRESHNESS_SLO_MS`, `POLL_INTERVAL_MS`, `POLL_TIMEOUT_MS`, `UPLOAD_FAIL_MAX`,
+`FRESHNESS_SLO_MS`, `POLL_INTERVAL_MS`, `POLL_TIMEOUT_MS`,
 `STRICT_TIMEOUTS`, `RUN_ID`, `K6_SUMMARY_PATH`.
 
 ## Why these design choices
@@ -171,19 +173,29 @@ surfaces as the stage where P90 crosses the SLO. Feed the measured
   launching iterations at the target rate even as the system slows, which is
   what reveals the throughput-vs-latency cliff. A closed VU model throttles
   itself when responses lag and hides the max.
-- **Query path uses `vespa-direct` seeding; ingest path uses `gateway-upload`:**
-  the query suite needs a large multi-tenant corpus fast (vespa-direct bypasses
-  Kafka), while freshness must traverse the **whole** async pipeline (only the
-  upload path does).
+- **Seed the corpus into the EXACT tenant the suite queries:** the query path
+  scopes every search to the caller's Vespa streaming group (derived from the
+  verified token), so `run-load.sh` resolves that group via `GET /v1/me` and
+  seeds `synthgen --target vespa-direct --tenant-id <that group>` into it.
+  Querying a tenant whose group has no corpus would measure empty-result no-ops,
+  not real search (that was a real M5 bug). A single representative tenant is the
+  right unit: each query scans exactly ONE streaming group, so per-tenant corpus
+  size is what the latency SLO measures; multi-tenant storage scale is the
+  capacity model's job (`docs/capacity.md`). The ingest/freshness suite uses
+  `gateway-upload` (single-tenant, the token owner) because freshness must
+  traverse the **whole** async pipeline (only the upload path does).
 - **k6 for freshness, not bash:** k6 gives sustained concurrency, a P90 Trend,
   threshold-as-PASS/FAIL, and a machine-readable summary in one tool, and polls
   in the same VU that uploaded. The bash fallback (`synthgen --target
   gateway-upload` + `curl` polling, mirroring `tools/e2e/m1-e2e.sh wait_hits`)
   drives the same path but is noisier to measure; we chose k6 for the cleaner
   measurement.
-- **Determinism:** the corpus is reproducible from the seed, so the query suite
-  asserts against tokens it never had to observe (`CHECK_EXACT_HITS=true`
-  upgrades that to a hit-count correctness gate under load).
+- **Determinism + a real correctness gate:** the corpus is reproducible from the
+  seed, so the query suite re-derives the rare tokens without observing the
+  corpus. `run-load.sh` enables `CHECK_EXACT_HITS=true`, which asserts every rare
+  token returns **exactly 1 hit** (wired to a hard `asker_exact_hit_mismatch:
+  count==0` threshold), so an all-empty / wrong-tenant regression fails the run
+  loudly instead of passing as a 0-hit no-op.
 - **Low-cardinality metrics only:** the suites NEVER label by tenant/doc/query
   (10M tenants would explode Prometheus cardinality — see the M5 shared facts);
   the only request tags are `mode` and the stage `rps`.

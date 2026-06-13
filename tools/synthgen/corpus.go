@@ -130,10 +130,15 @@ type TenantPlan struct {
 // already parsed and checked). It drives both --dry-run planning and real
 // generation; identical Spec => identical corpus.
 type Spec struct {
-	Tenants       int
-	Seed          int64
-	DocTypeMix    []TypeWeight // normalized weights over DocTypes
-	RareTokenRate float64      // [0,1]: fraction of docs carrying a rare token
+	Tenants int
+	// TenantIDOverride, when non-empty, makes the SINGLE generated tenant use this
+	// exact streaming-group / tenant id instead of synthgen-NNNNNNNN. Used by the
+	// load suite to seed the EXACT tenant its OIDC token resolves to, so queries
+	// actually hit (otherwise the corpus lands in a group the query never scans).
+	TenantIDOverride string
+	Seed             int64
+	DocTypeMix       []TypeWeight // normalized weights over DocTypes
+	RareTokenRate    float64      // [0,1]: fraction of docs carrying a rare token
 	// Distribution of docs per tenant. Most tenants are small; a few are
 	// large (realistic skew). MinDocs/MaxDocs bound the per-tenant count and
 	// SkewLargeFraction of tenants are drawn from the upper half of the range.
@@ -170,9 +175,15 @@ func RareToken(g int) string { return fmt.Sprintf("qzx%08d", g) }
 func PlanTenants(spec Spec) []TenantPlan {
 	plans := make([]TenantPlan, spec.Tenants)
 	for i := 0; i < spec.Tenants; i++ {
+		tid := TenantID(i)
+		// An explicit override (single-tenant; specFromConfig forces Tenants=1)
+		// seeds that exact id so the load suite's OIDC-derived tenant matches.
+		if spec.TenantIDOverride != "" {
+			tid = spec.TenantIDOverride
+		}
 		plans[i] = TenantPlan{
 			Index:           i,
-			TenantID:        TenantID(i),
+			TenantID:        tid,
 			DocCount:        docCountFor(spec, i),
 			IsolationMarker: IsolationMarker(spec.Seed, i),
 		}

@@ -184,7 +184,10 @@ func newHealthHandler(vespaURL string) http.Handler {
 	// OTLP collector. Exposes the pipeline records/stage-duration metrics and
 	// the asker_index_doc_age_seconds freshness histogram.
 	mux.Handle("GET /metrics", telemetry.MetricsHandler())
-	return mux
+	// Wrap in the RED middleware (like gateway/query/ingest) so this service also
+	// emits http_server_requests_total{job="index-writer"} — without it the
+	// AskerService5xxRateHigh alert silently never covers index-writer (M5 review).
+	return telemetry.HTTPMiddleware(serviceName)(mux)
 }
 
 // runHealthcheck probes the local /healthz endpoint and returns a process

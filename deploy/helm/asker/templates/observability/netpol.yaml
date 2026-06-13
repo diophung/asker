@@ -58,4 +58,31 @@ spec:
         - protocol: TCP
           port: {{ $port | int }}
 {{- end }}
+---
+# Grafana -> Prometheus (:9090). The Grafana datasource dials
+# http://prometheus:9090, so under default-deny the Prometheus pod must accept
+# ingress FROM the Grafana pod — otherwise every dashboard panel fails with a
+# datasource/connection error (M5 review). The per-service scrape policies above
+# name Prometheus as a SOURCE; this is the symmetric ingress allow ON Prometheus.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-grafana-to-prometheus" (include "asker.fullname" $root) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.obs.selectorLabels" (list $root "prometheus") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "asker.obs.selectorLabels" (list $root "grafana") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9090
 {{- end }}

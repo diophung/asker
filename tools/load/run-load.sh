@@ -52,10 +52,12 @@ RUN_INGEST="${RUN_INGEST:-true}"
 SOAK="${SOAK:-false}"
 SEED_CORPUS="${SEED_CORPUS:-true}"
 
-# Synthgen seed-corpus knobs (SMALL by default; scale via env for CI/full).
-SYNTH_TENANTS="${SYNTH_TENANTS:-20}"
+# Synthgen seed-corpus knobs. We seed a SINGLE tenant — the one the query token
+# resolves to (see step 1) — so the query suite actually hits. SYNTH_DOCS_PER_TENANT
+# is therefore the representative per-tenant corpus size the query SLO is measured
+# at; multi-tenant storage scale is the capacity model's concern (docs/capacity.md).
 SYNTH_DOCS_PER_TENANT="${SYNTH_DOCS_PER_TENANT:-50}"
-SYNTH_RARE_RATE="${SYNTH_RARE_RATE:-1.0}" # 1.0 => every doc gets a rare token
+SYNTH_RARE_RATE="${SYNTH_RARE_RATE:-1.0}" # 1.0 => every doc gets a rare token (keeps RARE_TOKEN_COUNT exact)
 SYNTH_SEED="${SYNTH_SEED:-1}"
 SYNTH_CONCURRENCY="${SYNTH_CONCURRENCY:-8}"
 
@@ -272,31 +274,11 @@ else
   fail "expected 200, got ${code} (is the stack up?)"
 fi
 
-# --- 1. Seed the query corpus via synthgen (vespa-direct) ---------------------
-if [ "$SEED_CORPUS" = "true" ]; then
-  begin "seed: synthgen vespa-direct (${SYNTH_TENANTS} tenants x ${SYNTH_DOCS_PER_TENANT} docs)"
-  if go run ./tools/synthgen \
-    --target vespa-direct --vespa-url "$VESPA_URL" \
-    --tenants "$SYNTH_TENANTS" --docs-per-tenant "$SYNTH_DOCS_PER_TENANT" \
-    --rare-token-rate "$SYNTH_RARE_RATE" --seed "$SYNTH_SEED" \
-    --concurrency "$SYNTH_CONCURRENCY" --dry-run=false \
-    --progress-every 10s >"$OUTDIR/synthgen.log" 2>&1; then
-    pass
-    note "log: $OUTDIR/synthgen.log"
-  else
-    fail "synthgen seed failed; tail: $(tail -n 3 "$OUTDIR/synthgen.log" 2>/dev/null | tr '\n' ' ')"
-  fi
-  # Derive the rare-token count the query suite samples from when not pinned.
-  # rare tokens ~= tenants * docs_per_tenant * rare_rate (uniform docs case).
-  if [ -z "$RARE_TOKEN_COUNT" ]; then
-    RARE_TOKEN_COUNT="$(python3 -c "print(max(1, int(${SYNTH_TENANTS}*${SYNTH_DOCS_PER_TENANT}*${SYNTH_RARE_RATE})))")"
-  fi
-else
-  note "seed skipped (SEED_CORPUS=false); RARE_TOKEN_COUNT=${RARE_TOKEN_COUNT:-1000}"
-  RARE_TOKEN_COUNT="${RARE_TOKEN_COUNT:-1000}"
-fi
-
-# --- 2. Token ------------------------------------------------------------------
+# --- 1. Token + resolve the querying tenant (BEFORE seeding) ------------------
+# The query path scopes every search to the caller's Vespa STREAMING GROUP, which
+# the gateway derives from the verified token (tenant_id claim, else sub). So we
+# must seed the corpus into THAT exact group, or every query scans an empty group
+# and returns 0 hits — measuring empty-result latency, not real search (M5 review).
 TOKEN="${TOKEN:-}"
 begin "token: OIDC password grant for ${KC_USER}"
 if [ -n "$TOKEN" ]; then
@@ -308,6 +290,55 @@ else
   fail "$TOKEN"
   TOKEN=""
 fi
+
+QUERY_TENANT="${QUERY_TENANT:-}"
+begin "tenant: resolve the querying tenant via GET /v1/me"
+if [ -n "$QUERY_TENANT" ]; then
+  pass
+  note "using QUERY_TENANT from env: ${QUERY_TENANT}"
+elif [ -z "$TOKEN" ]; then
+  fail "no token; cannot resolve tenant"
+elif me="$("${CURL[@]}" -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}/v1/me" 2>&1)" &&
+  QUERY_TENANT="$(json_field tenant_id <<<"$me")" && [ -n "$QUERY_TENANT" ]; then
+  pass
+  note "querying tenant (streaming group): ${QUERY_TENANT}"
+else
+  fail "could not resolve tenant_id from /v1/me: ${me:0:200}"
+  QUERY_TENANT=""
+fi
+
+# --- 2. Seed the query corpus INTO the querying tenant (vespa-direct) ----------
+# A single representative tenant: each query scans exactly ONE streaming group, so
+# per-tenant corpus size is what the query-latency SLO measures; multi-tenant
+# storage scale is the capacity model's job (docs/capacity.md). rare-token-rate
+# 1.0 (default) makes every doc carry a contiguous qzx ordinal, so the query suite
+# re-derives the exact set and RARE_TOKEN_COUNT below is exact.
+if [ "$SEED_CORPUS" = "true" ] && [ -n "$QUERY_TENANT" ]; then
+  begin "seed: synthgen vespa-direct into ${QUERY_TENANT} (${SYNTH_DOCS_PER_TENANT} docs, rate ${SYNTH_RARE_RATE})"
+  if go run ./tools/synthgen \
+    --target vespa-direct --vespa-url "$VESPA_URL" \
+    --tenant-id "$QUERY_TENANT" --docs-per-tenant "$SYNTH_DOCS_PER_TENANT" \
+    --rare-token-rate "$SYNTH_RARE_RATE" --seed "$SYNTH_SEED" \
+    --concurrency "$SYNTH_CONCURRENCY" --dry-run=false \
+    --progress-every 10s >"$OUTDIR/synthgen.log" 2>&1; then
+    pass
+    note "log: $OUTDIR/synthgen.log"
+  else
+    fail "synthgen seed failed; tail: $(tail -n 3 "$OUTDIR/synthgen.log" 2>/dev/null | tr '\n' ' ')"
+  fi
+else
+  note "seed skipped (SEED_CORPUS=${SEED_CORPUS}, tenant='${QUERY_TENANT}')"
+fi
+# Rare-token universe the query suite samples [0, RARE_TOKEN_COUNT). Prefer the
+# EXACT minted count synthgen reports ("rare tokens: N"), robust at any rate;
+# fall back to the at-rate-1.0 exact value (docs_per_tenant) for a skipped seed.
+if [ -z "$RARE_TOKEN_COUNT" ]; then
+  RARE_TOKEN_COUNT="$(grep -oE 'rare tokens: +[0-9]+' "$OUTDIR/synthgen.log" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+fi
+if [ -z "$RARE_TOKEN_COUNT" ]; then
+  RARE_TOKEN_COUNT="$(python3 -c "print(max(1, int(${SYNTH_DOCS_PER_TENANT}*${SYNTH_RARE_RATE})))")"
+fi
+note "rare-token universe: ${RARE_TOKEN_COUNT} (qzx00000000..)"
 
 # --- 3. Query suite (stepped to cluster max) ----------------------------------
 if [ "$RUN_QUERY" = "true" ] && [ "$SOAK" != "true" ]; then
@@ -323,6 +354,7 @@ if [ "$RUN_QUERY" = "true" ] && [ "$SOAK" != "true" ]; then
     STAGE_HOLD="$STAGE_HOLD" MODE="$MODE" QUERY_LIMIT="$QUERY_LIMIT" \
     P90_SLO_MS="$P90_SLO_MS" FAIL_RATE_MAX="$FAIL_RATE_MAX" \
     RARE_TOKEN_COUNT="$RARE_TOKEN_COUNT" \
+    CHECK_EXACT_HITS="${CHECK_EXACT_HITS:-true}" \
       "$K6" run \
         --summary-trend-stats "avg,min,med,p(90),p(95),p(99),max" \
         "${REPO_ROOT}/tools/load/query-load.js" >"$OUTDIR/query.out" 2>&1
@@ -370,7 +402,7 @@ fi
 # --- 5. Soak (opt-in): fixed sub-max rate for SOAK_DURATION -------------------
 if [ "$SOAK" = "true" ]; then
   echo
-  echo "-- SOAK: query suite at fixed ${SOAK_RPS} RPS for ${SOAK_DURATION}; zero failed + no new deadletters --"
+  echo "-- SOAK: query @ ${SOAK_RPS} RPS + concurrent ingest for ${SOAK_DURATION}; zero failed + no new deadletters --"
 
   # Snapshot the deadletter counter BEFORE the soak (zero-data-loss baseline).
   DL_BEFORE="$(deadletter_total)"
@@ -385,6 +417,21 @@ if [ "$SOAK" = "true" ]; then
     note "WARNING: ${INDEX_WRITER_METRICS} unreachable or metric absent; deadletter check will be SKIPPED"
   fi
 
+  # Drive sustained INGEST traffic concurrently with the query soak: documents
+  # must actually flow through the connector->Kafka->ingest->enrich->index
+  # pipeline whose deadletter counter the zero-data-loss gate scrapes. A read-only
+  # soak can never exercise the data-loss path it claims to verify (M5 review).
+  SOAK_INGEST_PID=""
+  if [ -n "$TOKEN" ]; then
+    K6_SUMMARY_PATH="$OUTDIR/soak-ingest-summary.json" \
+    BASE_URL="$BASE_URL" TOKEN="$TOKEN" \
+    INGEST_VUS="${SOAK_INGEST_VUS:-2}" INGEST_DURATION="$SOAK_DURATION" \
+    FRESHNESS_SLO_MS="$FRESHNESS_SLO_MS" \
+      "$K6" run "${REPO_ROOT}/tools/load/ingest-load.js" >"$OUTDIR/soak-ingest.out" 2>&1 &
+    SOAK_INGEST_PID=$!
+    note "concurrent soak ingest started (pid ${SOAK_INGEST_PID}, ${SOAK_INGEST_VUS:-2} VUs for ${SOAK_DURATION})"
+  fi
+
   begin "soak: query suite, ${SOAK_RPS} RPS for ${SOAK_DURATION}, 0 failed requests"
   if [ -z "$TOKEN" ]; then
     fail "no token; cannot run soak"
@@ -397,11 +444,16 @@ if [ "$SOAK" = "true" ]; then
     MODE="$MODE" QUERY_LIMIT="$QUERY_LIMIT" \
     P90_SLO_MS="$P90_SLO_MS" FAIL_RATE_MAX="${SOAK_FAIL_RATE_MAX:-0.001}" \
     RARE_TOKEN_COUNT="$RARE_TOKEN_COUNT" \
+    CHECK_EXACT_HITS="${CHECK_EXACT_HITS:-true}" \
       "$K6" run \
         --summary-trend-stats "avg,min,med,p(90),p(95),p(99),max" \
         "${REPO_ROOT}/tools/load/query-load.js" >"$OUTDIR/soak.out" 2>&1
     k6rc=$?
     set -e
+    # Reap the concurrent ingest load (it runs for the same SOAK_DURATION).
+    if [ -n "$SOAK_INGEST_PID" ]; then
+      wait "$SOAK_INGEST_PID" 2>/dev/null || true
+    fi
     # The k6 http_req_failed threshold for the soak uses a tiny positive bound
     # (SOAK_FAIL_RATE_MAX, default 0.001) so a clean run PASSES the k6 gate (a
     # literal rate<0 can never be satisfied). The STRICT zero-failure assertion

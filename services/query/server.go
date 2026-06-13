@@ -86,7 +86,7 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		cached.TookMs = time.Since(start).Milliseconds()
 		logger.Debug("stage cache", "took", time.Since(stage), "hit", true)
 		s.metrics.recordCache(ctx, "hit")
-		s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), "", "hit")
+		s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), "", "hit", "ok")
 		return cached, nil
 	}
 	s.metrics.recordCache(ctx, "miss")
@@ -104,6 +104,9 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		case embedErr == nil:
 			vector = v
 		case mode == queryv1.SearchMode_VECTOR:
+			// Record the (brownout) latency so the P90 SLO alert sees failed
+			// searches, not just successes (M5 review).
+			s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), "none", "miss", "error")
 			return nil, status.Errorf(codes.Unavailable, "query: embedding unavailable in VECTOR mode: %v", embedErr)
 		default:
 			if errors.Is(embedErr, errEmbedDim) {
@@ -175,6 +178,9 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		if errors.Is(err, errInvalidFilterValue) {
 			return nil, status.Errorf(codes.InvalidArgument, "query: %v", err)
 		}
+		// A search-backend (Vespa) failure: record the latency it consumed so a
+		// slow-error brownout is visible to the P90 SLO alert (M5 review).
+		s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), joinDegraded(degradedReasons), "miss", "error")
 		return nil, status.Errorf(codes.Unavailable, "query: search backend: %v", err)
 	}
 
@@ -200,7 +206,7 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	}
 	// This is a computed (cache-miss) result; the search-duration histogram is
 	// labeled cache="miss" here, cache="hit" on the early cached return above.
-	s.metrics.recordSearch(ctx, float64(resp.TookMs), mode.String(), degraded, "miss")
+	s.metrics.recordSearch(ctx, float64(resp.TookMs), mode.String(), degraded, "miss", "ok")
 	logger.Debug("search complete",
 		"took", time.Since(start), "hits", len(resp.Hits), "total", resp.Total, "degraded", degraded)
 	return resp, nil

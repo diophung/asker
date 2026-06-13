@@ -183,6 +183,12 @@ function buildThresholds() {
     // Custom server-side end-to-end latency, same SLO line (informational gate).
     e2e_latency_ms: [`p(90)<${P90_SLO_MS}`],
   };
+  if (CHECK_EXACT_HITS) {
+    // A k6 check() does NOT affect the exit code — only a THRESHOLD does. Wire the
+    // mismatch counter so any query that did NOT return exactly 1 hit (e.g. the
+    // all-empty no-op an earlier version measured) fails the run loudly.
+    t.asker_exact_hit_mismatch = ['count==0'];
+  }
   if (!SOAK) {
     const seen = {};
     for (const s of stages) {
@@ -285,13 +291,15 @@ export default function (data) {
 
       if (CHECK_EXACT_HITS) {
         const hits = Array.isArray(body.hits) ? body.hits : [];
-        // The rare token lives in exactly one doc; the querying tenant must be
-        // its owner for the hit to appear. Under a single-token-per-tenant
-        // corpus a foreign tenant sees 0 — so we assert <=1, and count==1 only
-        // when it is the owner. We only flag the impossible >1.
-        if (hits.length > 1) {
+        // Each rare token lives in EXACTLY ONE doc, and the corpus is seeded into
+        // the SAME tenant this suite queries (run-load.sh seeds --tenant-id =
+        // /v1/me tenant), so a healthy result is exactly 1 hit. Assert that:
+        // hits===1. A 0-hit response (the vacuous empty-result no-op an earlier
+        // version measured) and the impossible >1 BOTH fail, so an all-empty
+        // regression breaks the run loudly (M5 review).
+        if (hits.length !== 1) {
           exactHitMismatch.add(1);
-          check(res, { 'rare token hits <= 1': () => false });
+          check(res, { 'rare token returns exactly 1 hit': () => false });
         }
       }
     }

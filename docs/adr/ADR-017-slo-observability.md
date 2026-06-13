@@ -54,9 +54,10 @@ The canonical set (Prometheus names after OTel suffixing):
 - `asker_query_cache_requests_total` — counter; label `result` (hit|miss). Cache hit rate sizes
   the TEI pool (capacity.md §2).
 - `asker_query_degradation_events_total` — counter; label `rung` (keyword-only|clip-unavailable).
-- `asker_pipeline_records_total` — counter; labels `stage`, `topic`, `result` (ok|error),
-  `doc_type`. `result=error` is **per-attempt** (kafkautil retries 3×), the handler attempt-fail
-  rate — **not** a data-loss signal.
+- `asker_pipeline_records_total` — counter; labels `stage`, `topic`, `result` (ok|error); the
+  **index-writer** stage additionally carries `doc_type` (it has the typed `Document` at index
+  time; the ingest stage emits only `stage`/`topic`/`result`). `result=error` is **per-attempt**
+  (kafkautil retries 3×), the handler attempt-fail rate — **not** a data-loss signal.
 - `asker_pipeline_stage_duration_milliseconds` — histogram; labels `stage`, `topic`.
 - `asker_index_doc_age_seconds` — histogram; labels `stage`, `doc_type`. Buckets (s):
   1,5,10,30,60,300,600,1800,3600,21600,86400,+Inf — the **1800 s bucket is the 30-min SLA line**.
