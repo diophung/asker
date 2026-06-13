@@ -17,6 +17,51 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — M2 connector framework + breadth (complete)
+
+- Done: **M2 exit criteria met — contract tests pass for every connector against recorded
+  fixtures (no live API), and the "build a connector in <1 day" tutorial was proven by
+  implementing MS Teams from it.** Built in three waves (foundation, API connectors, file
+  connectors+UI), each integrated, adversarially reviewed, and committed.
+  - **SDK finalized (ADR-010):** out-of-process gRPC plugin transport (`connectors/sdk/plugin`,
+    server+client adapters, server-streaming Emit/Checkpoint, parity-tested in-proc == over-the-
+    wire) alongside the in-process default.
+  - **Contract-test harness (ADR-011):** `connectors/sdk/connectortest` cassette record/replay
+    (`RunConnectorContract`, `NewReplayServer`, `ASKER_RECORD=1` recorder that redacts secrets) —
+    the offline fixture mechanism every connector uses.
+  - **13 connectors, all contract-tested (85–100% pkg coverage):** gmail + upload (M1) plus
+    outlook-mail, gdrive (+ACL, the ADR-012 reference), gcal, outlook-cal, slack (Events API
+    webhook + HMAC), confluence, jira, s3 (minio-go), ical (hand-written RFC 5545 parser),
+    whatsapp-export (chat.txt parser), msteams. All 14 in-proc connectors registered in the hub.
+  - **iMessage local agent:** Go CLI reading `chat.db` via `sqlite3` shell-out, uploads via
+    `/v1/upload`; contract-tested row→Document core (`internal/imsg`, 100%).
+  - **Connector management UI:** catalog + connect form + live instance list (status/phase/
+    errors)/delete, in the React app; search UI intact; web build/test/lint green.
+  - **Adversarial review (22 agents):** 13 findings fixed with regression tests — doc_id-stability
+    bugs (jira mutable-key→immutable-id, whatsapp lineIndex→content-hash, ical feed-url→
+    instanceID-scoped, all of which would orphan documents on change; fixed pre-production),
+    incremental-fidelity bugs (msteams/slack edits dropping ACL+participants; msteams missing new
+    chats; s3 resume dropping the deletion keyset), and minors. The MS Teams build surfaced
+    concrete tutorial gaps (real harness API, URL rebasing, multi-resource cursors, tenancy.Context
+    construction) — all folded back into docs/connectors/building-a-connector.md.
+- Next: **M3 — media pipeline.** Image OCR + CLIP embeddings (text→image search), audio/video →
+  faster-whisper transcripts with timestamp-anchored chunks (search hit deep-links to the moment),
+  thumbnails, ffmpeg keyframes. This is heavy ML (Python enrich extension) — mind the dev-VM memory
+  ceiling (CLIP/Whisper models are large; likely needs the Docker memory bump or CI-only e2e, like
+  M1's full e2e).
+- Known issues:
+  - Connectors are validated by offline contract tests (the spec's M2 bar). Live end-to-end
+    sync against real Graph/Google/Atlassian/Slack tenants needs the hub's OAuth authorization-code
+    flow (token acquisition/refresh) and real API credentials — deferred (spec §6: ask the human
+    for paid/live API keys). The hub already consumes a vault token; only OAuth *acquisition* is
+    pending. Webhook push for Graph/Google/Atlassian sources is likewise deferred (needs public
+    notification endpoints + subscription lifecycle); Slack push is implemented.
+  - SSRF: tenant-supplied connector URLs (s3 endpoint, ical feed_url, whatsapp export_url,
+    confluence/jira base_url) are fetched server-side without host/IP validation. Accepted under
+    the M1 closed-network trust model (ADR-009); harden in M4 (egress policy) and the M6 review.
+  - jira issue body caps comments at the search API's first page (documented limitation; full
+    comment pagination is a refinement).
+
 ## 2026-06-13 — M1 vertical slice (functionally complete; full-scale e2e gated on dev VM memory)
 
 - Done: **The M1 vertical slice runs end to end on the live stack.** Gmail + upload connectors
