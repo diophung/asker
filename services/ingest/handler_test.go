@@ -50,24 +50,35 @@ func (f *fakeProducer) produced() []*askerv1.Document {
 
 // fakeSeen is the in-memory miniredis-like seenStore for tests.
 type fakeSeen struct {
-	mu   sync.Mutex
-	err  error
-	keys map[string]time.Duration
+	mu      sync.Mutex
+	err     error // returned by both Seen and MarkSeen
+	markErr error // returned by MarkSeen only (Seen still succeeds)
+	keys    map[string]time.Duration
 }
 
 func newFakeSeen() *fakeSeen { return &fakeSeen{keys: make(map[string]time.Duration)} }
 
-func (f *fakeSeen) SetNX(_ context.Context, key string, ttl time.Duration) (bool, error) {
+func (f *fakeSeen) Seen(_ context.Context, key string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return false, f.err
 	}
-	if _, ok := f.keys[key]; ok {
-		return false, nil
+	_, ok := f.keys[key]
+	return ok, nil
+}
+
+func (f *fakeSeen) MarkSeen(_ context.Context, key string, ttl time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	if f.markErr != nil {
+		return f.markErr
 	}
 	f.keys[key] = ttl
-	return true, nil
+	return nil
 }
 
 func (f *fakeSeen) Close() error { return nil }
@@ -215,10 +226,9 @@ func TestHandleRedisDownFailsOpen(t *testing.T) {
 	}
 }
 
-// TestHandleRetryAfterProduceFailure exercises the pendingKey guard: the
-// dedupe key is SETNX'd before the produce, so when the produce fails and
-// kafkautil redelivers the same record, the retry must not be dropped as a
-// "duplicate" that never actually reached docs.chunked.
+// TestHandleRetryAfterProduceFailure: record-after-produce means a failed
+// produce leaves NO dedupe key, so the redelivered record re-produces instead
+// of being dropped as a false duplicate.
 func TestHandleRetryAfterProduceFailure(t *testing.T) {
 	t.Parallel()
 	prod, seen := &fakeProducer{}, newFakeSeen()
@@ -229,8 +239,8 @@ func TestHandleRetryAfterProduceFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "kafka unavailable") {
 		t.Fatalf("Handle with failing producer: got %v, want produce error", err)
 	}
-	if _, marked := seen.keys[seenKeyPrefix+"doc-1:etag-1"]; !marked {
-		t.Fatal("dedupe key was not recorded before the produce")
+	if _, marked := seen.keys[seenKeyPrefix+"doc-1:etag-1"]; marked {
+		t.Fatal("dedupe key recorded despite a failed produce (record-after-produce violated)")
 	}
 
 	// The broker recovers; the consumer retries the same record.
@@ -239,16 +249,53 @@ func TestHandleRetryAfterProduceFailure(t *testing.T) {
 		t.Fatalf("retry Handle: %v", err)
 	}
 	if got := len(prod.produced()); got != 1 {
-		t.Fatalf("produced %d docs, want 1 (retry must proceed despite seen key)", got)
+		t.Fatalf("produced %d docs, want 1 (retry must proceed despite no key)", got)
 	}
 
-	// After the successful produce the guard is cleared: the next replay of
-	// the same record is a genuine duplicate again.
+	// Now the key is recorded; a genuine replay of the same record is skipped.
 	if err := h.Handle(context.Background(), rawDoc("doc-1", "etag-1")); err != nil {
 		t.Fatalf("post-success duplicate Handle: %v", err)
 	}
 	if got := len(prod.produced()); got != 1 {
-		t.Errorf("produced %d docs, want still 1 (guard must clear on success)", got)
+		t.Errorf("produced %d docs, want still 1 (recorded key suppresses replay)", got)
+	}
+}
+
+// TestHandleCrashBetweenProduceAndMarkDoesNotDrop is the regression for the
+// at-least-once blocker: a crash after a successful produce but before the
+// dedupe key is recorded (simulated by a fresh handler over the same seen
+// store with the key absent) must re-produce on redelivery, never drop. With
+// record-after-produce the key is simply absent, so the redelivered record
+// flows again — the idempotent downstream upsert collapses the duplicate.
+func TestHandleCrashBetweenProduceAndMarkDoesNotDrop(t *testing.T) {
+	t.Parallel()
+	seen := newFakeSeen()
+
+	// First delivery: produce succeeds, then the process "crashes" before
+	// MarkSeen — model that by failing only the MarkSeen call.
+	prod1 := &fakeProducer{}
+	seen.markErr = errors.New("crash before mark")
+	h1 := newHandler(prod1, seen, discardLogger())
+	if err := h1.Handle(context.Background(), rawDoc("doc-1", "etag-1")); err != nil {
+		t.Fatalf("first Handle: %v", err)
+	}
+	if got := len(prod1.produced()); got != 1 {
+		t.Fatalf("first delivery produced %d, want 1", got)
+	}
+	if _, marked := seen.keys[seenKeyPrefix+"doc-1:etag-1"]; marked {
+		t.Fatal("key recorded despite the simulated crash before MarkSeen")
+	}
+
+	// Redelivery after restart: a brand-new handler, same seen store, key
+	// still absent. The document MUST be re-produced, not dropped.
+	seen.markErr = nil
+	prod2 := &fakeProducer{}
+	h2 := newHandler(prod2, seen, discardLogger())
+	if err := h2.Handle(context.Background(), rawDoc("doc-1", "etag-1")); err != nil {
+		t.Fatalf("redelivery Handle: %v", err)
+	}
+	if got := len(prod2.produced()); got != 1 {
+		t.Fatalf("redelivery produced %d docs, want 1 (document must not be dropped)", got)
 	}
 }
 

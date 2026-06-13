@@ -68,6 +68,10 @@ for i in 0 1 2; do
   MAILBOX[i]="${USERS[i]}-${RUN_ID}@example.com"
   SEEDVAL[i]=$((RUN_ID * 10 + i + 1))
   ISO_TOKEN[i]="iso${RUN_ID}${USERS[i]}"
+  # Pre-seed the per-tenant arrays so that, under `set -u`, a step that fails
+  # during setup leaves later steps to report a clean failure rather than
+  # aborting the whole run on an unbound-variable error.
+  TOKENS[i]=""; TENANT[i]=""; INSTANCE[i]=""
 done
 
 # Measured latencies (seconds), reported in the final summary.

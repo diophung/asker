@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -372,6 +373,58 @@ func TestPausedAndRemovedInstancesStopTheirWorkers(t *testing.T) {
 				t.Errorf("syncs continued after stop: full %d->%d inc %d->%d", full0, full1, inc0, inc1)
 			}
 		})
+	}
+}
+
+// TestPauseResumeDoesNotOverlapSyncs is the regression for the concurrent-sync
+// bug: pausing an instance while its FullSync is in flight, then re-activating
+// it, must NOT start a second worker until the first has drained — otherwise
+// two passes run concurrently for one instance (duplicate emits, cursor races).
+func TestPauseResumeDoesNotOverlapSyncs(t *testing.T) {
+	release := make(chan struct{})
+	var inFlight atomic.Int32
+	var maxConcurrent atomic.Int32
+	conn := &fakeConnector{id: "gmail"}
+	conn.fullSyncFn = func(ctx context.Context, _ sdk.Config, _ sdk.Emit) (sdk.Cursor, error) {
+		n := inFlight.Add(1)
+		for {
+			if m := maxConcurrent.Load(); n > m {
+				if maxConcurrent.CompareAndSwap(m, n) {
+					break
+				}
+				continue
+			}
+			break
+		}
+		defer inFlight.Add(-1)
+		select {
+		case <-release:
+			return "full-done", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
+	r := newRig(t, conn, nil)
+	r.cpFake.addInstance(instGmail, tenantA, "gmail", nil, controlplanev1.ConnectorStatus_ACTIVE)
+	r.start(t)
+
+	// First worker starts and blocks inside FullSync.
+	waitFor(t, 5*time.Second, func() bool { return inFlight.Load() == 1 }, "first FullSync in flight")
+
+	// Pause (worker canceled, but its FullSync goroutine is still blocked),
+	// then immediately re-activate — several reconcile ticks pass while the
+	// old worker is still draining.
+	r.cpFake.setStatus(instGmail, controlplanev1.ConnectorStatus_PAUSED)
+	r.cpFake.setStatus(instGmail, controlplanev1.ConnectorStatus_ACTIVE)
+	time.Sleep(6 * r.sch.tick)
+
+	// Release the (canceled) first sync; the replacement may now run.
+	close(release)
+	time.Sleep(8 * r.sch.tick)
+
+	if got := maxConcurrent.Load(); got > 1 {
+		t.Fatalf("max concurrent FullSync passes for one instance = %d, want 1", got)
 	}
 }
 

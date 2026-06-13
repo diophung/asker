@@ -296,7 +296,7 @@ func TestSearchHybridFlow(t *testing.T) {
 	}
 
 	body := env.vespa.lastBody(t)
-	wantYQL := `select * from sources * where userQuery() and type contains "EMAIL" and participants contains ({substring:true}"alice")`
+	wantYQL := `select * from sources * where rank(userQuery(), ({targetHits:100}nearestNeighbor(embedding,q))) and type contains "EMAIL" and participants contains ({substring:true}"alice")`
 	if body["yql"] != wantYQL {
 		t.Errorf("yql =\n  %v\nwant\n  %s", body["yql"], wantYQL)
 	}

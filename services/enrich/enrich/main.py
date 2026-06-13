@@ -128,7 +128,15 @@ async def run(config: Config) -> None:
         auto_offset_reset="earliest",
         max_poll_records=config.max_poll_records,
     )
-    producer = AIOKafkaProducer(bootstrap_servers=config.kafka_brokers)
+    # acks="all" + idempotence matches franz-go's durable defaults on the Go
+    # producers (all-ISR ack, no silent loss on leader failover), so the
+    # docs.enriched stage has the same durability as docs.raw/docs.chunked
+    # (ADR-004 parity).
+    producer = AIOKafkaProducer(
+        bootstrap_servers=config.kafka_brokers,
+        acks="all",
+        enable_idempotence=True,
+    )
     worker = Worker(consumer, producer, embedder, max_poll_records=config.max_poll_records)
 
     loop = asyncio.get_running_loop()

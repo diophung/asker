@@ -25,12 +25,16 @@ func TestRedisSeenConnectionRefused(t *testing.T) {
 
 	r := newRedisSeen(addr)
 	defer func() { _ = r.Close() }()
-	_, err = r.SetNX(context.Background(), "k", time.Hour)
+	_, err = r.Seen(context.Background(), "k")
 	if err == nil {
-		t.Fatal("SetNX against a dead address: want error (handler fails open on it)")
+		t.Fatal("Seen against a dead address: want error (handler fails open on it)")
 	}
-	if !strings.Contains(err.Error(), "redis setnx:") {
-		t.Errorf("SetNX error = %q, want it wrapped with %q", err, "redis setnx:")
+	if !strings.Contains(err.Error(), "redis exists:") {
+		t.Errorf("Seen error = %q, want it wrapped with %q", err, "redis exists:")
+	}
+	if err := r.MarkSeen(context.Background(), "k", time.Hour); err == nil ||
+		!strings.Contains(err.Error(), "redis set:") {
+		t.Errorf("MarkSeen error = %v, want it wrapped with %q", err, "redis set:")
 	}
 }
 
@@ -40,7 +44,7 @@ func TestRedisSeenClose(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if _, err := r.SetNX(context.Background(), "k", time.Hour); err == nil {
-		t.Error("SetNX after Close: want error")
+	if _, err := r.Seen(context.Background(), "k"); err == nil {
+		t.Error("Seen after Close: want error")
 	}
 }

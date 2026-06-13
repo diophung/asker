@@ -14,6 +14,12 @@ func day(y int, m time.Month, d int) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
+// endOfDay is the inclusive upper bound `before:` resolves to: the last
+// second of the named day.
+func endOfDay(y int, m time.Month, d int) time.Time {
+	return day(y, m, d).Add(24*time.Hour - time.Second)
+}
+
 func typesEqual(a, b []askerv1.DocType) bool {
 	if len(a) != len(b) {
 		return false
@@ -125,12 +131,12 @@ func TestExtractInlineFilters(t *testing.T) {
 		{
 			name: "before filter",
 			raw:  "before:2024-05-01 report",
-			want: parsedQuery{Text: "report", To: day(2024, time.May, 1)},
+			want: parsedQuery{Text: "report", To: endOfDay(2024, time.May, 1)},
 		},
 		{
 			name: "date range",
 			raw:  "after:2024-01-01 before:2024-02-01 report",
-			want: parsedQuery{Text: "report", From: day(2024, time.January, 1), To: day(2024, time.February, 1)},
+			want: parsedQuery{Text: "report", From: day(2024, time.January, 1), To: endOfDay(2024, time.February, 1)},
 		},
 		{
 			name: "malformed date stays in text",
@@ -155,7 +161,7 @@ func TestExtractInlineFilters(t *testing.T) {
 				Participant: "bob",
 				DocTypes:    []askerv1.DocType{askerv1.DocType_EMAIL},
 				From:        day(2024, time.January, 1),
-				To:          day(2024, time.June, 1),
+				To:          endOfDay(2024, time.June, 1),
 			},
 		},
 		{

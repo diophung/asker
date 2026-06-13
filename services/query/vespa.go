@@ -24,16 +24,19 @@ type retrievalKind int
 const (
 	// retrieveKeyword: userQuery() with the keyword profile.
 	retrieveKeyword retrievalKind = iota
-	// retrieveHybrid: userQuery() as the match set with the hybrid profile.
-	// The keyword terms determine WHICH documents match (so a rare term
-	// returns only the documents containing it); the hybrid profile then
-	// blends nativeRank with closeness(field, embedding), which reads the
-	// query(q) tensor directly — no nearestNeighbor operator is needed for
-	// the vector signal, and OR-ing one in would make every document match
-	// (in streaming mode targetHits:100 returns the whole small group), which
-	// destroys keyword precision. Pure-vector recall of documents that share
-	// NO keywords is deliberately out of scope for M1 and is the RRF / dense
-	// retrieval work deferred to M5 (ADR-006).
+	// retrieveHybrid: rank(userQuery(), nearestNeighbor) with the hybrid
+	// profile. Only the FIRST argument of rank() determines which documents
+	// match, so the keyword terms set the match set (a rare term returns only
+	// the documents containing it — precision preserved). The second argument,
+	// the nearestNeighbor operator, matches nothing on its own but makes the
+	// per-document vector distance available so closeness(field, embedding) in
+	// the hybrid profile actually contributes to ranking. OR-ing the
+	// nearestNeighbor into the match set instead would make every document
+	// match (in streaming mode targetHits:100 returns the whole small group),
+	// destroying keyword precision; dropping it entirely leaves closeness with
+	// no distance to read, so the vector signal silently goes to zero. Pure-
+	// vector recall of documents that share NO keywords is out of scope for M1
+	// (RRF / dense retrieval, deferred to M5 — ADR-006).
 	retrieveHybrid
 	// retrieveVector: nearestNeighbor alone with the hybrid profile — there is
 	// no keyword text to match on, so the vector arm IS the match set and
@@ -134,13 +137,13 @@ func buildYQL(q vespaQuery) (string, error) {
 	switch q.Kind {
 	case retrieveFilterOnly:
 		clauses = append(clauses, "true")
-	case retrieveKeyword, retrieveHybrid:
-		// Both match on the keyword terms; they differ only in ranking
-		// profile (keyword vs hybrid). The hybrid profile adds the vector
-		// signal via closeness(field, embedding), which reads input.query(q)
-		// — set on the request body for hybrid — without needing a
-		// nearestNeighbor operator in the match set.
+	case retrieveKeyword:
 		clauses = append(clauses, "userQuery()")
+	case retrieveHybrid:
+		// rank(): match on userQuery() (keyword precision); the
+		// nearestNeighbor second arg is rank-only, so closeness() in the
+		// hybrid profile gets a real per-document distance to blend.
+		clauses = append(clauses, "rank(userQuery(), "+nearestNeighborClause+")")
 	case retrieveVector:
 		clauses = append(clauses, nearestNeighborClause)
 	}

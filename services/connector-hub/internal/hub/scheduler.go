@@ -50,9 +50,16 @@ type scheduler struct {
 
 	sem chan struct{}
 
-	mu      sync.Mutex
-	workers map[string]*worker
-	wg      sync.WaitGroup
+	mu sync.Mutex
+	// workers holds the active worker per instance id. draining holds workers
+	// that have been canceled (instance paused/removed) but whose goroutine
+	// may still be finishing an in-flight sync pass; a replacement worker for
+	// the same id is NOT spawned until the draining one has fully exited, so
+	// two sync passes can never run concurrently for one instance across a
+	// pause/resume or remove/re-add cycle.
+	workers  map[string]*worker
+	draining map[string]*worker
+	wg       sync.WaitGroup
 }
 
 // schedulerOpts collects the scheduler's collaborators; zero optional fields
@@ -95,6 +102,7 @@ func newScheduler(o schedulerOpts) *scheduler {
 		now:          o.now,
 		sem:          make(chan struct{}, maxConcurrentSyncs),
 		workers:      make(map[string]*worker),
+		draining:     make(map[string]*worker),
 	}
 }
 
@@ -112,6 +120,7 @@ type worker struct {
 	instanceID string
 	cancel     context.CancelFunc
 	wake       chan struct{}
+	done       chan struct{} // closed when runWorker returns
 
 	mu   sync.Mutex
 	snap instanceSnap
@@ -184,13 +193,30 @@ func (s *scheduler) reconcile(ctx context.Context) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Reap any draining workers that have finished exiting, so their ids are
+	// free to be scheduled again.
+	for id, w := range s.draining {
+		select {
+		case <-w.done:
+			delete(s.draining, id)
+		default:
+		}
+	}
+
 	for id, snap := range desired {
 		if w, ok := s.workers[id]; ok {
 			w.update(snap)
 			continue
 		}
+		// A previous worker for this id is still draining an in-flight pass;
+		// defer the replacement to a later tick so the two never overlap.
+		if _, draining := s.draining[id]; draining {
+			s.logger.InfoContext(ctx, "deferring sync worker; previous one still draining", "instance_id", id)
+			continue
+		}
 		wctx, cancel := context.WithCancel(ctx)
-		w := &worker{instanceID: id, cancel: cancel, wake: make(chan struct{}, 1)}
+		w := &worker{instanceID: id, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{})}
 		w.snap = snap
 		s.workers[id] = w
 		s.wg.Add(1)
@@ -202,6 +228,9 @@ func (s *scheduler) reconcile(ctx context.Context) {
 		if _, ok := desired[id]; !ok {
 			s.logger.InfoContext(ctx, "stopping sync worker (instance paused or removed)", "instance_id", id)
 			w.cancel()
+			// Move to draining: the goroutine may still be mid-pass. A
+			// replacement is withheld until w.done closes.
+			s.draining[id] = w
 			delete(s.workers, id)
 		}
 	}
@@ -213,6 +242,12 @@ func (s *scheduler) stopAll() {
 	for id, w := range s.workers {
 		w.cancel()
 		delete(s.workers, id)
+	}
+	// Already-canceled workers still finishing a pass must be stopped too;
+	// the caller's wg.Wait covers their exit.
+	for id, w := range s.draining {
+		w.cancel()
+		delete(s.draining, id)
 	}
 }
 
@@ -248,6 +283,7 @@ func (s *scheduler) trigger(instanceID string) {
 // back off exponentially (capped); any success resets the schedule.
 func (s *scheduler) runWorker(ctx context.Context, w *worker) {
 	defer s.wg.Done()
+	defer close(w.done) // lets reconcile reap this id from the draining set
 	failures := 0
 	delay := time.Duration(0) // first pass runs immediately
 	for {

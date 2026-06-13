@@ -180,43 +180,38 @@ class Worker:
             )
 
         # Tombstones and zero-chunk documents pass through to docs.enriched
-        # byte-for-byte unchanged, same key and headers.
-        if doc.tombstone.deleted or not doc.chunks:
-            await self._producer.send_and_wait(
-                cfg.TOPIC_DOCS_ENRICHED, value=value, key=record.key, headers=headers
-            )
-            await self._commit(record)
-            log.info(
-                "passed through unchanged",
-                extra={
-                    "doc_id": doc.doc_id,
-                    "tenant_id": doc.tenant_id,
-                    "tombstone": doc.tombstone.deleted,
-                    "chunks": len(doc.chunks),
-                },
-            )
-            return Outcome.PASSED_THROUGH
+        # byte-for-byte unchanged; everything else gets embeddings filled in.
+        # Both paths produce-then-commit through the SAME retry / dead-letter
+        # loop (kafkautil parity): a transient broker error must not crash the
+        # worker — least of all on a delete tombstone, the freshness-sensitive
+        # path. The passthrough "build" is a no-op returning the original bytes;
+        # the enriched "build" calls TEI (so an embedding failure also retries).
+        passthrough = doc.tombstone.deleted or not doc.chunks
+
+        async def build() -> bytes:
+            return value if passthrough else await self._enrich(doc)
 
         last_err: Exception | None = None
         for attempt in range(1, MAX_HANDLER_ATTEMPTS + 1):
             if attempt > 1:
                 await self._sleep(self._backoff[min(attempt - 2, len(self._backoff) - 1)])
             try:
-                enriched = await self._enrich(doc)
+                out = await build()
                 await self._producer.send_and_wait(
-                    cfg.TOPIC_DOCS_ENRICHED, value=enriched, key=record.key, headers=headers
+                    cfg.TOPIC_DOCS_ENRICHED, value=out, key=record.key, headers=headers
                 )
                 await self._commit(record)
                 log.info(
-                    "document enriched",
+                    "passed through unchanged" if passthrough else "document enriched",
                     extra={
                         "doc_id": doc.doc_id,
                         "tenant_id": doc.tenant_id,
+                        "tombstone": doc.tombstone.deleted,
                         "chunks": len(doc.chunks),
                         "attempt": attempt,
                     },
                 )
-                return Outcome.ENRICHED
+                return Outcome.PASSED_THROUGH if passthrough else Outcome.ENRICHED
             except Exception as exc:  # any handler error retries, then dead-letters
                 last_err = exc
                 log.warning(

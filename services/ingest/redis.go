@@ -9,10 +9,10 @@ import (
 )
 
 // redisSeen implements seenStore on top of github.com/redis/go-redis/v9.
-// SetNX maps to Redis "SET key value NX EX <ttl>" (atomic SETNX + TTL); the
-// library owns connection pooling, reconnects, and protocol negotiation.
-// Any remaining error surfaces to the handler, which fails OPEN (the
-// document is processed anyway with a warning).
+// Seen maps to EXISTS (a read), MarkSeen to "SET key 1 EX <ttl>" (write after
+// a successful produce); the library owns connection pooling, reconnects, and
+// protocol negotiation. Any error surfaces to the handler, which fails OPEN
+// (the document is processed anyway with a warning).
 type redisSeen struct {
 	client *redis.Client
 }
@@ -30,14 +30,22 @@ func newRedisSeen(addr string) *redisSeen {
 	})}
 }
 
-// SetNX implements seenStore. It reports whether THIS call set the key
-// (false = already seen).
-func (r *redisSeen) SetNX(ctx context.Context, key string, ttl time.Duration) (bool, error) {
-	fresh, err := r.client.SetNX(ctx, key, "1", ttl).Result()
+// Seen implements seenStore: true when the key is already recorded.
+func (r *redisSeen) Seen(ctx context.Context, key string) (bool, error) {
+	n, err := r.client.Exists(ctx, key).Result()
 	if err != nil {
-		return false, fmt.Errorf("redis setnx: %w", err)
+		return false, fmt.Errorf("redis exists: %w", err)
 	}
-	return fresh, nil
+	return n > 0, nil
+}
+
+// MarkSeen implements seenStore: record key with ttl. Called only after the
+// document has been durably produced to docs.chunked.
+func (r *redisSeen) MarkSeen(ctx context.Context, key string, ttl time.Duration) error {
+	if err := r.client.Set(ctx, key, "1", ttl).Err(); err != nil {
+		return fmt.Errorf("redis set: %w", err)
+	}
+	return nil
 }
 
 // Close implements seenStore.
