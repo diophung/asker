@@ -16,10 +16,14 @@ name: asker
 # Same split as OIDC_ISSUER (localhost:8081) vs OIDC_JWKS_URL (keycloak:8080).
 x-oauth-env: &oauth-env
   ASKER_SAFEHTTP_ALLOW_PRIVATE: "1" # dev-only: reach the in-network fake-oauth
-  ASKER_OAUTH_GOOGLE_CLIENT_ID: "dev-google-client" # dev-only throwaway
-  ASKER_OAUTH_GOOGLE_CLIENT_SECRET: "dev-google-secret" # dev-only
-  ASKER_OAUTH_GOOGLE_AUTH_URL: "http://localhost:9500/google/authorize"
-  ASKER_OAUTH_GOOGLE_TOKEN_URL: "http://fake-oauth:9500/google/token"
+  # Google: defaults are the dev fake provider. To connect a REAL Gmail account,
+  # set these four in deploy/compose/.env (gitignored) — see docs/oauth.md. The
+  # real-Google values for the two URLs are commented in that .env block ready to
+  # uncomment; CLIENT_ID/SECRET come from your Google Cloud OAuth client.
+  ASKER_OAUTH_GOOGLE_CLIENT_ID: "${ASKER_OAUTH_GOOGLE_CLIENT_ID:-dev-google-client}"
+  ASKER_OAUTH_GOOGLE_CLIENT_SECRET: "${ASKER_OAUTH_GOOGLE_CLIENT_SECRET:-dev-google-secret}"
+  ASKER_OAUTH_GOOGLE_AUTH_URL: "${ASKER_OAUTH_GOOGLE_AUTH_URL:-http://localhost:9500/google/authorize}"
+  ASKER_OAUTH_GOOGLE_TOKEN_URL: "${ASKER_OAUTH_GOOGLE_TOKEN_URL:-http://fake-oauth:9500/google/token}"
   ASKER_OAUTH_MICROSOFT_CLIENT_ID: "dev-microsoft-client" # dev-only
   ASKER_OAUTH_MICROSOFT_CLIENT_SECRET: "dev-microsoft-secret" # dev-only
   ASKER_OAUTH_MICROSOFT_AUTH_URL: "http://localhost:9500/microsoft/authorize"
@@ -43,8 +47,10 @@ services:
     environment:
       <<: *oauth-env
       # Public base used to build the OAuth redirect_uri (<base>/v1/oauth/callback)
-      # and the post-callback redirect back to the web UI.
-      GATEWAY_PUBLIC_URL: "http://localhost:8080"
+      # and the post-callback redirect back to the web UI. Override in .env (e.g.
+      # to http://127.0.0.1:8080 if localhost resolves to IPv6 on your machine);
+      # the registered redirect URI at Google must match this base exactly.
+      GATEWAY_PUBLIC_URL: "${GATEWAY_PUBLIC_URL:-http://localhost:8080}"
       WEB_APP_URL: "http://localhost:13001"
       GATEWAY_ADDR: ":8080"
       OIDC_ISSUER: "http://localhost:8081/realms/asker"
