@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=1"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"kind\":\"calendar#events\",\"summary\":\"alice@example.com\",\"accessRole\":\"owner\",\"nextPageToken\":\"more\",\"items\":[{\"kind\":\"calendar#event\",\"etag\":\"\\\"1\\\"\",\"id\":\"evt-probe\",\"status\":\"confirmed\",\"summary\":\"probe\"}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=1"
+      },
+      "response": {
+        "status": 401,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"error\":{\"code\":401,\"message\":\"Invalid Credentials\",\"errors\":[{\"reason\":\"authError\",\"message\":\"Invalid Credentials\"}]}}"
+      }
+    }
+  ]
+}

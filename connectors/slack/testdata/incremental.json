@@ -1,0 +1,36 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/conversations.list", "query": "limit=200&types=public_channel,private_channel,mpim,im&exclude_archived=true"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"channels\":[{\"id\":\"C100\",\"name\":\"general\",\"is_private\":false,\"is_im\":false,\"members\":[\"U_ALICE\",\"U_BOB\"]},{\"id\":\"C200\",\"name\":\"secrets\",\"is_private\":true,\"is_im\":false,\"members\":[\"U_ALICE\"]},{\"id\":\"D900\",\"is_im\":true,\"members\":[\"U_ALICE\",\"U_BOB\"]}],\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=C100&limit=200&oldest=1700000300.000300&inclusive=false"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"messages\":[{\"type\":\"message\",\"user\":\"U_ALICE\",\"text\":\"standup moved to 11 (edited)\",\"ts\":\"1700000300.000300\",\"edited\":{\"user\":\"U_ALICE\",\"ts\":\"1700000500.000500\"},\"team\":\"T1\"},{\"type\":\"message\",\"user\":\"U_BOB\",\"text\":\"thanks for the heads up\",\"ts\":\"1700000400.000400\",\"team\":\"T1\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=C200&limit=200&oldest=1700000050.000050&inclusive=false"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"messages\":[],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=D900&limit=200&oldest=1700000075.000075&inclusive=false"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"messages\":[],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/calendarView/delta",
+        "query": "$select=id,subject,body,bodyPreview,location,start,end,isAllDay,organizer,attendees,webLink,createdDateTime,lastModifiedDateTime&$top=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#Collection(event)\",\"value\":[],\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=RESUME_TOKEN_CCC\"}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/events",
+        "query": "$select=id,subject,body,bodyPreview,location,start,end,isAllDay,organizer,attendees,webLink,createdDateTime,lastModifiedDateTime&$top=50&$skip=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/events\",\"value\":[{\"@odata.etag\":\"W/\\\"etag-evt-5-v1\\\"\",\"id\":\"AAMkEVT5\",\"changeKey\":\"chgEVT5v1\",\"subject\":\"Resumed Page Event\",\"body\":{\"contentType\":\"text\",\"content\":\"This event was on the second backfill page.\"},\"location\":{\"displayName\":\"Remote\"},\"start\":{\"dateTime\":\"2026-06-22T13:00:00.0000000\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-06-22T13:30:00.0000000\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"webLink\":\"https://outlook.office365.com/calendar/item/AAMkEVT5\",\"createdDateTime\":\"2026-06-06T09:00:00Z\",\"lastModifiedDateTime\":\"2026-06-06T09:00:00Z\",\"organizer\":{\"emailAddress\":{\"name\":\"Alice Organizer\",\"address\":\"alice@example.com\"}},\"attendees\":[]}]}"
+      }
+    }
+  ]
+}

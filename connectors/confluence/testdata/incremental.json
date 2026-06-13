@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/content/search",
+        "query": "cql=type=page and status=current and space=\"DEV\" and lastModified>=\"2026-06-03 16:45\" order by lastModified asc&expand=body.storage,version,space,history&limit=50&start=0"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"results\":[{\"id\":\"101\",\"type\":\"page\",\"status\":\"current\",\"title\":\"Release Process\",\"body\":{\"storage\":{\"value\":\"<h2>Release Process</h2><ul><li>Cut a branch</li><li>Tag the release</li><li>Publish notes</li></ul>\",\"representation\":\"storage\"}},\"version\":{\"number\":2,\"when\":\"2026-06-04T10:00:00.000Z\",\"by\":{\"accountId\":\"acc-bob\",\"displayName\":\"Bob Editor\",\"email\":\"bob@example.com\"}},\"space\":{\"key\":\"DEV\",\"name\":\"Development\"},\"history\":{\"createdBy\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"},\"createdDate\":\"2026-06-02T11:30:00.000Z\"},\"_links\":{\"webui\":\"/spaces/DEV/pages/101/Release+Process\"}}],\"start\":0,\"limit\":50,\"size\":1,\"_links\":{\"base\":\"https://acme.atlassian.net/wiki\"}}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/content/search",
+        "query": "cql=type=page and status=trashed and space=\"DEV\" and lastModified>=\"2026-06-03 16:45\" order by lastModified asc&expand=body.storage,version,space,history&limit=50&start=0"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"results\":[{\"id\":\"103\",\"type\":\"page\",\"status\":\"trashed\",\"title\":\"Glossary\",\"body\":{\"storage\":{\"value\":\"\",\"representation\":\"storage\"}},\"version\":{\"number\":3,\"when\":\"2026-06-04T09:00:00.000Z\",\"by\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"}},\"space\":{\"key\":\"DEV\",\"name\":\"Development\"},\"history\":{\"createdBy\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"},\"createdDate\":\"2026-03-01T12:00:00.000Z\"},\"_links\":{\"webui\":\"/spaces/DEV/pages/103/Glossary\"}}],\"start\":0,\"limit\":50,\"size\":1,\"_links\":{\"base\":\"https://acme.atlassian.net/wiki\"}}"
+      }
+    }
+  ]
+}

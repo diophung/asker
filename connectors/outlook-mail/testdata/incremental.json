@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/messages/delta",
+        "query": "$select=id,subject,body,bodyPreview,from,toRecipients,ccRecipients,webLink,parentFolderId,conversationId,createdDateTime,lastModifiedDateTime&$deltatoken=DELTA_TOKEN_AFTER_BACKFILL"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/messages\",\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/me/messages/delta?$skiptoken=DELTA_PAGE_2\",\"value\":[{\"@odata.etag\":\"W/\\\"CQAAABYAAACabc1v2\\\"\",\"id\":\"AAMkADmsg1\",\"changeKey\":\"CQAAABYAAACabc1v2\",\"subject\":\"Welcome to the team (updated)\",\"bodyPreview\":\"Glad to have you aboard.\",\"body\":{\"contentType\":\"html\",\"content\":\"<html><body><p>Glad to have you aboard.</p><p>Orientation moved to Tuesday.</p></body></html>\"},\"from\":{\"emailAddress\":{\"name\":\"Dana Reed\",\"address\":\"dana@contoso.com\"}},\"toRecipients\":[{\"emailAddress\":{\"name\":\"Alice Example\",\"address\":\"alice@contoso.com\"}}],\"webLink\":\"https://outlook.office365.com/owa/?ItemID=AAMkADmsg1\",\"parentFolderId\":\"AAMkInbox\",\"conversationId\":\"conv-1\",\"createdDateTime\":\"2026-06-01T09:00:00Z\",\"lastModifiedDateTime\":\"2026-06-05T14:00:00Z\"}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/messages/delta",
+        "query": "$skiptoken=DELTA_PAGE_2"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/messages\",\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/me/messages/delta?$deltatoken=DELTA_TOKEN_NEXT\",\"value\":[{\"id\":\"AAMkADmsg2\",\"@removed\":{\"reason\":\"deleted\"},\"@odata.etag\":\"W/\\\"CQAAABYAAACabc2gone\\\"\"}]}"
+      }
+    }
+  ]
+}

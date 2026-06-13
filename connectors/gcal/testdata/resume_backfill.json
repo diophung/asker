@@ -1,0 +1,16 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=250&pageToken=CkgK...page2"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"kind\":\"calendar#events\",\"summary\":\"alice@example.com\",\"accessRole\":\"owner\",\"nextSyncToken\":\"SYNCTOKEN-AFTER-BACKFILL\",\"items\":[{\"kind\":\"calendar#event\",\"etag\":\"\\\"3410\\\"\",\"id\":\"evt-1on1\",\"status\":\"confirmed\",\"htmlLink\":\"https://www.google.com/calendar/event?eid=evt-1on1\",\"created\":\"2026-06-04T08:00:00Z\",\"updated\":\"2026-06-04T08:30:00Z\",\"summary\":\"1:1 with manager\",\"start\":{\"date\":\"2026-06-10\"},\"end\":{\"date\":\"2026-06-11\"},\"organizer\":{\"email\":\"alice@example.com\",\"displayName\":\"Alice Anderson\",\"self\":true}}]}"
+      }
+    }
+  ]
+}

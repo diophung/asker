@@ -1,0 +1,40 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/calendarView/delta",
+        "query": "$select=id,subject,body,bodyPreview,location,start,end,isAllDay,organizer,attendees,webLink,createdDateTime,lastModifiedDateTime&$top=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#Collection(event)\",\"value\":[],\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=PRIME_TOKEN_AAA\"}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/events",
+        "query": "$select=id,subject,body,bodyPreview,location,start,end,isAllDay,organizer,attendees,webLink,createdDateTime,lastModifiedDateTime&$top=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/events\",\"value\":[{\"@odata.etag\":\"W/\\\"etag-evt-1-v1\\\"\",\"id\":\"AAMkEVT1\",\"changeKey\":\"chgEVT1v1\",\"subject\":\"Q3 Planning Sync\",\"bodyPreview\":\"Agenda: roadmap, headcount, OKRs.\",\"body\":{\"contentType\":\"html\",\"content\":\"<html><head><style>.x{color:red}</style></head><body><p>Agenda:</p><ul><li>Roadmap</li><li>Headcount</li><li>OKRs</li></ul></body></html>\"},\"location\":{\"displayName\":\"Conference Room Aurora\"},\"start\":{\"dateTime\":\"2026-06-15T09:00:00.0000000\",\"timeZone\":\"Pacific Standard Time\"},\"end\":{\"dateTime\":\"2026-06-15T10:00:00.0000000\",\"timeZone\":\"Pacific Standard Time\"},\"isAllDay\":false,\"webLink\":\"https://outlook.office365.com/calendar/item/AAMkEVT1\",\"createdDateTime\":\"2026-06-01T12:00:00Z\",\"lastModifiedDateTime\":\"2026-06-02T08:30:00Z\",\"organizer\":{\"emailAddress\":{\"name\":\"Alice Organizer\",\"address\":\"alice@example.com\"}},\"attendees\":[{\"type\":\"required\",\"status\":{\"response\":\"accepted\",\"time\":\"2026-06-02T09:00:00Z\"},\"emailAddress\":{\"name\":\"Bob Builder\",\"address\":\"bob@example.com\"}},{\"type\":\"optional\",\"status\":{\"response\":\"tentativelyAccepted\",\"time\":\"2026-06-02T09:05:00Z\"},\"emailAddress\":{\"name\":\"Carol Coder\",\"address\":\"carol@example.com\"}}]},{\"@odata.etag\":\"W/\\\"etag-evt-2-v1\\\"\",\"id\":\"AAMkEVT2\",\"changeKey\":\"chgEVT2v1\",\"subject\":\"\",\"body\":{\"contentType\":\"text\",\"content\":\"Quick 1:1 — no agenda.\"},\"location\":{\"displayName\":\"\"},\"start\":{\"dateTime\":\"2026-06-16T14:00:00.0000000\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-06-16T14:30:00.0000000\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"webLink\":\"https://outlook.office365.com/calendar/item/AAMkEVT2\",\"createdDateTime\":\"2026-06-03T10:00:00Z\",\"lastModifiedDateTime\":\"2026-06-03T10:00:00Z\",\"organizer\":{\"emailAddress\":{\"name\":\"Alice Organizer\",\"address\":\"alice@example.com\"}},\"attendees\":[]}],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/me/events?$select=id,subject,body,bodyPreview,location,start,end,isAllDay,organizer,attendees,webLink,createdDateTime,lastModifiedDateTime&$top=50&$skip=50\"}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/events",
+        "query": "$select=id,subject,body,bodyPreview,location,start,end,isAllDay,organizer,attendees,webLink,createdDateTime,lastModifiedDateTime&$top=50&$skip=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/events\",\"value\":[{\"@odata.etag\":\"W/\\\"etag-evt-3-v1\\\"\",\"id\":\"AAMkEVT3\",\"changeKey\":\"chgEVT3v1\",\"subject\":\"All-Hands\",\"body\":{\"contentType\":\"html\",\"content\":\"<div>Company update &amp; Q&amp;A.</div>\"},\"location\":{\"displayName\":\"Main Auditorium\"},\"start\":{\"dateTime\":\"2026-06-20T00:00:00.0000000\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-06-21T00:00:00.0000000\",\"timeZone\":\"UTC\"},\"isAllDay\":true,\"webLink\":\"https://outlook.office365.com/calendar/item/AAMkEVT3\",\"createdDateTime\":\"2026-05-20T11:00:00Z\",\"lastModifiedDateTime\":\"2026-05-25T16:45:00Z\",\"organizer\":{\"emailAddress\":{\"name\":\"Dave Director\",\"address\":\"dave@example.com\"}},\"attendees\":[{\"type\":\"required\",\"status\":{\"response\":\"none\",\"time\":\"0001-01-01T00:00:00Z\"},\"emailAddress\":{\"name\":\"Alice Organizer\",\"address\":\"alice@example.com\"}}]},{\"@odata.etag\":\"W/\\\"etag-evt-4-v1\\\"\",\"id\":\"AAMkEVT4\",\"changeKey\":\"chgEVT4v1\",\"subject\":\"Dentist\",\"body\":{\"contentType\":\"text\",\"content\":\"\"},\"bodyPreview\":\"\",\"location\":{\"displayName\":\"Downtown Dental\"},\"start\":{\"dateTime\":\"2026-06-18T15:30:00.0000000\",\"timeZone\":\"Pacific Standard Time\"},\"end\":{\"dateTime\":\"2026-06-18T16:30:00.0000000\",\"timeZone\":\"Pacific Standard Time\"},\"isAllDay\":false,\"webLink\":\"https://outlook.office365.com/calendar/item/AAMkEVT4\",\"createdDateTime\":\"2026-06-05T18:00:00Z\",\"lastModifiedDateTime\":\"2026-06-05T18:00:00Z\",\"organizer\":{\"emailAddress\":{\"name\":\"Alice Organizer\",\"address\":\"alice@example.com\"}},\"attendees\":[]}]}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/calendarView/delta",
+        "query": "$deltatoken=PRIME_TOKEN_AAA"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#Collection(event)\",\"value\":[{\"@odata.etag\":\"W/\\\"etag-evt-1-v2\\\"\",\"id\":\"AAMkEVT1\",\"changeKey\":\"chgEVT1v2\",\"subject\":\"Q3 Planning Sync (rescheduled)\",\"bodyPreview\":\"Moved to room Borealis.\",\"body\":{\"contentType\":\"html\",\"content\":\"<p>Moved to room Borealis. New agenda attached.</p>\"},\"location\":{\"displayName\":\"Conference Room Borealis\"},\"start\":{\"dateTime\":\"2026-06-15T11:00:00.0000000\",\"timeZone\":\"Pacific Standard Time\"},\"end\":{\"dateTime\":\"2026-06-15T12:00:00.0000000\",\"timeZone\":\"Pacific Standard Time\"},\"isAllDay\":false,\"webLink\":\"https://outlook.office365.com/calendar/item/AAMkEVT1\",\"createdDateTime\":\"2026-06-01T12:00:00Z\",\"lastModifiedDateTime\":\"2026-06-10T07:15:00Z\",\"organizer\":{\"emailAddress\":{\"name\":\"Alice Organizer\",\"address\":\"alice@example.com\"}},\"attendees\":[{\"type\":\"required\",\"status\":{\"response\":\"accepted\",\"time\":\"2026-06-10T08:00:00Z\"},\"emailAddress\":{\"name\":\"Bob Builder\",\"address\":\"bob@example.com\"}}]},{\"id\":\"AAMkEVT2\",\"@removed\":{\"reason\":\"deleted\"}}],\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=NEXT_TOKEN_BBB\"}"
+      }
+    }
+  ]
+}

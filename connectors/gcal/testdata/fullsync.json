@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=250"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"kind\":\"calendar#events\",\"summary\":\"alice@example.com\",\"timeZone\":\"America/Los_Angeles\",\"accessRole\":\"owner\",\"nextPageToken\":\"CkgK...page2\",\"items\":[{\"kind\":\"calendar#event\",\"etag\":\"\\\"3401\\\"\",\"id\":\"evt-standup\",\"status\":\"confirmed\",\"htmlLink\":\"https://www.google.com/calendar/event?eid=evt-standup\",\"created\":\"2026-06-01T09:00:00Z\",\"updated\":\"2026-06-02T10:15:00.500Z\",\"summary\":\"Daily standup\",\"description\":\"Quick sync. <b>Bring</b> blockers.\",\"location\":\"Zoom\",\"organizer\":{\"email\":\"alice@example.com\",\"displayName\":\"Alice Anderson\",\"self\":true},\"start\":{\"dateTime\":\"2026-06-03T09:30:00-07:00\",\"timeZone\":\"America/Los_Angeles\"},\"end\":{\"dateTime\":\"2026-06-03T09:45:00-07:00\",\"timeZone\":\"America/Los_Angeles\"},\"attendees\":[{\"email\":\"alice@example.com\",\"displayName\":\"Alice Anderson\",\"organizer\":true,\"responseStatus\":\"accepted\"},{\"email\":\"bob@example.com\",\"displayName\":\"Bob Brown\",\"responseStatus\":\"needsAction\"}]},{\"kind\":\"calendar#event\",\"etag\":\"\\\"3402\\\"\",\"id\":\"evt-launch\",\"status\":\"confirmed\",\"htmlLink\":\"https://www.google.com/calendar/event?eid=evt-launch\",\"created\":\"2026-06-01T12:00:00Z\",\"updated\":\"2026-06-01T12:00:00Z\",\"summary\":\"Product launch review\",\"description\":\"Go/no-go decision for the M2 launch.\",\"location\":\"HQ Room 4\",\"organizer\":{\"email\":\"carol@example.com\",\"displayName\":\"Carol Carter\"},\"start\":{\"dateTime\":\"2026-06-05T14:00:00-07:00\"},\"end\":{\"dateTime\":\"2026-06-05T15:00:00-07:00\"},\"attendees\":[{\"email\":\"alice@example.com\",\"displayName\":\"Alice Anderson\",\"responseStatus\":\"tentative\"},{\"email\":\"carol@example.com\",\"displayName\":\"Carol Carter\",\"organizer\":true,\"responseStatus\":\"accepted\"}]}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=250&pageToken=CkgK...page2"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"kind\":\"calendar#events\",\"summary\":\"alice@example.com\",\"accessRole\":\"owner\",\"nextSyncToken\":\"SYNCTOKEN-AFTER-BACKFILL\",\"items\":[{\"kind\":\"calendar#event\",\"etag\":\"\\\"3410\\\"\",\"id\":\"evt-1on1\",\"status\":\"confirmed\",\"htmlLink\":\"https://www.google.com/calendar/event?eid=evt-1on1\",\"created\":\"2026-06-04T08:00:00Z\",\"updated\":\"2026-06-04T08:30:00Z\",\"summary\":\"1:1 with manager\",\"description\":\"\",\"location\":\"\",\"organizer\":{\"email\":\"alice@example.com\",\"displayName\":\"Alice Anderson\",\"self\":true},\"start\":{\"date\":\"2026-06-10\"},\"end\":{\"date\":\"2026-06-11\"},\"attendees\":[{\"email\":\"dave@example.com\",\"displayName\":\"Dave Davis\",\"responseStatus\":\"accepted\"}]}]}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/calendarView/delta",
+        "query": "$deltatoken=EXPIRED_TOKEN_ZZZ"
+      },
+      "response": {
+        "status": 410,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"error\":{\"code\":\"resyncRequired\",\"message\":\"The delta token is no longer valid. A full resync is required.\"}}"
+      }
+    }
+  ]
+}

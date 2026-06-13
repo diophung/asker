@@ -1,0 +1,96 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/changes/startPageToken"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"startPageToken\":\"100\"}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files",
+        "query": "fields=files(id,name,mimeType,webViewLink,parents,size,version,md5Checksum,createdTime,modifiedTime,trashed,shared,owners(displayName,emailAddress,permissionId)),nextPageToken,incompleteSearch&q=trashed%3Dfalse&pageSize=100"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"files\":[{\"id\":\"file-doc-1\",\"name\":\"Q3 Strategy\",\"mimeType\":\"application/vnd.google-apps.document\",\"webViewLink\":\"https://docs.google.com/document/d/file-doc-1/edit\",\"parents\":[\"root-folder\"],\"version\":\"7\",\"createdTime\":\"2026-05-01T10:00:00.000Z\",\"modifiedTime\":\"2026-05-02T12:30:00.000Z\",\"trashed\":false,\"shared\":true,\"owners\":[{\"displayName\":\"Alice Example\",\"emailAddress\":\"alice@example.com\",\"permissionId\":\"alice-pid\"}]},{\"id\":\"file-txt-2\",\"name\":\"notes.txt\",\"mimeType\":\"text/plain\",\"webViewLink\":\"https://drive.google.com/file/d/file-txt-2/view\",\"parents\":[\"root-folder\"],\"size\":\"42\",\"version\":\"3\",\"md5Checksum\":\"abc123\",\"createdTime\":\"2026-05-03T09:00:00.000Z\",\"modifiedTime\":\"2026-05-03T09:05:00.000Z\",\"trashed\":false,\"shared\":false,\"owners\":[{\"displayName\":\"Alice Example\",\"emailAddress\":\"alice@example.com\",\"permissionId\":\"alice-pid\"}]}],\"nextPageToken\":\"FILES_PAGE_2\",\"incompleteSearch\":false}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files/file-doc-1/permissions",
+        "query": "fields=permissions(id,type,role,emailAddress,domain,allowFileDiscovery,deleted),nextPageToken&pageSize=100"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"permissions\":[{\"id\":\"alice-pid\",\"type\":\"user\",\"role\":\"owner\",\"emailAddress\":\"alice@example.com\"},{\"id\":\"perm-domain\",\"type\":\"domain\",\"role\":\"reader\",\"domain\":\"example.com\",\"allowFileDiscovery\":true},{\"id\":\"perm-bob\",\"type\":\"user\",\"role\":\"writer\",\"emailAddress\":\"bob@example.com\"}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files/file-doc-1/export",
+        "query": "mimeType=text%2Fplain"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/plain"]},
+        "body": "Q3 Strategy\n\nGrow revenue and ship Asker M2."
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files/file-txt-2/permissions",
+        "query": "fields=permissions(id,type,role,emailAddress,domain,allowFileDiscovery,deleted),nextPageToken&pageSize=100"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"permissions\":[{\"id\":\"alice-pid\",\"type\":\"user\",\"role\":\"owner\",\"emailAddress\":\"alice@example.com\"}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files/file-txt-2",
+        "query": "alt=media"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/plain"]},
+        "body": "personal notes, not shared with anyone"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files",
+        "query": "fields=files(id,name,mimeType,webViewLink,parents,size,version,md5Checksum,createdTime,modifiedTime,trashed,shared,owners(displayName,emailAddress,permissionId)),nextPageToken,incompleteSearch&q=trashed%3Dfalse&pageSize=100&pageToken=FILES_PAGE_2"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"files\":[{\"id\":\"folder-9\",\"name\":\"Shared Folder\",\"mimeType\":\"application/vnd.google-apps.folder\",\"trashed\":false,\"version\":\"1\",\"owners\":[{\"displayName\":\"Alice Example\",\"emailAddress\":\"alice@example.com\"}]},{\"id\":\"file-pdf-3\",\"name\":\"contract.pdf\",\"mimeType\":\"application/pdf\",\"webViewLink\":\"https://drive.google.com/file/d/file-pdf-3/view\",\"parents\":[\"root-folder\"],\"size\":\"204800\",\"version\":\"2\",\"md5Checksum\":\"deadbeef\",\"createdTime\":\"2026-04-20T08:00:00.000Z\",\"modifiedTime\":\"2026-04-20T08:00:00.000Z\",\"trashed\":false,\"shared\":true,\"owners\":[{\"displayName\":\"Alice Example\",\"emailAddress\":\"alice@example.com\"}]}],\"incompleteSearch\":false}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files/file-pdf-3/permissions",
+        "query": "fields=permissions(id,type,role,emailAddress,domain,allowFileDiscovery,deleted),nextPageToken&pageSize=100"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"permissions\":[{\"id\":\"alice-pid\",\"type\":\"user\",\"role\":\"owner\",\"emailAddress\":\"alice@example.com\"},{\"id\":\"perm-anyone\",\"type\":\"anyone\",\"role\":\"reader\",\"allowFileDiscovery\":false}]}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "body": "{\"errorMessages\":[\"Client must be authenticated to access this resource.\"],\"errors\":{}}"
+      }
+    }
+  ]
+}

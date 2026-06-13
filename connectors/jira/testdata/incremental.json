@@ -1,0 +1,19 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "body": "{\"startAt\":0,\"maxResults\":50,\"total\":4,\"issues\":[{\"id\":\"10002\",\"key\":\"DEMO-2\",\"fields\":{\"summary\":\"Add dark mode toggle\",\"description\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Users want a dark theme.\"}]}]},\"status\":{\"name\":\"In Progress\",\"statusCategory\":{\"key\":\"indeterminate\"}},\"issuetype\":{\"name\":\"Story\"},\"priority\":{\"name\":\"Medium\"},\"project\":{\"key\":\"DEMO\",\"name\":\"Demo Project\"},\"reporter\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"assignee\":null,\"creator\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"created\":\"2026-06-10T09:15:00.000+0000\",\"updated\":\"2026-06-10T10:30:00.000+0000\",\"comment\":{\"comments\":[]}}},{\"id\":\"10003\",\"key\":\"DEMO-3\",\"fields\":{\"summary\":\"Investigate flaky checkout test\",\"description\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Root cause found: a race in the cart service. \"},{\"type\":\"mention\",\"attrs\":{\"id\":\"acc-ben\",\"text\":\"@Ben Carter\"}},{\"type\":\"text\",\"text\":\" is fixing it.\"}]}]},\"status\":{\"name\":\"In Progress\",\"statusCategory\":{\"key\":\"indeterminate\"}},\"issuetype\":{\"name\":\"Task\"},\"priority\":{\"name\":\"Low\"},\"project\":{\"key\":\"DEMO\",\"name\":\"Demo Project\"},\"reporter\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"assignee\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"creator\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"created\":\"2026-06-11T14:00:00.000+0000\",\"updated\":\"2026-06-12T11:20:00.000+0000\",\"comment\":{\"comments\":[]}}},{\"id\":\"10004\",\"key\":\"DEMO-4\",\"fields\":{\"summary\":\"Document the release process\",\"description\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"We need a runbook for cutting a release.\"}]}]},\"status\":{\"name\":\"To Do\",\"statusCategory\":{\"key\":\"new\"}},\"issuetype\":{\"name\":\"Task\"},\"priority\":{\"name\":\"Medium\"},\"project\":{\"key\":\"DEMO\",\"name\":\"Demo Project\"},\"reporter\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"assignee\":null,\"creator\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"created\":\"2026-06-12T13:05:00.000+0000\",\"updated\":\"2026-06-12T13:05:00.000+0000\",\"comment\":{\"comments\":[]}}},{\"id\":\"10005\",\"key\":\"DEMO-5\",\"fields\":{\"summary\":\"Spike: evaluate GraphQL gateway\",\"description\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"No longer needed; superseded by DEMO-4.\"}]}]},\"status\":{\"name\":\"Removed\",\"statusCategory\":{\"key\":\"done\"}},\"issuetype\":{\"name\":\"Spike\"},\"priority\":{\"name\":\"Low\"},\"project\":{\"key\":\"DEMO\",\"name\":\"Demo Project\"},\"reporter\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"assignee\":null,\"creator\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"created\":\"2026-06-11T18:00:00.000+0000\",\"updated\":\"2026-06-12T16:00:00.000+0000\",\"comment\":{\"comments\":[]}}}]}"
+      }
+    }
+  ]
+}

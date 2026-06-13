@@ -8,8 +8,15 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/asker/asker/connectors/confluence"
+	"github.com/asker/asker/connectors/gcal"
+	"github.com/asker/asker/connectors/gdrive"
 	"github.com/asker/asker/connectors/gmail"
+	"github.com/asker/asker/connectors/jira"
+	outlookcal "github.com/asker/asker/connectors/outlook-cal"
+	outlookmail "github.com/asker/asker/connectors/outlook-mail"
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/connectors/slack"
 	"github.com/asker/asker/connectors/upload"
 	"github.com/asker/asker/platform/blob"
 	"github.com/asker/asker/platform/crypto"
@@ -45,11 +52,23 @@ func buildDeps(ctx context.Context, cfg hub.Config, logger *slog.Logger) (hub.De
 	}
 
 	registry := sdk.NewRegistry()
-	if err := registry.Register(gmail.New(gmail.WithLogger(logger))); err != nil {
-		return hub.Deps{}, fmt.Errorf("register gmail connector: %w", err)
+	// In-process connectors. Out-of-process plugins (ADR-010) register via the
+	// same sdk.Registry once the hub gains plugin supervision.
+	connectors := []sdk.Connector{
+		gmail.New(gmail.WithLogger(logger)),
+		upload.New(),
+		outlookmail.New(outlookmail.WithLogger(logger)),
+		gdrive.New(gdrive.WithLogger(logger)),
+		gcal.New(gcal.WithLogger(logger)),
+		outlookcal.New(outlookcal.WithLogger(logger)),
+		slack.New(slack.WithLogger(logger)),
+		confluence.New(confluence.WithLogger(logger)),
+		jira.New(jira.WithLogger(logger)),
 	}
-	if err := registry.Register(upload.New()); err != nil {
-		return hub.Deps{}, fmt.Errorf("register upload connector: %w", err)
+	for _, c := range connectors {
+		if err := registry.Register(c); err != nil {
+			return hub.Deps{}, fmt.Errorf("register %s connector: %w", c.Spec().ID, err)
+		}
 	}
 
 	uploadFn := func(ctx context.Context, tenant tenancy.Context, file io.Reader, filename, title, contentType string, size int64) (*askerv1.Document, error) {

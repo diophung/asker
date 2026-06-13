@@ -1,0 +1,16 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=250&syncToken=EXPIRED-SYNC-TOKEN"
+      },
+      "response": {
+        "status": 410,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"error\":{\"errors\":[{\"domain\":\"calendar\",\"reason\":\"fullSyncRequired\",\"message\":\"Sync token is no longer valid, a full sync is required.\",\"locationType\":\"parameter\",\"location\":\"syncToken\"}],\"code\":410,\"message\":\"Sync token is no longer valid, a full sync is required.\"}}"
+      }
+    }
+  ]
+}
