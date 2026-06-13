@@ -17,6 +17,52 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — M3 media pipeline (complete)
+
+- Done: **M3 exit criterion met, verified live: `tools/e2e/m3-media.sh` passes all 16 checks** —
+  search a spoken phrase → the VIDEO at the right transcript timestamp (modality `asr`, segment
+  `[start,end]`), plus CLIP text→image, OCR, thumbnail serving, and media tenant isolation. M0
+  smoke still green (no regression).
+  - **Two embedding spaces (ADR-013):** bge-m3 text/OCR/ASR (existing `embedding`) + a new CLIP
+    space (`clip_embedding`, CLIP_DIM=512). New `services/clip` (open_clip ViT-B/32, one model →
+    both encoders, L2-normalized) serves `/embed/text` (query text→image arm) and `/embed/image`
+    (enrich). Vespa schema v2: clip_embedding field, parallel chunk_starts_ms/ends_ms/modalities,
+    media summary fields, a `clip` rank profile with `closest()` for matched-chunk resolution.
+  - **Media enrich (Python):** IMAGE → Tesseract OCR (bge-m3) + CLIP image embedding + thumbnail;
+    AUDIO → faster-whisper (tiny) timestamped ASR chunks; VIDEO → ffmpeg audio→whisper + scene
+    keyframes→CLIP + poster. Media bytes flow through the connector-hub `/internal/media`
+    decrypt/encrypt endpoint (envelope crypto stays in Go; ADR-013). Chunk vectors route to
+    embedding vs clip_embedding by length in the index-writer.
+  - **Query:** a CLIP text→image arm merged with the bge-m3 text/hybrid arm (dedup by doc_id),
+    media Hit fields (start_ms/end_ms/modality/thumbnail_key), reliable transcript-segment
+    anchoring, degradation when clip is down ("clip-unavailable", never fail closed).
+  - **Gateway/web:** `/v1/media` authed thumbnail proxy; web media result cards (image
+    thumbnails via token-fetched object URLs, video/audio timestamp deep-links, modality badges).
+  - **Adversarial review (19 agents) + live integration fixes:** clip needed numpy (image
+    preprocessing); ffmpeg keyframe extraction degrades to empty (no dead-letter) on
+    short/low-motion clips; a CLIP outage degrades (keeps OCR/ASR text) instead of dead-lettering;
+    media-hit attribution reliably anchors to the transcript segment; blob.Get/GetByKey reject
+    `..` path traversal; upload classifies DocType by content_type. All with regression tests.
+- Next: **M4 — production deployment.** Helm charts (cloud-agnostic), Strimzi Kafka, Vespa
+  multi-group on K8s, HPA, PodDisruptionBudgets, default-deny NetworkPolicies, Vault (replaces the
+  file-KEK + the internal-network trust model), TLS/mTLS, backup/restore runbooks. Exit: deploys
+  to kind/k3d in CI; chaos test (kill any pod) shows no failed queries beyond retry. This is
+  infra/YAML-heavy and needs a K8s cluster (kind/k3d) — feasible locally but heavy; the chaos-test
+  exit needs a running cluster.
+- Known issues:
+  - The full 17-service stack (clip+torch ~1.2GB, enrich+whisper) is over the 8GB dev VM's budget:
+    the clip container OOM-killed mid-e2e on the first attempts. The CLIP-degradation fix means the
+    ASR exit criterion indexes regardless, and the suite passes when clip stays up (it did on the
+    clean re-run after freeing fake-gmail). On this VM, expect occasional clip OOM under load;
+    `make e2e-m3-media` may need a retry, or the Docker memory bump (≥14GB). CI (16GB) runs it via
+    the `e2e-m3-media` job. fake-gmail was stopped during the media e2e to free headroom and
+    restored after.
+  - The media e2e uploads are content-uniquified per run (trailing run-id bytes) so they survive
+    ingest dedupe across local re-runs; the committed fixtures are tiny (≈28KB) and CI-portable
+    (no `say` needed — `tools/e2e/gen-media-fixtures.sh` regenerates them on macOS).
+  - Recurrence (RRULE) expansion, a real in-browser media player, and pure-visual CLIP recall
+    tuning remain refinements.
+
 ## 2026-06-13 — M2 connector framework + breadth (complete)
 
 - Done: **M2 exit criteria met — contract tests pass for every connector against recorded

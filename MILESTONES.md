@@ -9,7 +9,7 @@ passing tests before the next begins. Source of truth for scope:
 | M0 | Foundations (skeleton that runs) | **Complete** (2026-06-12) |
 | M1 | Vertical slice | **Functionally complete** (2026-06-13; full-scale e2e runs in CI — see PROGRESS.md) |
 | M2 | Connector framework + breadth | **Complete** (2026-06-13; live OAuth/webhook push deferred — see PROGRESS.md) |
-| M3 | Media pipeline | Not started |
+| M3 | Media pipeline | **Complete** (2026-06-13; e2e green locally — spoken phrase → video@timestamp + text→image) |
 | M4 | Production deployment | Not started |
 | M5 | Scale & SLO verification | Not started |
 | M6 | Hardening | Not started |
