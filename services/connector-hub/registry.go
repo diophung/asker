@@ -12,12 +12,16 @@ import (
 	"github.com/asker/asker/connectors/gcal"
 	"github.com/asker/asker/connectors/gdrive"
 	"github.com/asker/asker/connectors/gmail"
+	"github.com/asker/asker/connectors/ical"
 	"github.com/asker/asker/connectors/jira"
+	"github.com/asker/asker/connectors/msteams"
 	outlookcal "github.com/asker/asker/connectors/outlook-cal"
 	outlookmail "github.com/asker/asker/connectors/outlook-mail"
+	"github.com/asker/asker/connectors/s3"
 	"github.com/asker/asker/connectors/sdk"
 	"github.com/asker/asker/connectors/slack"
 	"github.com/asker/asker/connectors/upload"
+	whatsappexport "github.com/asker/asker/connectors/whatsapp-export"
 	"github.com/asker/asker/platform/blob"
 	"github.com/asker/asker/platform/crypto"
 	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
@@ -64,6 +68,10 @@ func buildDeps(ctx context.Context, cfg hub.Config, logger *slog.Logger) (hub.De
 		slack.New(slack.WithLogger(logger)),
 		confluence.New(confluence.WithLogger(logger)),
 		jira.New(jira.WithLogger(logger)),
+		s3.New(s3.WithLogger(logger)),
+		ical.New(ical.WithLogger(logger)),
+		whatsappexport.New(whatsappexport.WithLogger(logger)),
+		msteams.New(msteams.WithLogger(logger)),
 	}
 	for _, c := range connectors {
 		if err := registry.Register(c); err != nil {

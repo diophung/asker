@@ -1,0 +1,31 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/my-bucket/",
+        "query": "list-type=2&delimiter=&encoding-type=url&fetch-owner=true&max-keys=1000&prefix=docs%2F"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/xml"]},
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>my-bucket</Name><Prefix>docs/</Prefix><KeyCount>3</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated><Contents><Key>docs/big.txt</Key><LastModified>2026-06-09T08:00:00.000Z</LastModified><ETag>&quot;bigetag111&quot;</ETag><Size>2097152</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>docs/data.json</Key><LastModified>2026-06-10T11:30:00.000Z</LastModified><ETag>&quot;jsonetag222&quot;</ETag><Size>27</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>docs/notes.txt</Key><LastModified>2026-06-12T10:00:00.000Z</LastModified><ETag>&quot;notesetag999&quot;</ETag><Size>30</Size><StorageClass>STANDARD</StorageClass></Contents></ListBucketResult>"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/my-bucket/docs/notes.txt"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": ["text/plain"],
+          "ETag": ["\"notesetag999\""],
+          "Last-Modified": ["Fri, 12 Jun 2026 10:00:00 GMT"]
+        },
+        "body": "ship the s3 connector (edited)\n"
+      }
+    }
+  ]
+}

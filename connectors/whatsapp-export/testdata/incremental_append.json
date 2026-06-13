@@ -1,0 +1,19 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": [
+            "text/plain; charset=utf-8"
+          ]
+        },
+        "body": "[2024-03-15, 9:00:00 AM] Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.\n[2024-03-15, 9:42:13 AM] Alice: Hey team 👋 kicking off Project Falcon today!\n[2024-03-15, 9:43:01 AM] Bob: Sounds great.\nCan we sync at 3:30?\nI have notes to share.\n[2024-03-15, 9:45:10 AM] Bob: \u003cMedia omitted\u003e\n[2024-03-15, 9:46:00 AM] Carol added Dave\n[2024-03-15, 9:50:22 AM] Café Owner: Café au lait ☕ done — shipping now\n[2024-03-16, 10:00:00 AM] Alice: Morning! Falcon standup in 5.\n[2024-03-16, 10:05:30 AM] Dave: On my way 🚀\n"
+      }
+    }
+  ]
+}

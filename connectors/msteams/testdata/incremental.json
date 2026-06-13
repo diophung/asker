@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-a/messages/delta", "query": "$deltatoken=DELTA-A-1"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:group-a/messages/delta?$deltatoken=DELTA-A-2\",\"value\":[{\"id\":\"1001\",\"etag\":\"1700000000099\",\"messageType\":\"message\",\"createdDateTime\":\"2024-01-02T10:00:00Z\",\"lastModifiedDateTime\":\"2024-01-04T09:00:00Z\",\"importance\":\"normal\",\"webUrl\":\"https://teams.microsoft.com/l/message/19:group-a/1001\",\"from\":{\"user\":{\"id\":\"u-alice\",\"displayName\":\"Alice Doe\"}},\"body\":{\"contentType\":\"html\",\"content\":\"<div><p>Kickoff moved to <b>1pm</b>.</p></div>\"}},{\"id\":\"1002\",\"deletedDateTime\":\"2024-01-04T09:05:00Z\",\"@removed\":{\"reason\":\"deleted\"}}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:oneone-b/messages/delta", "query": "$deltatoken=DELTA-B-1"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:oneone-b/messages/delta?$deltatoken=DELTA-B-2\",\"value\":[]}"
+      }
+    }
+  ]
+}

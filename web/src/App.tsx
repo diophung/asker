@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiUrl, getToken, initAuth, login, logout, username } from "./auth";
-import { SearchClient } from "./api";
+import { ConnectorClient, SearchClient } from "./api";
 import { SearchPage } from "./SearchPage";
+import { ConnectorsPage } from "./connectors/ConnectorsPage";
 
 type AuthState = "initializing" | "anonymous" | "authenticated" | "error";
+type View = "search" | "connectors";
 
 export function App() {
   const [auth, setAuth] = useState<AuthState>("initializing");
+  const [view, setView] = useState<View>("search");
 
   useEffect(() => {
     let cancelled = false;
@@ -26,15 +29,41 @@ export function App() {
     };
   }, []);
 
-  const client = useMemo(
+  const searchClient = useMemo(
     () => new SearchClient({ baseUrl: apiUrl, getToken }),
+    [],
+  );
+  const connectorClient = useMemo(
+    () => new ConnectorClient({ baseUrl: apiUrl, getToken }),
     [],
   );
 
   return (
     <div className="app">
       <header className="app-header">
-        <span className="brand">Asker</span>
+        <div className="header-left">
+          <span className="brand">Asker</span>
+          {auth === "authenticated" && (
+            <nav className="header-tabs" aria-label="Primary">
+              <button
+                type="button"
+                className="tab-button"
+                aria-current={view === "search" ? "page" : undefined}
+                onClick={() => setView("search")}
+              >
+                Search
+              </button>
+              <button
+                type="button"
+                className="tab-button"
+                aria-current={view === "connectors" ? "page" : undefined}
+                onClick={() => setView("connectors")}
+              >
+                Connectors
+              </button>
+            </nav>
+          )}
+        </div>
         {auth === "authenticated" && (
           <div className="header-user">
             <span className="header-username">{username()}</span>
@@ -87,7 +116,12 @@ export function App() {
         </div>
       )}
 
-      {auth === "authenticated" && <SearchPage client={client} />}
+      {auth === "authenticated" && view === "search" && (
+        <SearchPage client={searchClient} />
+      )}
+      {auth === "authenticated" && view === "connectors" && (
+        <ConnectorsPage client={connectorClient} />
+      )}
     </div>
   );
 }

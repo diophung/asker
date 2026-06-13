@@ -1,0 +1,15 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/calendar; charset=utf-8"]},
+        "body": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp//Asker Test//EN\r\nCALSCALE:GREGORIAN\r\nBEGIN:VTIMEZONE\r\nTZID:America/Los_Angeles\r\nBEGIN:STANDARD\r\nDTSTART:20251102T020000\r\nTZOFFSETFROM:-0700\r\nTZOFFSETTO:-0800\r\nTZNAME:PST\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:evt-standup@example.com\r\nDTSTAMP:20260601T090000Z\r\nCREATED:20260601T090000Z\r\nLAST-MODIFIED:20260602T101500Z\r\nSEQUENCE:0\r\nSTATUS:CONFIRMED\r\nSUMMARY:Daily standup\r\nDESCRIPTION:Quick sync.\\n Bring blockers\\, notes\\; and questions.\r\nLOCATION:Zoom\r\nURL:https://example.com/standup\r\nDTSTART;TZID=America/Los_Angeles:20260603T093000\r\nDTEND;TZID=America/Los_Angeles:20260603T094500\r\nORGANIZER;CN=Alice Anderson:mailto:alice@example.com\r\nATTENDEE;CN=Alice Anderson;ROLE=CHAIR:mailto:alice@example.com\r\nATTENDEE;CN=Bob Brown;ROLE=REQ-PARTICIPANT:MAILTO:bob@example.com\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:evt-launch@example.com\r\nDTSTAMP:20260601T120000Z\r\nCREATED:20260601T120000Z\r\nLAST-MODIFIED:20260601T120000Z\r\nSEQUENCE:2\r\nSTATUS:CONFIRMED\r\nSUMMARY:Product launch review\r\nDESCRIPTION:Go/no-go decision for the M2 launch.\r\nLOCATION:HQ Room 4\r\nDTSTART;TZID=America/Los_Angeles:20260605T140000\r\nDTEND;TZID=America/Los_Angeles:20260605T150000\r\nORGANIZER;CN=Carol Carter:mailto:carol@example.com\r\nATTENDEE;CN=Alice Anderson:mailto:alice@example.com\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:evt-allhands@example.com\r\nDTSTAMP:20260604T080000Z\r\nCREATED:20260604T080000Z\r\nSUMMARY:Company all-hands\r\nDESCRIPTION:Monthly all-hands.\r\nDTSTART;VALUE=DATE:20260610\r\nDTEND;VALUE=DATE:20260611\r\nRRULE:FREQ=MONTHLY;BYMONTHDAY=10\r\nORGANIZER;CN=Dave Davis:mailto:dave@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    }
+  ]
+}

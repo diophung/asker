@@ -159,6 +159,135 @@ export class SearchClient {
   }
 }
 
+// Connectors management REST contract (served by the gateway behind OIDC):
+//
+//   POST   /v1/connectors {connector_id, display_name, config:{}} -> instance
+//   GET    /v1/connectors -> ConnectorInstanceStatus[]
+//   DELETE /v1/connectors/{id}
+//   PUT    /v1/connectors/{id}/token {token}
+//   Authorization: Bearer <Keycloak JWT> on every call.
+
+/** A configured connector instance owned by the tenant. */
+export interface ConnectorInstance {
+  id: string;
+  connector_id: string;
+  display_name: string;
+  config: Record<string, unknown>;
+  status: string;
+  created: string;
+  updated: string;
+}
+
+/** Sync progress reported alongside each instance. */
+export interface ConnectorSync {
+  phase: string;
+  last_sync_started: string;
+  last_sync_completed: string;
+  last_error: string;
+  docs_emitted: number;
+}
+
+/** One row of GET /v1/connectors: an instance plus its sync state. */
+export interface ConnectorInstanceStatus {
+  instance: ConnectorInstance;
+  sync: ConnectorSync;
+}
+
+/**
+ * Client for the gateway's connector-management endpoints. Each call attaches a
+ * fresh bearer token and supports cancellation via an injected AbortSignal so
+ * callers (e.g. polling) can drop stale in-flight requests.
+ */
+export class ConnectorClient {
+  private readonly baseUrl: string;
+  private readonly getToken: () => Promise<string>;
+  private readonly fetchFn: FetchFn;
+
+  constructor(opts: SearchClientOptions) {
+    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.getToken = opts.getToken;
+    this.fetchFn =
+      opts.fetchFn ?? ((input, init) => globalThis.fetch(input, init));
+  }
+
+  /** List the tenant's connector instances and their sync status. */
+  async listConnectors(
+    signal?: AbortSignal,
+  ): Promise<ConnectorInstanceStatus[]> {
+    const res = await this.request("/v1/connectors", { method: "GET" }, signal);
+    return (await res.json()) as ConnectorInstanceStatus[];
+  }
+
+  /** Create a new connector instance; returns the created instance. */
+  async createConnector(
+    connectorId: string,
+    displayName: string,
+    config: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ConnectorInstance> {
+    const res = await this.request(
+      "/v1/connectors",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          connector_id: connectorId,
+          display_name: displayName,
+          config,
+        }),
+      },
+      signal,
+    );
+    return (await res.json()) as ConnectorInstance;
+  }
+
+  /** Delete a connector instance by id. */
+  async deleteConnector(id: string, signal?: AbortSignal): Promise<void> {
+    await this.request(
+      `/v1/connectors/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+      signal,
+    );
+  }
+
+  /** Store (or replace) the auth token for a connector instance. */
+  async putConnectorToken(
+    id: string,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.request(
+      `/v1/connectors/${encodeURIComponent(id)}/token`,
+      { method: "PUT", body: JSON.stringify({ token }) },
+      signal,
+    );
+  }
+
+  private async request(
+    path: string,
+    init: { method: string; body?: string },
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const token = await this.getToken();
+    signal?.throwIfAborted();
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+    };
+    if (init.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
+    const res = await this.fetchFn(`${this.baseUrl}${path}`, {
+      method: init.method,
+      headers,
+      body: init.body,
+      signal,
+    });
+    if (!res.ok) {
+      throw new ApiError(res.status, await errorMessage(res));
+    }
+    return res;
+  }
+}
+
 async function errorMessage(res: Response): Promise<string> {
   let message = "";
   try {

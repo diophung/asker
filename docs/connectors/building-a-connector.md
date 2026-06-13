@@ -181,6 +181,11 @@ From/To/Cc via `net/mail` and degrades a malformed header to a single name-only 
 stays searchable (`connectors/gmail/message.go`, `participants`). For MS Teams, map the message
 sender and channel/chat members.
 
+Convention for the two id fields: put an **email address** in `email`, and an opaque
+provider-specific id (a Slack user id `U0123`, a Graph user GUID, a phone number) in `handle`. Set
+whichever the source gives you (often both); `name` is the display name. Keeping emails in `email`
+makes `from:alice@example.com` consistent across connectors.
+
 ### 3.5 `acl` — shared sources only (ADR-012)
 
 For **shared** sources (Drive, Confluence, Teams channels with restricted membership) set
@@ -256,10 +261,14 @@ Notes:
 - **Checkpoint at a resumable boundary** (e.g. after each completed page) so an interrupted
   backfill resumes instead of restarting. `cfg.Checkpoint` is never nil at runtime (tests use
   `sdk.NopCheckpoint`).
-- **Capture the head cursor before listing.** Gmail captures the mailbox `historyId` before paging
-  and encodes the in-progress page token into the checkpoint cursor, so a mid-backfill resume
-  finishes exactly like an uninterrupted run; convergence is via idempotent `(doc_id,
-  version_etag)` upserts (`connectors/gmail/gmail.go` package doc, "Cursor format").
+- **Capture the head cursor before listing** *when the source has a single global change feed*
+  (Gmail's mailbox `historyId`): capturing it before paging means changes that race the backfill
+  are caught by the first incremental pass, and convergence is via idempotent `(doc_id,
+  version_etag)` upserts (`connectors/gmail/gmail.go` package doc, "Cursor format"). When the source
+  has **no global head** but a per-resource one (MS Teams' per-chat `deltaLink`, Slack's per-channel
+  latest ts), the analogue is to capture each resource's position **after** backfilling that
+  resource and compose them into the one returned cursor (see "Composing several resumption points"
+  in §8).
 - **`ctx` cancellation is mandatory** — return promptly when it fires.
 
 ---
@@ -295,39 +304,87 @@ Every connector ships a contract test that proves the invariants in CI **with no
 The default mechanism is a **cassette**: recorded request→response pairs replayed by an
 `http.RoundTripper` the SDK test harness provides, asserted with `connectortest`.
 
-Shape of the test:
+The one-call driver is `connectortest.RunConnectorContract(t, conn, ContractCase)`. It loads the
+cassette, stands up a replay server, **injects that server's URL into your `ConfigJSON`** at the
+field named by `BaseURLField` (default `"base_url"`), builds the `sdk.Config` (tenant, token,
+instance), and runs the FullSync / Incremental / Webhook expectations you declare — asserting
+`ValidateDocument` on every emitted doc plus the doc-id/tombstone/cursor/error expectations.
 
 ```go
 func TestMemoContract(t *testing.T) {
-    // 1. Spec sanity.
     conn := memo.New()
-    connectortest.RunSpecChecks(t, conn)
+    connectortest.RunSpecChecks(t, conn) // Spec sanity (id regex, schema, auth type)
 
-    // 2. Build a Config whose http.Client replays the committed cassette.
-    cfg := connectortest.RunConnectorContract(t, conn, connectortest.Options{
-        Cassette: "testdata/fullsync.yaml", // committed recording — no network in replay mode
-        Tenant:   "tenant-a",
-        Config:   []byte(`{"workspace":"acme"}`),
-        Token:    []byte("redacted-test-token"),
+    wantCursor := sdk.Cursor("delta:2")
+    connectortest.RunConnectorContract(t, conn, connectortest.ContractCase{
+        Cassette:     "testdata/memo.json", // committed recording — no network in replay mode
+        Tenant:       "tenant-a",
+        ConfigJSON:   []byte(`{"workspace":"acme"}`), // base_url is injected for you
+        BaseURLField: "base_url",                     // the ConfigJSON key your connector reads
+        Token:        []byte("redacted-test-token"),
+        FullSync: &connectortest.SyncExpectation{
+            WantDocIDs: []string{
+                sdk.DocID("memo", "m1"), sdk.DocID("memo", "m2"), sdk.DocID("memo", "m3"),
+            },
+        },
+        Incremental: &connectortest.IncrementalExpectation{
+            FromCursor: "delta:1", // resume point; cassette interactions run full-sync-first
+            SyncExpectation: connectortest.SyncExpectation{
+                WantDocIDs:          []string{sdk.DocID("memo", "m2")}, // an edit re-emits
+                WantTombstoneDocIDs: []string{sdk.DocID("memo", "m4")}, // a delete -> tombstone
+                WantCursor:          &wantCursor,
+            },
+        },
     })
-
-    // 3. Drive the connector and validate every emitted document.
-    var rec connectortest.EmitRecorder
-    cur, err := conn.FullSync(context.Background(), cfg, rec.Emit)
-    if err != nil { t.Fatalf("FullSync: %v", err) }
-    for _, doc := range rec.Docs() {
-        connectortest.ValidateDocument(t, cfg, doc)
-    }
-    _ = cur // assert it advances; feed it into IncrementalSync for the incremental case
 }
 ```
 
-> The `connectortest.RunConnectorContract` entry point and the cassette record/replay transport are
-> provided by the SDK test harness (`connectors/sdk/connectortest`). Check that package's GoDoc for
-> the exact `Options` fields and helper names — the snippet above is illustrative of the workflow,
-> not a frozen signature. The stable, already-shipped helpers you will always use are
-> **`connectortest.RunSpecChecks`**, **`connectortest.EmitRecorder`**, and
-> **`connectortest.ValidateDocument`** (`connectors/sdk/connectortest/connectortest.go`).
+To assert `ErrCursorExpired`, set `Incremental.WantErr` to `&someErr` where
+`someErr = sdk.ErrCursorExpired` (the driver checks `errors.Is`). When you need to drive the
+connector **manually** (a flow `ContractCase` can't express), build the pieces yourself:
+
+```go
+cass, _ := connectortest.LoadCassette("testdata/memo.json")
+srv := connectortest.NewReplayServer(t, cass) // *httptest.Server, auto-closed; .URL()
+tc, _ := tenancy.FromClaims(map[string]any{"tenant_id": "tenant-a", "sub": "u"}) // build a tenant
+cfg := sdk.Config{
+    Tenant:     tc,
+    ConfigJSON: []byte(`{"base_url":"` + srv.URL() + `","workspace":"acme"}`),
+    Token:      []byte("redacted-test-token"),
+    Checkpoint: sdk.NopCheckpoint,
+}
+var rec connectortest.EmitRecorder
+cur, err := conn.FullSync(context.Background(), cfg, rec.Emit)
+// ... assert err, cur, and connectortest.ValidateDocument(t, cfg, doc) for doc := range rec.Docs()
+```
+
+The stable harness API: **`RunConnectorContract` / `ContractCase`** (the one-call driver),
+**`NewReplayServer` / `LoadCassette`** (manual replay), **`RunSpecChecks`**, **`EmitRecorder`**, and
+**`ValidateDocument`** (`connectors/sdk/connectortest/`). A `tenancy.Context` for a hand-built
+`sdk.Config` comes from `tenancy.FromClaims(map[string]any{"tenant_id": ..., "sub": ...})`.
+
+### Talking to the replay server: rebase absolute URLs
+
+The harness injects the replay server's URL (a random `127.0.0.1:PORT`) into your `base_url`. If
+your source returns **relative** next-page tokens (`?page=2`), you are done. But many APIs —
+Microsoft Graph (`@odata.nextLink` / `@odata.deltaLink`), Atlassian, GitHub — return **absolute**
+continuation URLs pointing at the real host (`https://graph.microsoft.com/v1.0/...`). If you follow
+those verbatim your requests miss the replay server (and, in production, ignore a configured
+endpoint). **Rebase absolute follow-links onto your configured `base_url`** — rewrite scheme+host
+(and strip the API version prefix the base already carries) before fetching. Persist cursors in a
+**host-independent** form too (store Graph's `$deltatoken`, not the full deltaLink URL), so a cursor
+survives a `base_url` change between dev/CI/prod. The Graph connectors (`connectors/outlook-mail`,
+`connectors/msteams`) show the rebasing helper.
+
+### Composing several resumption points into one `Cursor`
+
+`sdk.Cursor` is a single opaque string, but real sources often have **several** positions to
+resume from (MS Teams: a delta token per chat; Slack: a latest-ts per channel). Encode the whole
+set into one cursor — JSON-marshal a `map[string]string` (resource id → per-resource token) into the
+`Cursor` and unmarshal it on the way in. Keep it forward-compatible (tolerate unknown/missing keys)
+and treat an unparseable cursor as `sdk.ErrCursorExpired` so the hub re-runs `FullSync`. `FullSync`
+returns the fully-populated composite cursor; `IncrementalSync` reads it, advances each resource,
+and returns the updated composite.
 
 ### Recording a cassette (once)
 

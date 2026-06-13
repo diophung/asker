@@ -1,0 +1,76 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/me/chats", "query": "$expand=members"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/me/chats?$expand=members&$skiptoken=PAGE2\",\"value\":[{\"id\":\"19:group-a\",\"topic\":\"Project Apollo\",\"chatType\":\"group\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:group-a\",\"members\":[{\"id\":\"m1\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m2\",\"displayName\":\"Bob Roe\",\"userId\":\"u-bob\",\"email\":\"bob@example.com\"}]}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/me/chats", "query": "$expand=members&$skiptoken=PAGE2"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"value\":[{\"id\":\"19:oneone-b\",\"topic\":\"\",\"chatType\":\"oneOnOne\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:oneone-b\",\"members\":[{\"id\":\"m3\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m4\",\"displayName\":\"Carol Coe\",\"userId\":\"u-carol\",\"email\":\"carol@example.com\"}]}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-a/messages"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/chats/19:group-a/messages?$skiptoken=MSG2\",\"value\":[{\"id\":\"1001\",\"etag\":\"1700000000001\",\"messageType\":\"message\",\"createdDateTime\":\"2024-01-02T10:00:00Z\",\"lastModifiedDateTime\":\"2024-01-02T10:00:00Z\",\"importance\":\"normal\",\"webUrl\":\"https://teams.microsoft.com/l/message/19:group-a/1001\",\"from\":{\"user\":{\"id\":\"u-alice\",\"displayName\":\"Alice Doe\"}},\"body\":{\"contentType\":\"html\",\"content\":\"<div><p>Kickoff at <b>noon</b>.</p></div>\"}}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-a/messages", "query": "$skiptoken=MSG2"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"value\":[{\"id\":\"1002\",\"etag\":\"1700000000002\",\"messageType\":\"message\",\"createdDateTime\":\"2024-01-02T11:30:00Z\",\"lastModifiedDateTime\":\"2024-01-02T11:30:00Z\",\"importance\":\"high\",\"webUrl\":\"https://teams.microsoft.com/l/message/19:group-a/1002\",\"from\":{\"user\":{\"id\":\"u-bob\",\"displayName\":\"Bob Roe\"}},\"body\":{\"contentType\":\"text\",\"content\":\"Sounds good, see you there.\"}}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-a/messages/delta"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:group-a/messages/delta?$deltatoken=DELTA-A-1\",\"value\":[]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:oneone-b/messages"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"value\":[{\"id\":\"2001\",\"etag\":\"1700000000010\",\"messageType\":\"message\",\"createdDateTime\":\"2024-01-03T08:15:00Z\",\"lastModifiedDateTime\":\"2024-01-03T08:15:00Z\",\"importance\":\"normal\",\"webUrl\":\"https://teams.microsoft.com/l/message/19:oneone-b/2001\",\"from\":{\"user\":{\"id\":\"u-carol\",\"displayName\":\"Carol Coe\"}},\"body\":{\"contentType\":\"text\",\"content\":\"Can you review my PR?\"}}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:oneone-b/messages/delta"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:oneone-b/messages/delta?$deltatoken=DELTA-B-1\",\"value\":[]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-a/messages/delta", "query": "$deltatoken=DELTA-A-1"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:group-a/messages/delta?$deltatoken=DELTA-A-2\",\"value\":[{\"id\":\"1001\",\"etag\":\"1700000000099\",\"messageType\":\"message\",\"createdDateTime\":\"2024-01-02T10:00:00Z\",\"lastModifiedDateTime\":\"2024-01-04T09:00:00Z\",\"importance\":\"normal\",\"webUrl\":\"https://teams.microsoft.com/l/message/19:group-a/1001\",\"from\":{\"user\":{\"id\":\"u-alice\",\"displayName\":\"Alice Doe\"}},\"body\":{\"contentType\":\"html\",\"content\":\"<div><p>Kickoff moved to <b>1pm</b>.</p></div>\"}},{\"id\":\"1002\",\"deletedDateTime\":\"2024-01-04T09:05:00Z\",\"@removed\":{\"reason\":\"deleted\"}}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:oneone-b/messages/delta", "query": "$deltatoken=DELTA-B-1"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:oneone-b/messages/delta?$deltatoken=DELTA-B-2\",\"value\":[]}"
+      }
+    }
+  ]
+}

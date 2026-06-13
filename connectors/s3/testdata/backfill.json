@@ -1,0 +1,58 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/my-bucket/",
+        "query": "list-type=2&delimiter=&encoding-type=url&fetch-owner=true&max-keys=1000&prefix=docs%2F"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/xml"]},
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>my-bucket</Name><Prefix>docs/</Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>true</IsTruncated><NextContinuationToken>PAGE2TOKEN</NextContinuationToken><Contents><Key>docs/big.txt</Key><LastModified>2026-06-09T08:00:00.000Z</LastModified><ETag>&quot;bigetag111&quot;</ETag><Size>2097152</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>docs/data.json</Key><LastModified>2026-06-10T11:30:00.000Z</LastModified><ETag>&quot;jsonetag222&quot;</ETag><Size>27</Size><StorageClass>STANDARD</StorageClass></Contents></ListBucketResult>"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/my-bucket/",
+        "query": "list-type=2&continuation-token=PAGE2TOKEN&delimiter=&encoding-type=url&fetch-owner=true&max-keys=1000&prefix=docs%2F"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/xml"]},
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>my-bucket</Name><Prefix>docs/</Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated><Contents><Key>docs/notes.txt</Key><LastModified>2026-06-11T14:15:00.000Z</LastModified><ETag>&quot;notesetag333&quot;</ETag><Size>22</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>docs/report.pdf</Key><LastModified>2026-06-08T07:45:00.000Z</LastModified><ETag>&quot;pdfetag444&quot;</ETag><Size>51234</Size><StorageClass>GLACIER</StorageClass></Contents></ListBucketResult>"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/my-bucket/docs/data.json"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": ["application/json"],
+          "ETag": ["\"jsonetag222\""],
+          "Last-Modified": ["Wed, 10 Jun 2026 11:30:00 GMT"]
+        },
+        "body": "{\"team\":\"asker\",\"wave\":2}\n"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/my-bucket/docs/notes.txt"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": ["text/plain"],
+          "ETag": ["\"notesetag333\""],
+          "Last-Modified": ["Thu, 11 Jun 2026 14:15:00 GMT"]
+        },
+        "body": "ship the s3 connector\n"
+      }
+    }
+  ]
+}
