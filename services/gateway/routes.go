@@ -30,6 +30,12 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", getOnly(handleHealthz))
 	mux.HandleFunc("/readyz", getOnly(handleReadyz(cfg.OIDCJWKSURL)))
+	// Prometheus scrape endpoint. The RED metrics (http_server_requests_total,
+	// http_server_request_duration_seconds) the telemetry HTTP middleware
+	// records are exported here too; works without an OTLP collector. It sits
+	// outside the auth chain (operator/Prometheus surface, not a tenant API)
+	// and carries no tenant context, so no isolation concern.
+	mux.Handle("GET /metrics", telemetry.MetricsHandler())
 	mux.Handle("/v1/me", authed(getOnly(handleMe)))
 	mux.Handle("/v1/search", authed(getOnly(d.handleSearch)))
 	mux.Handle("/v1/media", authed(getOnly(d.handleMedia)))

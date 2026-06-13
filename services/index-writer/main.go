@@ -107,8 +107,13 @@ func run(ctx context.Context, cfg indexWriterConfig, logger *slog.Logger) error 
 		healthErr <- nil
 	}()
 
+	pm := newPipelineMetrics()
+	// The index-writer consumes docs.enriched and feeds Vespa; the metric topic
+	// label is the consumed topic (TopicDocsEnriched).
+	handle := pm.instrument(serviceName, kafkautil.TopicDocsEnriched, w.Handle)
+
 	consumeErr := make(chan error, 1)
-	go func() { consumeErr <- consumer.Run(ctx, w.Handle) }()
+	go func() { consumeErr <- consumer.Run(ctx, handle) }()
 
 	logger.Info("index-writer consuming",
 		"topic", kafkautil.TopicDocsEnriched, "group", consumerGroup,
@@ -175,6 +180,10 @@ func newHealthHandler(vespaURL string) http.Handler {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(rw, "ready")
 	})
+	// Prometheus scrape endpoint on the existing health server; works without an
+	// OTLP collector. Exposes the pipeline records/stage-duration metrics and
+	// the asker_index_doc_age_seconds freshness histogram.
+	mux.Handle("GET /metrics", telemetry.MetricsHandler())
 	return mux
 }
 

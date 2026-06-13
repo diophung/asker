@@ -43,6 +43,9 @@ func newHealthHandler(vespaURL string) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
+	// Prometheus scrape endpoint. Served on the existing health HTTP server so
+	// the gRPC port stays RPC-only; works without an OTLP collector.
+	mux.Handle("GET /metrics", telemetry.MetricsHandler())
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})

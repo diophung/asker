@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
@@ -93,7 +94,13 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 		logger,
 	)
 
+	// otelgrpc stats handler records RPC-level RED metrics + traces (the M4-noted
+	// gap). It uses the global meter/tracer providers, so it is no-op-safe when
+	// telemetry was initialized without an endpoint. The tenancy interceptor
+	// still runs first in the unary chain — instrumentation never sees the
+	// tenant and adds no high-cardinality labels.
 	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(tenancygrpc.UnaryServerInterceptor()),
 	)
 	queryv1.RegisterQueryServiceServer(grpcServer, srv)

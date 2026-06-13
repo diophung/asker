@@ -8,11 +8,18 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/protobuf/proto"
 
 	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
+
+// meterName scopes kafkautil's OTel instruments. Uses the global MeterProvider,
+// so it is a no-op until (and unless) telemetry.Init installs a real provider.
+const meterName = "github.com/asker/asker/platform/kafkautil"
 
 // Handler processes one document. The ctx it receives carries the
 // tenancy.Context reconstructed from the record's tenant_id header
@@ -33,6 +40,11 @@ var handlerBackoff = []time.Duration{100 * time.Millisecond, 500 * time.Millisec
 type Consumer struct {
 	cl  *kgo.Client
 	log *slog.Logger
+	// deadletter counts records newly quarantined to docs.deadletter, labeled by
+	// origin_topic only (NEVER tenant/doc — cardinality-safe across ~10M tenants).
+	// This is the authoritative "data quarantined" signal for the zero-data-loss
+	// SLO, distinct from a per-attempt handler-failure rate (M5).
+	deadletter metric.Int64Counter
 }
 
 // NewConsumer joins the given consumer group on the given topics. Offsets are
@@ -62,9 +74,17 @@ func NewConsumer(cfg Config, group string, topics ...string) (*Consumer, error) 
 	if err != nil {
 		return nil, fmt.Errorf("kafkautil: new consumer: %w", err)
 	}
+	deadletter, err := otel.Meter(meterName).Int64Counter("asker_pipeline_deadletter",
+		metric.WithDescription("Documents newly quarantined to the dead-letter topic."),
+		metric.WithUnit("{record}"),
+	)
+	if err != nil {
+		otel.Handle(err)
+	}
 	return &Consumer{
-		cl:  cl,
-		log: slog.Default().With("component", "kafkautil.consumer", "group", group),
+		cl:         cl,
+		log:        slog.Default().With("component", "kafkautil.consumer", "group", group),
+		deadletter: deadletter,
 	}, nil
 }
 
@@ -189,6 +209,9 @@ func (c *Consumer) quarantine(ctx context.Context, rec *kgo.Record, cause error)
 	if err := c.cl.ProduceSync(ctx, dl).FirstErr(); err != nil {
 		return fmt.Errorf("kafkautil: quarantine %s[%d]@%d to %s: %w",
 			rec.Topic, rec.Partition, rec.Offset, TopicDocsDeadletter, err)
+	}
+	if c.deadletter != nil {
+		c.deadletter.Add(ctx, 1, metric.WithAttributes(attribute.String("origin_topic", rec.Topic)))
 	}
 	c.log.Error("record quarantined to dead-letter topic",
 		"origin_topic", rec.Topic, "partition", rec.Partition, "offset", rec.Offset, "error", cause)

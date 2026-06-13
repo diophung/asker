@@ -15,6 +15,9 @@ func newHealthHandler(ready *atomic.Bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", getOnly(handleHealthz))
 	mux.HandleFunc("/readyz", getOnly(handleReadyz(ready)))
+	// Prometheus scrape endpoint on the existing health server; works without
+	// an OTLP collector. Exposes the pipeline records/stage-duration metrics.
+	mux.Handle("GET /metrics", telemetry.MetricsHandler())
 	mux.HandleFunc("/", handleNotFound)
 	return telemetry.HTTPMiddleware(serviceName)(mux)
 }

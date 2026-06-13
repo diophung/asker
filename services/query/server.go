@@ -21,11 +21,12 @@ import (
 type server struct {
 	queryv1.UnimplementedQueryServiceServer
 
-	embed  embedder
-	clip   clipEmbedder
-	vespa  vespaSearcher
-	cache  resultCache
-	logger *slog.Logger
+	embed   embedder
+	clip    clipEmbedder
+	vespa   vespaSearcher
+	cache   resultCache
+	logger  *slog.Logger
+	metrics *queryMetrics
 
 	// cacheWarnOnce gates the loud log for a down Redis: the contract is
 	// "skip silently (log once)" — first failure warns, the rest are debug.
@@ -36,7 +37,7 @@ type server struct {
 }
 
 func newServer(embed embedder, clip clipEmbedder, vespa vespaSearcher, cache resultCache, logger *slog.Logger) *server {
-	return &server{embed: embed, clip: clip, vespa: vespa, cache: cache, logger: logger}
+	return &server{embed: embed, clip: clip, vespa: vespa, cache: cache, logger: logger, metrics: newQueryMetrics()}
 }
 
 // Search runs the spec §2.6 pipeline: validate/normalize -> understand ->
@@ -74,15 +75,21 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	mode := norm.GetMode()
 	clipPlanned := plan.Text != "" && mode == queryv1.SearchMode_HYBRID
 
-	// Stage 3: result cache.
+	// Stage 3: result cache. A clean hit serves immediately; a miss (including a
+	// Redis outage, which degrades to "no cache") falls through to retrieval.
+	// The cache outcome is both a metric label on the search-duration histogram
+	// and its own counter so a dashboard can read hit ratio directly.
 	stage = time.Now()
 	key := cacheKey(tc.TenantID(), norm, clipPlanned)
 	if cached := s.cacheGet(ctx, logger, key); cached != nil {
 		cached.Cached = true
 		cached.TookMs = time.Since(start).Milliseconds()
 		logger.Debug("stage cache", "took", time.Since(stage), "hit", true)
+		s.metrics.recordCache(ctx, "hit")
+		s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), "", "hit")
 		return cached, nil
 	}
+	s.metrics.recordCache(ctx, "miss")
 	logger.Debug("stage cache", "took", time.Since(stage), "hit", false)
 
 	// Stage 4: embed the residual text (HYBRID/VECTOR only). Ladder rung 1:
@@ -173,6 +180,13 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 
 	degraded := joinDegraded(degradedReasons)
 
+	// Count each distinct degradation rung that fired (the reasons slice is
+	// already deduped) so a dashboard tracks keyword-only / clip-unavailable
+	// rates without parsing the composed marker.
+	for _, rung := range degradedReasons {
+		s.metrics.recordDegradation(ctx, rung)
+	}
+
 	// Stage 7: respond; cache full-fidelity (non-degraded) results only, so
 	// a 60s TTL never pins keyword-only results past a TEI/Vespa blip.
 	resp := &queryv1.SearchResponse{
@@ -184,6 +198,9 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	if degraded == "" {
 		s.cacheSet(ctx, logger, key, resp)
 	}
+	// This is a computed (cache-miss) result; the search-duration histogram is
+	// labeled cache="miss" here, cache="hit" on the early cached return above.
+	s.metrics.recordSearch(ctx, float64(resp.TookMs), mode.String(), degraded, "miss")
 	logger.Debug("search complete",
 		"took", time.Since(start), "hits", len(resp.Hits), "total", resp.Total, "degraded", degraded)
 	return resp, nil
