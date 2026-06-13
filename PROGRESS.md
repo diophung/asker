@@ -17,6 +17,66 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — Connector OAuth integrations + dev-stack fixes (post-V1)
+
+- Done: **Real OAuth2 (auth-code + PKCE + refresh) for all four providers — Google, Microsoft,
+  Slack, Atlassian — wired end-to-end against a dev fake provider, plus four reported dev-stack
+  issues root-caused and fixed.** Shipped as two committed waves + a security-review fix pass.
+  - **Dev-stack fixes (all four user reports resolved):**
+    - Web sign-in "could not reach the identity provider" was **not an Asker bug** — host port 3000
+      collided (IPv6 `::1` shadowing the IPv4 bind) with the user's other Next.js app. Remapped the
+      web UI to **127.0.0.1:13001** (compose) and updated the `asker-web` realm `redirectUris` +
+      `webOrigins`, the gateway `CORS_ALLOWED_ORIGINS`, and the README dev-URL table/quickstart.
+    - "Keycloak admin/admin didn't work" / "alice/password123 didn't work" — both **verified working**
+      (master-realm console = admin/admin; the app = the `asker` realm, alice/password123). The
+      browser failure was same-origin autofill of the admin password; incognito resolves it. No code
+      change — usage clarification proven by a simulated full auth-code flow (302 + code).
+    - **Connectors tab blank screen** — the gateway's connector endpoints serialize protojson
+      (lowerCamelCase, int64-as-string, base64 config) while the web expected snake_case;
+      `sync.docs_emitted.toLocaleString()` threw on `undefined`. The gateway shape is e2e-locked, so
+      the fix is a web anti-corruption layer in `web/src/api.ts` (normalize camelCase→snake_case,
+      coerce numbers, null→""). 88 web tests pass.
+  - **OAuth feature (the "implement all the actual OAuth integrations" ask):**
+    - `platform/oauth` — provider registry (Google/Microsoft/Slack/Atlassian), the stored `Token`
+      blob (JSON in the SAME envelope-encrypted vault — no proto change; legacy opaque tokens like
+      `fake-gmail-token:…` still pass through unchanged), and the flow service: `AuthCodeURL`
+      (per-provider quirks — Google `access_type=offline&prompt=consent`, Atlassian `audience`+
+      `prompt=consent`, Slack `user_scope`), `Exchange`, `Refresh`. Slack's non-standard
+      `authed_user` envelope (ok:false on HTTP 200) is parsed by hand for BOTH exchange and refresh.
+    - Gateway: `GET /v1/connectors/{id}/oauth/start` (**authed**, instance-ownership checked) →
+      Redis-stored single-use state (GETDEL) carrying tenant + connector + PKCE verifier →
+      `GET /v1/oauth/callback` (**public**, outside the authed mux) that rebuilds the tenant **solely
+      from the trusted server-side state**, never any request value, exchanges the code, stores the
+      token under the correct tenant, and 302s to the FIXED `WEB_APP_URL`.
+    - Hub: a single `fetchToken` refresh hook (refresh-if-`NeedsRefresh(now,60s)`, re-store, hand the
+      connector the access-token string) — no per-connector changes; the `oauth.Service` is built
+      once, only when a provider is configured, over an SSRF-safe client.
+    - Dev fake provider `tools/fake-oauth` (127.0.0.1:9500, auto-consent, real PKCE-S256 +
+      single-use-code + redirect_uri validation, issues the `fake-gmail-token:<subject>` shim for
+      Google, the `authed_user` envelope for Slack) + compose wiring (browser `AUTH_URL`=localhost,
+      in-network `TOKEN_URL`=fake-oauth, `ASKER_SAFEHTTP_ALLOW_PRIVATE=1` dev-only). `docs/oauth.md`
+      is the operator guide for plugging in real apps (register app → redirect URI
+      `<GATEWAY_PUBLIC_URL>/v1/oauth/callback` → `ASKER_OAUTH_*` env).
+    - Web Connect UX: per-connector "Connect with <provider>" buttons + `?oauth=connected|error`
+      banners; `ConnectorClient.startOAuth` hits the authed start endpoint.
+  - **Adversarial security review** (4 dimensions, skeptic-verified): the security core is **sound** —
+    tenant binding from trusted state only, single-use crypto-random state, server-side PKCE, no
+    secret/token leakage, legacy pass-through intact. Two **provider-correctness** findings confirmed
+    and fixed: (LOW) a refresh reply omitting `expires_in` left `Expiry` zero → `NeedsRefresh` read it
+    as non-expiring and stopped self-healing — now carries `prev.Expiry` forward in `tokenFrom`;
+    (MEDIUM) a rotation-enabled Slack token broke on refresh because `Refresh` routed Slack through
+    x/oauth2's decoder, which can't parse the `authed_user` envelope — `Refresh` now has a hand-rolled
+    Slack branch (`refreshSlack`) mirroring exchange, with carry-forward of refresh/expiry/scope.
+  - **Validation:** `tools/e2e/oauth.sh` (12/12: start-without-bearer→401, authorize→callback→
+    `?oauth=connected`, single-use replay→error, post-OAuth gmail sync emitted 26 docs, searchable) +
+    88 web tests + the full Go sweep (build/vet/lint clean; coverage gate PASSED, `platform/oauth` 92.7%).
+- Next: **none required.** Operators supply real `client_id`/`client_secret` per `docs/oauth.md` to go
+  live; live webhook/push remains the M2 follow-up. Optional: a web admin console for connector OAuth status.
+- Known issues / accepted (dev-only, 127.0.0.1-bound, loudly marked): the fake provider auto-consents
+  and `ASKER_SAFEHTTP_ALLOW_PRIVATE=1` is set on gateway+hub in compose only (NOT the Helm values; the
+  metadata IP stays blocked regardless). Real provider token endpoints are public, so prod keeps the
+  full `safehttp` SSRF guard.
+
 ## 2026-06-13 — M6 hardening (complete) — V1 BUILD COMPLETE (M0–M6)
 
 - Done: **M6 complete — the security review was executed, the hardening landed, and the ship-review

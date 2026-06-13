@@ -97,6 +97,11 @@ func (t Token) OAuth2Token() *oauth2.Token {
 // connector context. It carries the refresh token forward from prev when the
 // provider did not return a new one (non-rotating refresh), so a refresh never
 // drops a still-valid refresh token. scope falls back to prev.Scope likewise.
+// Expiry also falls back to prev: a refresh response that omits expires_in
+// leaves oauth2.Token.Expiry zero, which NeedsRefresh would read as
+// "non-expiring" and never refresh again — so an access token that actually
+// expires would silently stop self-healing. Carrying prev.Expiry keeps the hub
+// refreshing on the original cadence (worst case: one extra refresh).
 func tokenFrom(provider Provider, connectorID string, tok *oauth2.Token, prev Token) Token {
 	out := Token{
 		AskerOAuth:   tokenMarker,
@@ -109,6 +114,9 @@ func tokenFrom(provider Provider, connectorID string, tok *oauth2.Token, prev To
 	}
 	if out.RefreshToken == "" {
 		out.RefreshToken = prev.RefreshToken
+	}
+	if out.Expiry.IsZero() {
+		out.Expiry = prev.Expiry
 	}
 	if scope, _ := tok.Extra("scope").(string); scope != "" {
 		out.Scope = scope

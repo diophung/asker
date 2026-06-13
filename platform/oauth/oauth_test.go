@@ -564,6 +564,119 @@ func TestRefreshNoRefreshTokenIsNoop(t *testing.T) {
 	}
 }
 
+// TestRefreshSlackRotates covers a rotation-enabled Slack user token: the
+// refresh grant returns Slack's non-standard authed_user envelope (which
+// x/oauth2 cannot parse), so Refresh must use the hand-rolled Slack branch.
+func TestRefreshSlackRotates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.Form.Get("grant_type") != "refresh_token" {
+			t.Errorf("slack refresh grant_type = %q", r.Form.Get("grant_type"))
+		}
+		if r.Form.Get("refresh_token") != "old-refresh" {
+			t.Errorf("slack refresh_token = %q", r.Form.Get("refresh_token"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"authed_user": map[string]any{
+				"access_token":  "xoxp-rotated",
+				"refresh_token": "rotated-refresh",
+				"token_type":    "Bearer",
+				"expires_in":    3600,
+				"scope":         "channels:history",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	svc := New(testConfig(srv.URL, srv.URL), srv.Client())
+	old := Token{
+		Provider:     Slack,
+		ConnectorID:  "slack",
+		AccessToken:  "stale",
+		RefreshToken: "old-refresh",
+		Expiry:       time.Now().Add(-time.Hour), // forces a refresh
+	}
+	got, err := svc.Refresh(context.Background(), Slack, old)
+	if err != nil {
+		t.Fatalf("slack Refresh: %v", err)
+	}
+	if got.AccessToken != "xoxp-rotated" {
+		t.Errorf("slack access token not refreshed: %+v", got)
+	}
+	if got.RefreshToken != "rotated-refresh" {
+		t.Errorf("slack rotated refresh token not applied: %q", got.RefreshToken)
+	}
+	if got.ConnectorID != "slack" {
+		t.Errorf("connector id lost on slack refresh: %q", got.ConnectorID)
+	}
+	if got.Expiry.IsZero() {
+		t.Error("slack refresh dropped expiry")
+	}
+}
+
+// TestRefreshSlackCarriesForward covers a Slack refresh reply that omits the
+// rotated refresh token / expiry / scope: the prior values must be preserved so
+// the connector keeps refreshing instead of breaking permanently.
+func TestRefreshSlackCarriesForward(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"authed_user": map[string]any{
+				"access_token": "xoxp-rotated",
+				// no refresh_token, expires_in, or scope in this reply
+			},
+		})
+	}))
+	defer srv.Close()
+
+	svc := New(testConfig(srv.URL, srv.URL), srv.Client())
+	expiry := time.Now().Add(-time.Hour)
+	old := Token{
+		Provider:     Slack,
+		ConnectorID:  "slack",
+		AccessToken:  "stale",
+		RefreshToken: "keep-refresh",
+		Expiry:       expiry,
+		Scope:        "channels:history",
+	}
+	got, err := svc.Refresh(context.Background(), Slack, old)
+	if err != nil {
+		t.Fatalf("slack Refresh: %v", err)
+	}
+	if got.AccessToken != "xoxp-rotated" {
+		t.Errorf("slack access token not refreshed: %+v", got)
+	}
+	if got.RefreshToken != "keep-refresh" {
+		t.Errorf("slack refresh token not carried forward: %q", got.RefreshToken)
+	}
+	if !got.Expiry.Equal(expiry) {
+		t.Errorf("slack expiry not carried forward: got %v want %v", got.Expiry, expiry)
+	}
+	if got.Scope != "channels:history" {
+		t.Errorf("slack scope not carried forward: %q", got.Scope)
+	}
+}
+
+// TestRefreshSlackError surfaces Slack's ok:false envelope (HTTP 200) as an
+// error so a refresh failure fails the run instead of yielding an empty bearer.
+func TestRefreshSlackError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid_refresh_token"})
+	}))
+	defer srv.Close()
+
+	svc := New(testConfig(srv.URL, srv.URL), srv.Client())
+	old := Token{Provider: Slack, AccessToken: "stale", RefreshToken: "bad", Expiry: time.Now().Add(-time.Hour)}
+	_, err := svc.Refresh(context.Background(), Slack, old)
+	if err == nil || !strings.Contains(err.Error(), "invalid_refresh_token") {
+		t.Fatalf("expected slack refresh error with code, got %v", err)
+	}
+}
+
 func TestRefreshUnconfigured(t *testing.T) {
 	svc := New(Config{}, nil)
 	if _, err := svc.Refresh(context.Background(), Google, Token{RefreshToken: "r"}); err == nil {

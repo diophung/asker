@@ -3,7 +3,6 @@ package oauth
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -146,9 +145,18 @@ func (s *Service) Refresh(ctx context.Context, p Provider, t Token) (Token, erro
 	}
 
 	if t.RefreshToken == "" {
-		// Nothing to refresh (e.g. a Slack non-refreshable user token); the
-		// caller keeps using the existing access token.
+		// Nothing to refresh (e.g. a Slack non-rotating user token); the caller
+		// keeps using the existing access token.
 		return t, nil
+	}
+
+	if p == Slack {
+		// Slack's refresh grant returns the same non-standard authed_user
+		// envelope (ok:false on HTTP 200, token nested under authed_user) that
+		// x/oauth2's decoder cannot parse — so a rotation-enabled Slack token
+		// (refresh token + expiry) MUST be refreshed by hand, or it breaks
+		// permanently once the access token expires.
+		return s.refreshSlack(ctx, t)
 	}
 
 	conf, _, err := s.oauthConfig(p, nil, "")
@@ -162,6 +170,37 @@ func (s *Service) Refresh(ctx context.Context, p Provider, t Token) (Token, erro
 		return Token{}, fmt.Errorf("oauth: %s refresh: %w", p, err)
 	}
 	return tokenFrom(p, t.ConnectorID, tok, t), nil
+}
+
+// refreshSlack refreshes a rotation-enabled Slack user token by hand (see the
+// Slack note in Refresh), carrying the refresh token / expiry / scope / connector
+// id forward when the response omits them — the same fallbacks tokenFrom applies.
+func (s *Service) refreshSlack(ctx context.Context, t Token) (Token, error) {
+	conf, _, err := s.oauthConfig(Slack, nil, "")
+	if err != nil {
+		return Token{}, err
+	}
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {conf.ClientID},
+		"client_secret": {conf.ClientSecret},
+		"refresh_token": {t.RefreshToken},
+	}
+	tok, err := s.slackTokenRequest(ctx, conf.Endpoint.TokenURL, form, "refresh")
+	if err != nil {
+		return Token{}, err
+	}
+	tok.ConnectorID = t.ConnectorID
+	if tok.RefreshToken == "" {
+		tok.RefreshToken = t.RefreshToken
+	}
+	if tok.Expiry.IsZero() {
+		tok.Expiry = t.Expiry
+	}
+	if tok.Scope == "" {
+		tok.Scope = t.Scope
+	}
+	return tok, nil
 }
 
 // slackTokenResponse models the non-standard Slack oauth.v2.access reply for a
@@ -188,7 +227,6 @@ func (s *Service) exchangeSlack(ctx context.Context, code, redirectURI, pkceVeri
 	if err != nil {
 		return Token{}, err
 	}
-
 	form := url.Values{
 		"client_id":     {conf.ClientID},
 		"client_secret": {conf.ClientSecret},
@@ -196,39 +234,46 @@ func (s *Service) exchangeSlack(ctx context.Context, code, redirectURI, pkceVeri
 		"redirect_uri":  {redirectURI},
 		"code_verifier": {pkceVerifier},
 	}
+	return s.slackTokenRequest(ctx, conf.Endpoint.TokenURL, form, "exchange")
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, conf.Endpoint.TokenURL,
-		strings.NewReader(form.Encode()))
+// slackTokenRequest POSTs form to Slack's token endpoint and decodes the
+// non-standard {ok, authed_user:{access_token,...}} envelope into a Token. It is
+// shared by the authorization-code exchange and the refresh grant; op ("exchange"
+// or "refresh") only labels error messages. It never carries prior token state
+// forward — the refresh caller applies those fallbacks.
+func (s *Service) slackTokenRequest(ctx context.Context, tokenURL string, form url.Values, op string) (Token, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return Token{}, fmt.Errorf("oauth: slack exchange request: %w", err)
+		return Token{}, fmt.Errorf("oauth: slack %s request: %w", op, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return Token{}, fmt.Errorf("oauth: slack exchange: %w", err)
+		return Token{}, fmt.Errorf("oauth: slack %s: %w", op, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return Token{}, fmt.Errorf("oauth: slack exchange: read body: %w", err)
+		return Token{}, fmt.Errorf("oauth: slack %s: read body: %w", op, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Token{}, fmt.Errorf("oauth: slack exchange: HTTP %d", resp.StatusCode)
+		return Token{}, fmt.Errorf("oauth: slack %s: HTTP %d", op, resp.StatusCode)
 	}
 
 	var sr slackTokenResponse
 	if err := json.Unmarshal(body, &sr); err != nil {
-		return Token{}, fmt.Errorf("oauth: slack exchange: decode: %w", err)
+		return Token{}, fmt.Errorf("oauth: slack %s: decode: %w", op, err)
 	}
 	if !sr.OK {
 		// sr.Error is a Slack error code, not a secret.
-		return Token{}, fmt.Errorf("oauth: slack exchange failed: %s", slackErr(sr.Error))
+		return Token{}, fmt.Errorf("oauth: slack %s failed: %s", op, slackErr(sr.Error))
 	}
 	if sr.AuthedUser.AccessToken == "" {
-		return Token{}, errors.New("oauth: slack exchange: no user access token in response")
+		return Token{}, fmt.Errorf("oauth: slack %s: no user access token in response", op)
 	}
 
 	tokenType := firstNonEmpty(sr.AuthedUser.TokenType, sr.TokenType, "Bearer")
