@@ -10,20 +10,25 @@
 # PDB), query (2 replicas + PDB), Vespa (1 group/node, streaming), TEI, Redis,
 # Keycloak. It:
 #
-#   1. Waits for the gateway + query Deployments and the Vespa StatefulSet to be
-#      rollout-Ready.
+#   1. Waits for the Vespa StatefulSet to be rollout-Ready (its readiness gates on
+#      the config port :19071, which comes up WITHOUT the application package).
 #   2. Deploys the Vespa application package to the in-cluster config server by
 #      running the committed vespa/deploy.sh flow against a kubectl port-forward
 #      (EMBEDDING_DIM=384 to match the CI TEI model + the chart's Vespa schema).
-#   3. Feeds ONE tenant-scoped doc carrying a rare token via the Vespa
+#      This activates the query port :8080.
+#   3. ONLY NOW waits for the query + gateway Deployments to be rollout-Ready —
+#      their /readyz live-pings Vespa :8080, so they cannot be Ready until step 2.
+#      (This ordering is why the CI `helm install` does NOT use --wait.)
+#   4. Feeds ONE tenant-scoped doc carrying a rare token via the Vespa
 #      document/v1 API (exactly like tools/e2e/smoke.sh), scoped to a streaming
 #      group g=<tenant>.
-#   4. Mints an OIDC token from Keycloak (dev password grant, user alice).
-#   5. BASELINE: queries the rare token through the gateway /v1/search -> 1 hit.
-#   6. CHAOS: in a background loop, fires CHAOS_REQUESTS gateway /v1/search calls
+#   5. Mints an OIDC token from Keycloak (dev password grant, user alice).
+#   6. BASELINE: queries the rare token through the gateway /v1/search -> 1 hit.
+#   7. CHAOS: in a background loop, fires CHAOS_REQUESTS gateway /v1/search calls
 #      continuously WITH a bounded client retry (CLIENT_RETRIES on 5xx / connect
 #      error) while `kubectl delete pod` kills one query pod, then one gateway
-#      pod. Asserts EVERY query ULTIMATELY succeeds within its retries (no failed
+#      pod (re-establishing the gateway port-forward after, since it pins to one
+#      pod). Asserts EVERY query ULTIMATELY succeeds within its retries (no failed
 #      queries beyond retry) AND the killed pods are rescheduled Ready.
 #
 # Prints a numbered PASS/FAIL summary; exits non-zero on ANY failed-beyond-retry
@@ -146,6 +151,25 @@ port_forward() {
   PF_PIDS+=("$!")
 }
 
+# (Re)establish the GATEWAY port-forward. kubectl port-forward to a Service pins
+# to ONE backing pod and ends when that pod terminates; the chaos arm kills a
+# gateway pod, which can be exactly the pinned one. If we did not re-establish it,
+# the TEST's own single ingress — not the cluster (2 replicas + PDB keep serving)
+# — would be the single point of failure, spuriously FAILing a healthy stack. We
+# `wait` for the old forward to fully exit (freeing the local port) before
+# rebinding; the in-flight queries' bounded retries cover the brief blip.
+GATEWAY_PF_PID=""
+start_gateway_pf() {
+  if [ -n "$GATEWAY_PF_PID" ]; then
+    kill "$GATEWAY_PF_PID" >/dev/null 2>&1 || true
+    wait "$GATEWAY_PF_PID" 2>/dev/null || true
+  fi
+  "$KUBECTL" -n "$NAMESPACE" port-forward "svc/${GATEWAY_SVC}" \
+    "${GATEWAY_LPORT}:8080" >/dev/null 2>&1 &
+  GATEWAY_PF_PID=$!
+  PF_PIDS+=("$GATEWAY_PF_PID")
+}
+
 # wait_local_http URL ATTEMPTS: poll a local URL until it answers (any code).
 wait_local_http() {
   local url="$1" attempts="${2:-30}" i
@@ -180,25 +204,16 @@ echo "   gateway=${GATEWAY_DEPLOY} query=${QUERY_DEPLOY} vespa=${VESPA_STS}"
 echo "   chaos_requests=${CHAOS_REQUESTS} client_retries=${CLIENT_RETRIES} embedding_dim=${EMBEDDING_DIM}"
 echo
 
-# --- 1. Wait for rollouts -----------------------------------------------------
+# --- 1. Wait for Vespa StatefulSet Ready --------------------------------------
+# ORDERING (critical): the query readinessProbe (/readyz) live-pings Vespa
+# :8080, which only serves AFTER the application package is activated. So we must
+# activate the package BEFORE gating on query/gateway readiness — otherwise query
+# can never become Ready and a `helm install --wait` (or a query rollout wait)
+# would deadlock. Vespa's OWN readiness gates on the config port :19071, which
+# comes up WITHOUT the package, so we can wait for the StatefulSet here, then
+# deploy the package (step 2), then wait for query+gateway (step 3).
 
-begin "rollout: gateway Deployment Ready"
-if "$KUBECTL" -n "$NAMESPACE" rollout status "deployment/${GATEWAY_DEPLOY}" \
-  --timeout "${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1; then
-  pass
-else
-  fail "gateway rollout not ready within ${ROLLOUT_TIMEOUT}s"
-fi
-
-begin "rollout: query Deployment Ready"
-if "$KUBECTL" -n "$NAMESPACE" rollout status "deployment/${QUERY_DEPLOY}" \
-  --timeout "${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1; then
-  pass
-else
-  fail "query rollout not ready within ${ROLLOUT_TIMEOUT}s"
-fi
-
-begin "rollout: Vespa StatefulSet Ready"
+begin "rollout: Vespa StatefulSet Ready (config :19071, pre-package)"
 if "$KUBECTL" -n "$NAMESPACE" rollout status "statefulset/${VESPA_STS}" \
   --timeout "${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1; then
   pass
@@ -231,7 +246,25 @@ else
   fail "vespa/deploy.sh failed against :${VESPA_CFG_LPORT}"
 fi
 
-# --- 3. Feed the tenant-scoped probe doc --------------------------------------
+# --- 3. NOW wait for query + gateway (their /readyz needs the live Vespa :8080) -
+
+begin "rollout: query Deployment Ready (post-package)"
+if "$KUBECTL" -n "$NAMESPACE" rollout status "deployment/${QUERY_DEPLOY}" \
+  --timeout "${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1; then
+  pass
+else
+  fail "query rollout not ready within ${ROLLOUT_TIMEOUT}s (Vespa :8080 / app package?)"
+fi
+
+begin "rollout: gateway Deployment Ready (post-package)"
+if "$KUBECTL" -n "$NAMESPACE" rollout status "deployment/${GATEWAY_DEPLOY}" \
+  --timeout "${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1; then
+  pass
+else
+  fail "gateway rollout not ready within ${ROLLOUT_TIMEOUT}s"
+fi
+
+# --- 4. Feed the tenant-scoped probe doc --------------------------------------
 
 FED=0
 CHAOS_DOC_URL="http://localhost:${VESPA_QUERY_LPORT}/document/v1/asker/doc/group/${CHAOS_TENANT}/${CHAOS_DOC_ID}"
@@ -254,7 +287,7 @@ else
   fail "${out:0:300}"
 fi
 
-# --- 4. Mint an OIDC token via Keycloak ---------------------------------------
+# --- 5. Mint an OIDC token via Keycloak ---------------------------------------
 
 begin "port-forward: Keycloak(${KEYCLOAK_LPORT})"
 port_forward "svc/${KEYCLOAK_SVC}" "$KEYCLOAK_LPORT" 8080
@@ -283,10 +316,10 @@ else
   TOKEN=""
 fi
 
-# --- 5. Port-forward the gateway + baseline query -----------------------------
+# --- 6. Port-forward the gateway + baseline query -----------------------------
 
 begin "port-forward: gateway(${GATEWAY_LPORT})"
-port_forward "svc/${GATEWAY_SVC}" "$GATEWAY_LPORT" 8080
+start_gateway_pf
 if wait_local_http "http://localhost:${GATEWAY_LPORT}/healthz" 30; then
   pass
 else
@@ -352,7 +385,7 @@ else
   fi
 fi
 
-# --- 6. CHAOS: kill pods while a query loop runs ------------------------------
+# --- 7. CHAOS: kill pods while a query loop runs ------------------------------
 
 # The chaos loop runs in a background subshell, writing one result line per
 # query ("OK <code>" / "FAIL <code>") to a results file. Meanwhile the main
@@ -405,6 +438,11 @@ if [ "$FED" = "1" ] && [ -n "$TOKEN" ]; then
   # Then kill one gateway pod.
   KILLED_GATEWAY="$(kill_one_pod "$GATEWAY_DEPLOY")"
   echo "   killed gateway pod: ${KILLED_GATEWAY:-<none found>}"
+  # The local port-forward may have been pinned to the just-killed pod; rebind it
+  # to a surviving replica so the TEST's own ingress is not the SPOF (see
+  # start_gateway_pf). In-flight queries retry across this blip.
+  start_gateway_pf
+  wait_local_http "http://localhost:${GATEWAY_LPORT}/healthz" 30 || true
 
   # Wait for the query loop to finish.
   wait "$LOOP_PID" 2>/dev/null || true

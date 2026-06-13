@@ -17,3 +17,6 @@ vespa/app.zip
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Throwaway multi-agent workflow scripts (scratch; not part of the build)
+.claude/wf-*.js

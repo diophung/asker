@@ -41,8 +41,12 @@ spec:
       {{- include "asker.vespa.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      # Full chart labels (incl. app.kubernetes.io/part-of: asker) so the
+      # dependency NetworkPolicies (deps.yaml, component: search) select these
+      # pods. spec.selector stays on the version-free selectorLabels (immutable);
+      # pod labels are a superset, which is allowed.
       labels:
-        {{- include "asker.vespa.selectorLabels" . | nindent 8 }}
+        {{- include "asker.vespa.labels" . | nindent 8 }}
     spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:

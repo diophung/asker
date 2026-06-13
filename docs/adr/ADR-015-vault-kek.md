@@ -74,11 +74,16 @@ DEK wrapped by one unwraps in the other.
 `Deployment` (`vault server -dev`: in-memory, auto-unsealed, fixed root token), a ClusterIP
 `Service` named `vault` (port 8200, so services dial `http://vault:8200` by DNS — same bare-name
 convention as the app Services), a dev token `Secret`, a `ServiceAccount`, and a post-install Helm
-hook `Job` that enables the `transit` engine and creates `asker-kek` as a derived key. This lets
-the M4 kind/k3d CI stack exercise the full Vault KEK path self-contained. The dev Vault is loudly
-marked **NON-PRODUCTION** (annotations + template banners): no persistence, no unseal/auto-unseal,
-no HA, static root token. `vault.deploy=false` (the default) renders nothing — point `vault.addr`
-at a managed/external Vault instead.
+hook `Job` that enables the `transit` engine and creates `asker-kek` as a **derived** key
+(`derived=true` — required for the per-tenant Transit `context` binding). This stands up the
+transit engine + key so the Vault KEK path **can be wired and tested manually** (set `VAULT_ADDR`
+on control-plane/connector-hub per §3). Note: the chart does **not** inject `VAULT_ADDR` into the
+app workloads, and the `values-ci.yaml` chaos profile sets `vault.deploy=false` with control-plane
+disabled, so the end-to-end wrap/unwrap path is **not** exercised by the CI chaos job — it is
+covered by `platform/crypto/vault_test.go` (unit tests against a fake Transit server). The dev Vault
+is loudly marked **NON-PRODUCTION** (annotations + template banners): no persistence, no
+unseal/auto-unseal, no HA, static root token. `vault.deploy=false` (the default) renders nothing —
+point `vault.addr` at a managed/external Vault instead.
 
 ## Consequences
 
@@ -89,8 +94,9 @@ at a managed/external Vault instead.
   this dependency is as available as Postgres. This is the deliberate trade for removing the KEK
   from service memory.
 - **Dev keeps `FileKEK`.** The compose inner loop and any deployment without `VAULT_ADDR` keep the
-  zero-dependency file shim, so local development is unchanged. Only prod (and the
-  `vault.deploy=true` CI stack) takes the Vault path.
+  zero-dependency file shim, so local development is unchanged. The Vault path is taken only by a
+  deployment that has `VAULT_ADDR` wired into the control-plane/connector-hub pods (an integrator
+  step — the chart does not inject it); the default and `values-ci.yaml` profiles stay on `FileKEK`.
 - **Interface and stored format unchanged.** `KEKProvider`, `DEKStore`, `TenantCipher`, and the
   data-ciphertext format are untouched; only the *wrapped-DEK* bytes differ (a `vault:v1:` token vs.
   the `0x01||nonce||GCM` file-KEK blob). Existing tenants' wrapped DEKs are tied to whichever

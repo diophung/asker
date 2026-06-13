@@ -65,21 +65,33 @@ The umbrella chart ships, gated behind `networkPolicy.enabled` (**default `true`
   | postgres           | control-plane                                      | 5432           |
   | minio              | connector-hub                                      | 9000           |
   | vault              | connector-hub, control-plane                       | 8200           |
+  | keycloak           | gateway (server-side OIDC JWKS fetch)              | 8080           |
   | kafka (Strimzi)    | ingest, enrich, index-writer, connector-hub        | 9092           |
 
   `ingest`, `enrich`, and `index-writer` accept **no** in-cluster app traffic (they are Kafka
   consumers that initiate connections and serve only a node-local health port that the kubelet
   probes — kubelet probe traffic is node-local and not subject to NetworkPolicy), so they get no
-  ingress allow policy and stay default-denied.
+  ingress allow policy and stay default-denied. **`keycloak`** accepts the gateway's JWKS dial: the
+  gateway verifies bearer tokens with a `RemoteKeySet` that lazily fetches the JWKS over the network
+  on first verify and on key rotation / pod restart, so without this allow a default-deny cluster
+  401s every `/v1/*` request after a gateway restart.
 
 - **Peer selectors.** App peers are matched by the wave-0 `app.kubernetes.io/component` label via
   `asker.serviceSelectorLabels`, so a policy's selectors match exactly the pods the wave-0
-  Deployment/Service select. Dependency pods (postgres/redis/minio/vespa/tei/kafka/vault) are
-  matched by a **configurable** selector (`networkPolicy.deps.<dep>.podSelector`, default
-  `part-of: asker` + `component: <dep>`) because the sibling stateful-layer builder owns those
-  StatefulSets' exact labels; this keeps the two waves decoupled. The public **ingress controller**
-  peer is environment-specific (`networkPolicy.ingressController.{namespaceSelector,podSelector}`,
-  default: the `ingress-nginx` namespace).
+  Deployment/Service select. Dependency pods are matched by a **configurable** selector
+  (`networkPolicy.deps.<dep>.podSelector`) resolved through the shared `asker.netpol.depSelectorBody`
+  helper so the ingress target and the egress peer can never diverge. Its per-dependency default
+  follows the labels each builder actually stamps on its **pod template**:
+  - stateful builder (postgres/redis/minio/tei/keycloak/vault): `part-of: asker` + `component: <dep>`;
+  - **search builder (vespa): `part-of: asker` + `component: search`** — the Vespa StatefulSet's
+    component label is `search`, not `vespa`, so a `component: vespa` selector would match zero pods;
+  - **Strimzi (kafka): `strimzi.io/cluster: <kafka.strimzi.clusterName>`** — the broker pods are
+    created by the Strimzi cluster operator (not this chart) and carry `strimzi.io/*` labels, not the
+    chart's `part-of`/`component` labels.
+
+  The public **ingress controller** peer is environment-specific
+  (`networkPolicy.ingressController.{namespaceSelector,podSelector}`, default: the `ingress-nginx`
+  namespace).
 
 - **Egress is NOT default-denied by default.** A symmetric egress deny would also block DNS and
   every dependency dial, and the dependency pods' labels are owned by another wave. The chart ships

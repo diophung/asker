@@ -114,12 +114,19 @@ jobs:
           kind load docker-image --name asker "asker/query:${TAG}"
           kind load docker-image --name asker "asker/control-plane:${TAG}"
 
+      # NO --wait: the query/gateway readiness probes (/readyz) live-ping Vespa
+      # :8080, which only serves AFTER the application package is activated — and
+      # that activation happens INSIDE the chaos script (step 2). `--wait` would
+      # block on query readiness that cannot be satisfied yet and time out. The
+      # chaos script performs the correct ordered rollout waits itself (Vespa
+      # StatefulSet -> activate package -> query+gateway), and exits non-zero if
+      # any rollout never becomes Ready, so the gating is preserved.
       - name: helm install (slim CI profile)
         run: |
           helm install "${RELEASE}" "${CHART_DIR}" \
             --namespace "${NAMESPACE}" --create-namespace \
             -f "${CHART_DIR}/values-ci.yaml" \
-            --wait --timeout 15m
+            --timeout 15m
 
       - name: Run kind chaos test
         run: bash tools/e2e/k8s-chaos.sh

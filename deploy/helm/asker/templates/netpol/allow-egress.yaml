@@ -56,7 +56,8 @@ spec:
   egress:
     {{- include "asker.netpol.dnsEgress" $root | nindent 4 }}
 ---
-# --- gateway egress: query (grpc), control-plane (grpc), connector-hub, redis ---
+# --- gateway egress: query (grpc), control-plane (grpc), connector-hub, redis,
+#     keycloak (OIDC JWKS) ------------------------------------------------------
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -90,6 +91,14 @@ spec:
       ports:
         - protocol: TCP
           port: 6379
+    # Server-side OIDC JWKS fetch (token verification). Mirrors the keycloak-allow
+    # ingress in deps.yaml — without it, restrictEgress would block JWKS and every
+    # /v1/* request 401s on a JWKS cache miss.
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "keycloak") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
 ---
 # --- query egress: vespa, tei, clip, redis -------------------------------------
 apiVersion: networking.k8s.io/v1

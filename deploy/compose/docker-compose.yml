@@ -211,7 +211,10 @@ services:
       CLIP_PRETRAINED: ${CLIP_PRETRAINED:-openai}
       CLIP_PORT: ":9800"
     volumes:
-      - clip-cache:/root/.cache # open_clip model weights cache
+      # Mount at the image's nonroot HOME (HOME=/home/nonroot, HF_HOME under it):
+      # open_clip writes weights there, not /root/.cache. Without this the cache
+      # never persists and weights re-download on every container restart.
+      - clip-cache:/home/nonroot/.cache # open_clip model weights cache
     healthcheck:
       test:
         - CMD

@@ -157,11 +157,12 @@ spec:
             # MINIO_ENDPOINT, OTEL, ...). Same ConfigMap the edge wave envFroms.
             - configMapRef:
                 name: {{ include "asker.configMapName" $root }}
-            {{- if $cfg.useSecret }}
-            # Credentials (MINIO_ACCESS_KEY/SECRET_KEY, DATABASE_URL, ...). Only
-            # services that need creds pull the Secret (connector-hub: MinIO;
-            # control-plane: DATABASE_URL). Others omit it to keep the blast
-            # radius minimal (ADR-009).
+            {{- if and $cfg.useSecret (not $cfg.secretKeys) }}
+            # Whole-Secret fallback (only when secretKeys is NOT set). Prefer the
+            # scoped secretKeyRef path below: it pulls ONLY the credential keys a
+            # service actually reads, keeping the blast radius minimal (ADR-014 §7)
+            # — e.g. connector-hub gets MINIO_* only, not the Postgres/Keycloak
+            # admin creds it never uses.
             - secretRef:
                 name: {{ include "asker.secretName" $root }}
             {{- end }}
@@ -268,6 +269,15 @@ items (no "env:" key) so the caller controls indentation.
 - name: KEK_FILE
   value: {{ printf "%s/%s" ($cfg.kek.mountPath | default "/keys") ($cfg.kek.fileKey | default "kek.bin") | quote }}
 {{- end }}
+{{- /* Scoped credentials: ONLY the Secret keys this service reads (ADR-014 §7),
+       instead of envFrom-ing the whole Secret. */ -}}
+{{- range $cfg.secretKeys }}
+- name: {{ . }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "asker.secretName" $root }}
+      key: {{ . }}
+{{- end }}
 {{- with $cfg.env }}
 {{- toYaml . }}
 {{- end }}
@@ -287,7 +297,11 @@ control-plane) at /keys plus any free-form services.<svc>.volumeMounts / volumes
 {{- if and $cfg.kek $cfg.kek.enabled }}
 - name: kek
   mountPath: {{ $cfg.kek.mountPath | default "/keys" }}
-  readOnly: true
+  # Read-only only when the KEK comes from a Secret (kubelet Secret volumes are
+  # read-only anyway). When self-created in a writable emptyDir (no secretName),
+  # the dir MUST be writable so crypto.NewFileKEK can create the key under a
+  # read-only root FS and connector-hub's file DEK store can persist alongside it.
+  readOnly: {{ if $cfg.kek.secretName }}true{{ else }}false{{ end }}
 {{- end }}
 {{- with $cfg.volumeMounts }}
 {{- toYaml . }}
@@ -300,14 +314,28 @@ control-plane) at /keys plus any free-form services.<svc>.volumeMounts / volumes
 {{- $cfg := index $root.Values.services $svc -}}
 {{- if and $cfg.kek $cfg.kek.enabled }}
 - name: kek
+  {{- if $cfg.kek.secretName }}
+  # Operator-provided KEK Secret, mounted READ-ONLY. Use this only for a service
+  # that does NOT write into the KEK dir: control-plane uses a Postgres DEK store,
+  # so a read-only KEK file is fine. connector-hub persists wrapped DEKs alongside
+  # the KEK (dekDir = dir(KEK_FILE)) and therefore needs a WRITABLE kek dir — leave
+  # secretName empty (emptyDir/PVC) or use the Vault KEK provider (ADR-015).
   secret:
-    secretName: {{ $cfg.kek.secretName | default (printf "%s-kek" (include "asker.fullname" $root)) }}
-    # optional so render/validate + first boot succeed before the KEK Secret is
-    # provisioned (config/secret wave in dev, Vault CSI in wave 1; ADR-013).
+    secretName: {{ $cfg.kek.secretName }}
     optional: true
     items:
       - key: {{ $cfg.kek.fileKey | default "kek.bin" }}
         path: {{ $cfg.kek.fileKey | default "kek.bin" }}
+  {{- else }}
+  # No KEK Secret configured (dev default): a WRITABLE emptyDir so
+  # crypto.NewFileKEK can self-create the KEK on first boot UNDER A READ-ONLY ROOT
+  # FILESYSTEM, and connector-hub's file DEK store can persist wrapped DEKs in the
+  # same dir. Ephemeral — the KEK + DEKs reset on pod restart; for a shared or
+  # durable KEK set kek.secretName (read-only) or override volumes with a PVC, or
+  # wire the Vault KEK provider (ADR-015). A kubelet Secret mount here would be
+  # read-only and crash both NewFileKEK self-create and the DEK store.
+  emptyDir: {}
+  {{- end }}
 {{- end }}
 {{- with $cfg.volumes }}
 {{- toYaml . }}

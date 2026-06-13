@@ -17,6 +17,68 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — M4 production deployment (complete; kind chaos runs in CI)
+
+- Done: **M4 complete — cloud-agnostic Helm umbrella chart `deploy/helm/asker` deploys the full
+  stack and the kind chaos test (the exit criterion) is wired in CI.** Built in 3 waves
+  (stateless workloads → stateful/Strimzi/Vespa/Vault + default-deny NetworkPolicies + TLS
+  scaffolding → CI kind+chaos + runbooks), then an adversarial review (5 dimensions, 23 agents,
+  every finding skeptic-verified): **13 confirmed / 5 refuted**, all 13 fixed.
+  - **Chart:** 9 stateless services (Deployment/Service/HPA/PDB/Ingress from one `_workload.tpl`),
+    self-hosted stateful deps (postgres/redis/minio/keycloak/tei, gated `<dep>.deploy`), Strimzi
+    Kafka CRs (`kafka.strimzi.enabled`), multi-group streaming Vespa StatefulSet (`vespa.deploy`),
+    dev Vault + `crypto.NewVaultKEK` (`vault.deploy`), default-deny + per-target allow
+    NetworkPolicies, cert-manager TLS scaffolding. `values.yaml` is the authoritative interface;
+    `values-dev.yaml` (single node) and `values-ci.yaml` (slim query-path-only kind profile).
+    Validates: `helm lint` clean; kubeconform **default 69 / dev 52 / ci 24** + features-on 87
+    valid (6 CRDs skipped), 0 errors.
+  - **Exit criterion:** `.github/workflows/k8s.yml` stands up a kind cluster, builds+loads the app
+    images, `helm install` (slim CI profile), and runs `tools/e2e/k8s-chaos.sh`, which kills one
+    query pod and one gateway pod under a continuous retrying `/v1/search` loop and asserts no query
+    fails beyond retry + pods reschedule Ready. Runs in CI only (the 8GB dev VM can't host kind).
+  - **Review fixes (all 13):** (blockers) the CI job was structurally **unpassable** — query
+    `/readyz` live-pings Vespa `:8080` which only serves after the app package activates, but the
+    package was activated *after* `helm install --wait` and *after* the query-rollout wait →
+    reordered the chaos script (Vespa StatefulSet Ready on `:19071` → activate package → *then*
+    gate query/gateway) and dropped `--wait`; **Vespa NetworkPolicy** selected `component: vespa`
+    but the pods are `component: search` (zero-pod match → query/index-writer→Vespa denied under
+    enforced netpol) → centralized the per-dep selector in `asker.netpol.depSelectorBody` (search
+    for Vespa, `strimzi.io/cluster` for Kafka, part-of+component for the rest) and gave Vespa pods
+    the full chart labels; **missing `gateway→keycloak` allow** (JWKS fetch denied → token verify
+    fails on a cache miss) → added the keycloak ingress allow + gateway egress + ADR-016 matrix
+    row. (major) **KEK at `/keys`** was a read-only Secret mount on a read-only rootfs so
+    `NewFileKEK` self-create and connector-hub's file DEK store both fail → KEK volume is now a
+    writable `emptyDir` when no Secret is configured (self-create under RO rootfs; durable/shared
+    KEK via secretName/PVC/Vault); **Kafka netpol** label mismatch (Strimzi owns broker labels);
+    **k8s-docs** falsely claimed `vault.addr` flows to the workload env → corrected (integrator
+    must inject `VAULT_ADDR`). (minor) gateway-kill could sever the test's own pinned
+    `port-forward` → re-establish after the kill; clip cache mounted at `/root/.cache` but the image
+    is nonroot `$HOME=/home/nonroot` (+ added fsGroup) → fixed in chart **and** compose; connector-
+    hub `envFrom`'d the whole Secret → scoped to MINIO keys via `secretKeys`/secretKeyRef
+    (control-plane → DATABASE_URL only); ADR-015 CI-coverage overstatement + backup-runbook CronJob
+    netpol gap → documented.
+- Next: **M5 — Scale & SLO verification.** Synthetic data generator (100K tenants, TB-scale), k6
+  load suites (query stepped to cluster max + extrapolation math to 50K TPS; ingest 30-min
+  freshness under load), query result cache, the degradation ladder tested, `docs/capacity.md`
+  finalized, Grafana SLO dashboards + alerts, 2-hour soak with zero data loss.
+- Known issues:
+  - **NetworkPolicy enforcement and the kind chaos test are not exercised together locally.** The
+    8GB dev VM cannot host a kind cluster + the stack, so `make e2e-k8s` runs in CI only; and kind's
+    default kindnet CNI does not enforce NetworkPolicy, so the netpol correctness (Vespa/Kafka/
+    keycloak selectors) is validated by `helm template` + kubeconform + the rendered-selector
+    assertions, not by a live policy-enforcing CNI. Real netpol validation needs Calico/Cilium
+    (ADR-016 records this); the selectors now match the actual pod labels (verified in the render).
+  - **Vault KEK is provisioned but not wired into the app workloads.** Per ADR-015 §3 (`services/**`
+    frozen), the `main.go` provider selection (VAULT_ADDR set → `NewVaultKEK`) is an integrator
+    step; the chart configures the dev Vault + Transit derived key but does not inject `VAULT_ADDR`,
+    so control-plane/connector-hub stay on the file-KEK until an operator adds it (now documented in
+    k8s-docs §4.3 and ADR-015). `platform/crypto/vault.go` is unit-tested (fake Transit), not
+    integration-tested in CI.
+  - The dev Vault, the chart-rendered dev Secret, and Keycloak `start-dev` are all NON-PRODUCTION
+    (loudly marked); prod uses Vault HA + External Secrets + Keycloak `start` + external DB.
+  - Backup CronJobs in the runbooks need a netpol identity (label or a dedicated allow) to dial
+    postgres/minio under default-deny — documented in the runbooks.
+
 ## 2026-06-13 — M3 media pipeline (complete)
 
 - Done: **M3 exit criterion met, verified live: `tools/e2e/m3-media.sh` passes all 16 checks** —

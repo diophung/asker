@@ -94,21 +94,59 @@ list item under `from:` / `to:`. Usage:
 
 {{/*
 --------------------------------------------------------------------------------
+asker.netpol.depSelectorBody — the matchLabels selector BODY (no `podSelector:`
+key) for a DEPENDENCY's pods. Centralizes the per-dep default so the dependency-
+SIDE ingress policies (deps.yaml) and the app-side egress peers
+(asker.netpol.depPeer) can NEVER diverge on the labels they target.
+
+Defaults follow the labels each builder actually stamps on its POD TEMPLATE:
+  - stateful builder (postgres/redis/minio/tei/keycloak/vault): part-of: asker +
+    component: <dep>  (asker.stateful.labels — pods carry both).
+  - search builder (vespa): part-of: asker + component: SEARCH. The Vespa
+    StatefulSet's component label is "search" (asker.vespa.labels), NOT "vespa" —
+    a `component: vespa` selector matches zero pods (the M4 review finding).
+  - Strimzi (kafka): the broker pods are created by the Strimzi cluster operator,
+    NOT this chart, so they carry strimzi.io/cluster: <clusterName> (NOT the
+    chart's part-of/component labels). We target that operator label.
+An operator override (.Values.networkPolicy.deps.<dep>.podSelector) always wins.
+Usage: {{- include "asker.netpol.depSelectorBody" (list $root "vespa") | nindent 4 }}
+--------------------------------------------------------------------------------
+*/}}
+{{- define "asker.netpol.depSelectorBody" -}}
+{{- $root := index . 0 -}}
+{{- $dep := index . 1 -}}
+{{- $np := $root.Values.networkPolicy | default dict -}}
+{{- $deps := $np.deps | default dict -}}
+{{- $depCfg := index $deps $dep | default dict -}}
+{{- if $depCfg.podSelector -}}
+{{- toYaml $depCfg.podSelector -}}
+{{- else if eq $dep "vespa" -}}
+matchLabels:
+  app.kubernetes.io/part-of: asker
+  app.kubernetes.io/component: search
+{{- else if eq $dep "kafka" -}}
+matchLabels:
+  strimzi.io/cluster: {{ include "asker.kafka.clusterName" $root }}
+{{- else -}}
+matchLabels:
+  app.kubernetes.io/part-of: asker
+  app.kubernetes.io/component: {{ $dep }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+--------------------------------------------------------------------------------
 asker.netpol.depPeer — a `- podSelector:` peer matching a DEPENDENCY's pods,
-using the configurable .Values.networkPolicy.deps.<dep> selector (default:
-part-of asker + component <dep>). Emitted as one list item under `from:` / `to:`.
+using asker.netpol.depSelectorBody (configurable per-dep, with the correct
+per-builder default). Emitted as one list item under `from:` / `to:`.
 Usage: {{- include "asker.netpol.depPeer" (list $root "postgres") | nindent 8 }}
 --------------------------------------------------------------------------------
 */}}
 {{- define "asker.netpol.depPeer" -}}
 {{- $root := index . 0 -}}
 {{- $dep := index . 1 -}}
-{{- $np := $root.Values.networkPolicy | default dict -}}
-{{- $deps := $np.deps | default dict -}}
-{{- $depCfg := index $deps $dep | default dict -}}
-{{- $sel := $depCfg.podSelector | default (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" $dep)) -}}
 - podSelector:
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root $dep) | nindent 4 }}
 {{- end -}}
 
 {{/*

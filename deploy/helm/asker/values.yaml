@@ -574,20 +574,27 @@ services:
       hubHealthAddr: ":9301"
       connectorSyncInterval: "30s"
       schedulerTick: "10s"
-    # [WORKLOADS wave] connector-hub needs MinIO creds (blob store) -> pull the
-    # shared Secret via envFrom (MINIO_ACCESS_KEY / MINIO_SECRET_KEY).
+    # [WORKLOADS wave] connector-hub reads ONLY MinIO creds (blob store) from the
+    # shared Secret. secretKeys scopes it to exactly those keys (explicit
+    # secretKeyRef), so it does NOT receive the Postgres/Keycloak admin creds it
+    # never uses (ADR-014 §7 blast-radius). MINIO_ENDPOINT is non-secret (ConfigMap).
     useSecret: true
-    # [WORKLOADS wave] Shared KEK for envelope crypto (ADR-013). Mounted read-only
-    # at /keys; the Deployment sets KEK_FILE=<mountPath>/<fileKey> automatically.
-    # Dev: a Secret "<fullname>-kek"; prod: Vault CSI (wave 1). The volume is
-    # `optional` so render/validate + first boot succeed before the Secret exists.
-    # INTEGRATOR: provision the KEK Secret (same key bytes as control-plane), or
-    # wire Vault, in wave 1 — this chart does not render the KEK Secret object.
+    secretKeys:
+      - MINIO_ACCESS_KEY
+      - MINIO_SECRET_KEY
+    # [WORKLOADS wave] Shared KEK for envelope crypto (ADR-013). KEK_FILE is set to
+    # <mountPath>/<fileKey> automatically. connector-hub persists wrapped blob DEKs
+    # in the SAME dir (dekDir = dir(KEK_FILE)/connector-hub-deks), so the KEK dir
+    # MUST be WRITABLE. With secretName empty (default) the chart mounts a writable
+    # emptyDir: crypto.NewFileKEK self-creates the KEK and the DEK store persists
+    # there (ephemeral — see _workload.tpl). For a durable/shared KEK, override
+    # `volumes` with a PVC, or wire the Vault KEK provider (ADR-015); do NOT point
+    # secretName at a read-only Secret here (the DEK store writes would fail).
     kek:
       enabled: true
       mountPath: /keys
       fileKey: kek.bin
-      secretName: ""   # "" -> "<fullname>-kek"
+      secretName: ""   # "" -> writable emptyDir (self-create); set a name for a read-only Secret KEK
 
   # --- control-plane: tenants/config/cursors/tokens, gRPC [WORKLOADS wave] ------
   control-plane:
@@ -660,18 +667,24 @@ services:
     config:
       controlPlaneAddr: ":9100"
       controlPlaneHealthAddr: ":9101"
-    # [WORKLOADS wave] control-plane reads DATABASE_URL (Postgres token vault) ->
-    # pull the shared Secret via envFrom.
+    # [WORKLOADS wave] control-plane reads ONLY DATABASE_URL (Postgres token vault)
+    # from the shared Secret. secretKeys scopes it via explicit secretKeyRef (no
+    # MinIO/Keycloak creds it never uses; ADR-014 §7).
     useSecret: true
-    # [WORKLOADS wave] Shared KEK for the token vault's envelope crypto (ADR-013),
-    # the SAME key bytes connector-hub mounts. Mounted read-only at /keys;
-    # KEK_FILE is set automatically. See connector-hub.kek for the provisioning
-    # note (config/secret wave in dev, Vault CSI in wave 1).
+    secretKeys:
+      - DATABASE_URL
+    # [WORKLOADS wave] Shared KEK for the token vault's envelope crypto (ADR-013).
+    # control-plane uses a Postgres DEK store (no file DEK writes), so it only needs
+    # to LOAD or self-create the KEK file. With secretName empty (default) the chart
+    # mounts a writable emptyDir so crypto.NewFileKEK can self-create under the
+    # read-only root FS (ephemeral). For a durable/shared KEK set secretName to a
+    # provisioned read-only Secret (control-plane's read-only KEK dir is fine since
+    # it does not write DEKs there), or wire the Vault KEK provider (ADR-015).
     kek:
       enabled: true
       mountPath: /keys
       fileKey: kek.bin
-      secretName: ""   # "" -> "<fullname>-kek"
+      secretName: ""   # "" -> writable emptyDir (self-create); set a name for a read-only Secret KEK
 
   # --- clip: Python CLIP model service (ADR-013) [WORKLOADS wave] ---------------
   clip:
@@ -720,6 +733,12 @@ services:
       minAvailable: 1
     podSecurityContext:
       runAsNonRoot: true
+      # The clip image runs as uid/gid 65532 (USER nonroot, HOME=/home/nonroot).
+      # Pin it and set fsGroup so the mounted cache emptyDir is group-writable by
+      # the runtime user (matches the Go services' security context).
+      runAsUser: 65532
+      runAsGroup: 65532
+      fsGroup: 65532
       seccompProfile:
         type: RuntimeDefault
     securityContext:
@@ -761,14 +780,18 @@ services:
         periodSeconds: 15
         timeoutSeconds: 10
         failureThreshold: 3
-    # [WORKLOADS wave] open_clip weights cache. Ephemeral emptyDir in wave 0;
-    # mirrors the compose `clip-cache` mount at /root/.cache.
+    # [WORKLOADS wave] open_clip weights cache. Ephemeral emptyDir. Mounted at the
+    # image's nonroot HOME (/home/nonroot/.cache) — that is where open_clip /
+    # HF_HOME actually write (services/clip/Dockerfile sets HOME=/home/nonroot,
+    # HF_HOME=/home/nonroot/.cache/huggingface); /root/.cache would never be used
+    # by the uid-65532 runtime user. fsGroup 65532 (podSecurityContext) makes it
+    # writable.
     volumes:
       - name: clip-cache
         emptyDir: {}
     volumeMounts:
       - name: clip-cache
-        mountPath: /root/.cache
+        mountPath: /home/nonroot/.cache
 
   # --- web: React UI served by nginx (HTTP :80, public via Ingress) [EDGE] ------
   web:

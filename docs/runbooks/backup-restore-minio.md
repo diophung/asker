@@ -97,6 +97,12 @@ spec:
 > The mirrored objects are **still ciphertext** — the off-site copy is as safe as the source and is
 > also useless without the KEK + the Postgres `tenant_deks`. Encrypt the transport (`https://`
 > target) and restrict the target's access regardless, since it is tenant data.
+>
+> ⚠️ **NetworkPolicy:** with `networkPolicy.enabled=true` (default) on a policy-enforcing CNI, the
+> `asker-minio-allow` policy permits ingress to MinIO **only from `component: connector-hub`**. This
+> CronJob pod is unlabeled, so its `mc mirror` connection to `http://minio:9000` is denied. Label the
+> CronJob pod template `app.kubernetes.io/component: connector-hub` (+ `part-of: asker`), or add a
+> dedicated allow policy targeting MinIO from the backup pod's labels.
 
 ### Option B — enable versioning (corruption / accidental-delete protection)
 

@@ -14,7 +14,13 @@ because the sibling stateful-layer builder owns those StatefulSets' exact labels
   postgres  <- control-plane                   :5432
   minio     <- connector-hub                   :9000
   vault     <- connector-hub, control-plane    :8200
+  keycloak  <- gateway (OIDC JWKS fetch)        :8080
   kafka     <- ingest, enrich, index-writer, connector-hub :9092
+
+The dependency pod selectors come from asker.netpol.depSelectorBody (shared with
+the egress side) so the ingress target and egress peer never diverge; it carries
+the correct per-builder default (vespa=component:search, kafka=strimzi.io/cluster,
+the rest part-of:asker + component:<dep>) and honors a per-dep podSelector override.
 
 GATING: this whole file is gated behind networkPolicy.deps.enabled (default
 true). Flip it off when a dependency runs OUTSIDE the namespace / cluster (a
@@ -43,8 +49,7 @@ metadata:
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
-    {{- $sel := (dig "redis" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "redis")) $deps) }}
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root "redis") | nindent 4 }}
   policyTypes:
     - Ingress
   ingress:
@@ -66,8 +71,7 @@ metadata:
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
-    {{- $sel := (dig "vespa" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "vespa")) $deps) }}
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root "vespa") | nindent 4 }}
   policyTypes:
     - Ingress
   ingress:
@@ -88,8 +92,7 @@ metadata:
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
-    {{- $sel := (dig "tei" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "tei")) $deps) }}
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root "tei") | nindent 4 }}
   policyTypes:
     - Ingress
   ingress:
@@ -110,8 +113,7 @@ metadata:
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
-    {{- $sel := (dig "postgres" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "postgres")) $deps) }}
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root "postgres") | nindent 4 }}
   policyTypes:
     - Ingress
   ingress:
@@ -131,8 +133,7 @@ metadata:
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
-    {{- $sel := (dig "minio" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "minio")) $deps) }}
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root "minio") | nindent 4 }}
   policyTypes:
     - Ingress
   ingress:
@@ -152,8 +153,7 @@ metadata:
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
-    {{- $sel := (dig "vault" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "vault")) $deps) }}
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root "vault") | nindent 4 }}
   policyTypes:
     - Ingress
   ingress:
@@ -163,6 +163,30 @@ spec:
       ports:
         - protocol: TCP
           port: 8200
+---
+# --- keycloak: OIDC issuer; from gateway (server-side JWKS fetch) ----------------
+# The gateway verifies bearer tokens with a RemoteKeySet that lazily GETs the JWKS
+# (http://keycloak:8080/.../certs) on first verify + on key rotation / pod restart.
+# Without this allow, default-deny blocks the JWKS dial and EVERY /v1/* request
+# 401s once a gateway pod restarts or Keycloak rotates keys (the M4 review finding).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-keycloak-allow
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    {{- include "asker.netpol.depSelectorBody" (list $root "keycloak") | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "gateway") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
 ---
 # --- kafka/redpanda: event backbone; from the four Kafka clients ----------------
 # Strimzi Kafka in prod (ADR-003 §1), redpanda in dev compose. Bootstrap +
@@ -177,8 +201,7 @@ metadata:
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
-    {{- $sel := (dig "kafka" "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/part-of" "asker" "app.kubernetes.io/component" "kafka")) $deps) }}
-    {{- toYaml $sel | nindent 4 }}
+    {{- include "asker.netpol.depSelectorBody" (list $root "kafka") | nindent 4 }}
   policyTypes:
     - Ingress
   ingress:

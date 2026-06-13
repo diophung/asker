@@ -155,8 +155,14 @@ These steps run **after** `helm install`, in order:
    token via Vault Agent / CSI / External Secrets) for **control-plane** and **connector-hub** — the
    two services that own envelope crypto. With `VAULT_ADDR` set they select `NewVaultKEK`; unset they
    fall back to the file-KEK (`KEK_FILE`). Both services MUST agree on the same `KeyName`
-   (`asker-kek`). The `vault.addr`/`vault.keyName` values flow to the deployment env (see ADR-015 for
-   the wiring contract).
+   (`asker-kek`).
+   > ⚠️ **The chart does NOT inject `VAULT_ADDR` into the app workloads.** The `vault.*` values
+   > configure only the (dev) Vault Deployment + its init Job — they do **not** flow to the
+   > control-plane/connector-hub pod env (those `services/**` binaries are frozen per ADR-015 §3, which
+   > leaves the `main.go` provider-selection wiring as an integrator step). You must add `VAULT_ADDR` /
+   > `VAULT_TOKEN` to the control-plane and connector-hub pods yourself (Vault Agent injector annotations,
+   > a CSI volume, or an External Secrets-synced env). Until you do, both services stay on the file-KEK
+   > even with a Vault deployed. See ADR-015 for the wiring contract.
 
 4. **Provision credentials out-of-band** when `secrets.strategy` is `vault` or `external` — the chart
    renders no credentials; a Secret named `<release>-secrets` (helper `asker.secretName`) must exist,

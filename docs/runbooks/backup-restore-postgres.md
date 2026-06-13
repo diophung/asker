@@ -120,6 +120,13 @@ spec:
 
 > `postgres` is the in-cluster Service DNS name (bare, == compose name — ADR-014 §3), so the CronJob
 > dials `-h postgres` exactly as the control-plane does.
+>
+> ⚠️ **NetworkPolicy:** with `networkPolicy.enabled=true` (default) on a policy-enforcing CNI, the
+> `asker-postgres-allow` policy permits ingress to Postgres **only from `component: control-plane`**.
+> This backup pod carries no such label, so its `pg_dump` connection is denied. Give the CronJob pod
+> a permitted identity — either label its pod template `app.kubernetes.io/component: control-plane`
+> (+ `part-of: asker`), or add a dedicated allow policy targeting Postgres from the backup pod's
+> labels. The `kubectl exec`-based options above are unaffected (exec is not subject to NetworkPolicy).
 
 ### Option C — PVC volume snapshot (crash-consistent)
 
