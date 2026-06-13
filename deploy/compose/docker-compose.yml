@@ -24,10 +24,15 @@ x-oauth-env: &oauth-env
   ASKER_OAUTH_GOOGLE_CLIENT_SECRET: "${ASKER_OAUTH_GOOGLE_CLIENT_SECRET:-dev-google-secret}"
   ASKER_OAUTH_GOOGLE_AUTH_URL: "${ASKER_OAUTH_GOOGLE_AUTH_URL:-http://localhost:9500/google/authorize}"
   ASKER_OAUTH_GOOGLE_TOKEN_URL: "${ASKER_OAUTH_GOOGLE_TOKEN_URL:-http://fake-oauth:9500/google/token}"
-  ASKER_OAUTH_MICROSOFT_CLIENT_ID: "dev-microsoft-client" # dev-only
-  ASKER_OAUTH_MICROSOFT_CLIENT_SECRET: "dev-microsoft-secret" # dev-only
-  ASKER_OAUTH_MICROSOFT_AUTH_URL: "http://localhost:9500/microsoft/authorize"
-  ASKER_OAUTH_MICROSOFT_TOKEN_URL: "http://fake-oauth:9500/microsoft/token"
+  # Microsoft / Outlook: defaults are the dev fake provider. To connect a REAL
+  # Outlook/Office365 mailbox, set these in deploy/compose/.env (gitignored) — see
+  # docs/oauth.md and that .env block (ready to uncomment). The real Microsoft
+  # auth/token URLs embed your Entra TENANT (default "common" = multi-tenant);
+  # replace it with your tenant ID in .env if your app is single-tenant.
+  ASKER_OAUTH_MICROSOFT_CLIENT_ID: "${ASKER_OAUTH_MICROSOFT_CLIENT_ID:-dev-microsoft-client}"
+  ASKER_OAUTH_MICROSOFT_CLIENT_SECRET: "${ASKER_OAUTH_MICROSOFT_CLIENT_SECRET:-dev-microsoft-secret}"
+  ASKER_OAUTH_MICROSOFT_AUTH_URL: "${ASKER_OAUTH_MICROSOFT_AUTH_URL:-http://localhost:9500/microsoft/authorize}"
+  ASKER_OAUTH_MICROSOFT_TOKEN_URL: "${ASKER_OAUTH_MICROSOFT_TOKEN_URL:-http://fake-oauth:9500/microsoft/token}"
   ASKER_OAUTH_SLACK_CLIENT_ID: "dev-slack-client" # dev-only
   ASKER_OAUTH_SLACK_CLIENT_SECRET: "dev-slack-secret" # dev-only
   ASKER_OAUTH_SLACK_AUTH_URL: "http://localhost:9500/slack/authorize"
