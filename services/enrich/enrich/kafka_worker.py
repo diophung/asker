@@ -319,16 +319,24 @@ async def ensure_topics(
 ) -> None:
     """Idempotently create the pipeline topics (EnsureTopics parity).
 
-    Topics that already exist are left untouched. Uses the broker-default
-    replication factor.
+    Topics that already exist are left untouched. Unlike the Go kadm client,
+    aiokafka's NewTopic rejects replication_factor=-1 ("broker default"), so
+    the factor comes from ENRICH_TOPIC_REPLICATION (default 1 — single-broker
+    dev; production overrides via env, ADR-004).
     """
+    import os
+
     from aiokafka.admin import AIOKafkaAdminClient, NewTopic
     from aiokafka.errors import TopicAlreadyExistsError, for_code
 
+    replication = int(os.environ.get("ENRICH_TOPIC_REPLICATION", "1"))
     admin = AIOKafkaAdminClient(bootstrap_servers=list(brokers))
     await admin.start()
     try:
-        new = [NewTopic(name=t, num_partitions=partitions, replication_factor=-1) for t in topics]
+        new = [
+            NewTopic(name=t, num_partitions=partitions, replication_factor=replication)
+            for t in topics
+        ]
         try:
             response = await admin.create_topics(new)
         except TopicAlreadyExistsError:

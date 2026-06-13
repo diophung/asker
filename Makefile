@@ -46,8 +46,15 @@ test: ## Run all tests with race detector and coverage
 coverage-gate: test ## Enforce coverage floors (platform/tenancy 100%, platform/* >= 75%)
 	bash tools/ci/coverage_gate.sh coverage.out
 
-dev-up: ## Start the full dev stack and deploy the Vespa app
-	$(COMPOSE) up -d --build --wait --wait-timeout 1800
+# Built one at a time: parallel BuildKit builds of 9 images spike memory hard
+# enough to OOM-kill running containers on small Docker VMs (observed).
+BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query fake-gmail web
+
+dev-build: ## Build all service images serially (low-memory friendly)
+	@for s in $(BUILT_SERVICES); do echo "== build $$s"; $(COMPOSE) build $$s || exit 1; done
+
+dev-up: dev-build ## Start the full dev stack and deploy the Vespa app
+	$(COMPOSE) up -d --wait --wait-timeout 1800
 	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; bash vespa/deploy.sh
 
 dev-down: ## Stop the dev stack (volumes survive, incl. the TEI model cache)
@@ -64,3 +71,9 @@ vespa-deploy: ## (Re)deploy the Vespa application package
 
 e2e-smoke: ## End-to-end smoke test against the running dev stack
 	bash tools/e2e/smoke.sh
+
+e2e-m1: ## M1 exit test: synthetic email ingest, freshness, hybrid search (E2E_EMAIL_COUNT=10000)
+	bash tools/e2e/m1-e2e.sh
+
+e2e-leakage: ## Cross-tenant leakage suite (sacred — must always pass)
+	bash tools/e2e/leakage.sh

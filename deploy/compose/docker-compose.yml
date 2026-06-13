@@ -188,10 +188,13 @@ services:
 
   fake-gmail:
     # Dev/CI only: local Gmail API fake (ADR-008). Admin API is unauthenticated
-    # by design — NEVER expose beyond the compose network.
+    # by design — bound to 127.0.0.1 ONLY so the host e2e driver can seed it;
+    # NEVER expose beyond the local machine.
     build:
       context: ../..
       dockerfile: tools/fake-gmail/Dockerfile
+    ports:
+      - "127.0.0.1:9400:9400"
     environment:
       FAKE_GMAIL_ADDR: ":9400"
     healthcheck:
@@ -203,8 +206,9 @@ services:
 
   web:
     build:
-      context: ../..
-      dockerfile: web/Dockerfile
+      # Self-contained npm build — context is web/ itself, not the repo root.
+      context: ../../web
+      dockerfile: Dockerfile
     ports:
       - "127.0.0.1:3000:80"
     healthcheck:

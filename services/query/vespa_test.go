@@ -27,7 +27,7 @@ func TestBuildYQL(t *testing.T) {
 		{
 			name: "hybrid clause",
 			q:    vespaQuery{Kind: retrieveHybrid},
-			want: `select * from sources * where (userQuery() or ({targetHits:100}nearestNeighbor(embedding,q)))`,
+			want: `select * from sources * where userQuery()`,
 		},
 		{
 			name: "vector clause alone",
@@ -88,7 +88,7 @@ func TestBuildYQL(t *testing.T) {
 				From:        time.Unix(100, 0).UTC(),
 				Participant: "bob@example.com",
 			},
-			want: `select * from sources * where (userQuery() or ({targetHits:100}nearestNeighbor(embedding,q))) and type contains "CALENDAR_EVENT" and created_at >= 100 and participants contains ({substring:true}"bob@example.com")`,
+			want: `select * from sources * where userQuery() and type contains "CALENDAR_EVENT" and created_at >= 100 and participants contains ({substring:true}"bob@example.com")`,
 		},
 	}
 	for _, tt := range tests {

@@ -24,11 +24,20 @@ type retrievalKind int
 const (
 	// retrieveKeyword: userQuery() with the keyword profile.
 	retrieveKeyword retrievalKind = iota
-	// retrieveHybrid: userQuery() OR nearestNeighbor with the hybrid profile.
+	// retrieveHybrid: userQuery() as the match set with the hybrid profile.
+	// The keyword terms determine WHICH documents match (so a rare term
+	// returns only the documents containing it); the hybrid profile then
+	// blends nativeRank with closeness(field, embedding), which reads the
+	// query(q) tensor directly — no nearestNeighbor operator is needed for
+	// the vector signal, and OR-ing one in would make every document match
+	// (in streaming mode targetHits:100 returns the whole small group), which
+	// destroys keyword precision. Pure-vector recall of documents that share
+	// NO keywords is deliberately out of scope for M1 and is the RRF / dense
+	// retrieval work deferred to M5 (ADR-006).
 	retrieveHybrid
-	// retrieveVector: nearestNeighbor alone with the hybrid profile
-	// (closeness ranks; without userQuery() no keyword terms match, so the
-	// nativeRank component contributes 0).
+	// retrieveVector: nearestNeighbor alone with the hybrid profile — there is
+	// no keyword text to match on, so the vector arm IS the match set and
+	// closeness ranks; nativeRank contributes 0.
 	retrieveVector
 	// retrieveFilterOnly: 'true' clause — empty residual text with filters
 	// present matches everything in the tenant group, filtered and ranked by
@@ -125,10 +134,13 @@ func buildYQL(q vespaQuery) (string, error) {
 	switch q.Kind {
 	case retrieveFilterOnly:
 		clauses = append(clauses, "true")
-	case retrieveKeyword:
+	case retrieveKeyword, retrieveHybrid:
+		// Both match on the keyword terms; they differ only in ranking
+		// profile (keyword vs hybrid). The hybrid profile adds the vector
+		// signal via closeness(field, embedding), which reads input.query(q)
+		// — set on the request body for hybrid — without needing a
+		// nearestNeighbor operator in the match set.
 		clauses = append(clauses, "userQuery()")
-	case retrieveHybrid:
-		clauses = append(clauses, "(userQuery() or "+nearestNeighborClause+")")
 	case retrieveVector:
 		clauses = append(clauses, nearestNeighborClause)
 	}

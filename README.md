@@ -44,10 +44,11 @@ corpora. Vespa streaming mode scopes every query to a single tenant's document g
 shared `platform/tenancy` library is the only way to construct a data-access context. Details
 in [docs/architecture.md](docs/architecture.md).
 
-**Current state (M0):** monorepo scaffold, platform libraries, the full dev infrastructure
-stack in Docker Compose, and a hello-world gateway with OIDC token validation. The connector
-hub, ingest/enrich/index pipeline, query service, and web UI arrive in later milestones — see
-[MILESTONES.md](MILESTONES.md).
+**Current state (M1):** the vertical slice runs end to end in the dev stack — Gmail and
+upload connectors → connector hub → Kafka → ingest/chunk → embed (TEI) → Vespa streaming
+index → query service with hybrid search and a React web UI with snippets, highlights, and
+filters. Tombstones/deletes propagate. Connector breadth, media, Helm/K8s, and scale
+verification arrive in later milestones — see [MILESTONES.md](MILESTONES.md).
 
 ## Quickstart
 
@@ -73,24 +74,62 @@ All credentials below are **dev-only** and hardcoded in the compose stack. Never
 
 | Service | Address | Credentials (dev-only) |
 | :--- | :--- | :--- |
+| Web UI | http://localhost:3000 | log in as a dev user (below) |
 | Gateway | http://localhost:8080 | OIDC bearer token (see below) |
 | Keycloak admin | http://localhost:8081 | `admin` / `admin` |
 | Vespa query + document API | http://localhost:8082 | — |
 | Vespa config server | http://localhost:19071 | — |
 | TEI (text embeddings) | http://localhost:8083 | — |
+| fake-gmail (dev-only Gmail fake + admin API) | http://localhost:9400 | bearer `fake-gmail-token:<email>` (Gmail API); admin API unauthenticated |
 | MinIO S3 API | http://localhost:9000 | `asker-minio` / `asker-minio-secret` |
 | MinIO console | http://localhost:9001 | `asker-minio` / `asker-minio-secret` |
 | PostgreSQL | localhost:15432 | `asker` / `asker`, db `asker` |
 | Redis | localhost:16379 | — |
 | Redpanda (Kafka API) | localhost:19092 | — |
 
-Dev users in the Keycloak `asker` realm: `alice` / `password123` and `bob` / `password123`.
-The public client `asker-web` has Direct Access Grants enabled, so a dev token is one curl away:
+Dev users in the Keycloak `asker` realm: `alice`, `bob`, and `carol`, all with password
+`password123`. The public client `asker-web` has Direct Access Grants enabled, so a dev token
+is one curl away:
 
 ```sh
 curl -s http://localhost:8081/realms/asker/protocol/openid-connect/token \
   -d grant_type=password -d client_id=asker-web \
   -d username=alice -d password=password123
+```
+
+## Try it
+
+Run `make dev-up`, open http://localhost:3000, and log in as `alice` / `password123` — that
+is the search UI. To give Alice something to search, seed the local fake Gmail and connect it
+through the API (connector sync starts within ~30 seconds; a new document is typically
+searchable in under a minute):
+
+```sh
+# 1. Seed the dev fake Gmail with 50 deterministic synthetic emails for alice.
+curl -s -X POST http://localhost:9400/admin/users/alice@example.com/seed \
+  -H 'Content-Type: application/json' -d '{"count":50,"seed":1}'
+
+# 2. Get a dev bearer token for alice (password grant, dev-only).
+TOKEN=$(curl -s http://localhost:8081/realms/asker/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=asker-web \
+  -d username=alice -d password=password123 \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+# 3. Create a Gmail connector instance. base_url is the IN-NETWORK address of
+#    the fake — connectors run inside the compose network, not on the host.
+ID=$(curl -s -X POST http://localhost:8080/v1/connectors \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"connector_id":"gmail","display_name":"Alice mail","config":{"base_url":"http://fake-gmail:9400","user_email":"alice@example.com"}}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
+# 4. Hand it the (fake) OAuth token — the hub schedules the first sync.
+curl -s -X PUT "http://localhost:8080/v1/connectors/$ID/token" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"token":"fake-gmail-token:alice@example.com"}'
+
+# 5. Watch sync progress (phase, docsEmitted), then search — here or in the UI.
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/connectors
+curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/v1/search?q=roadmap'
 ```
 
 ## Repository layout
