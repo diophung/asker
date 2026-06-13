@@ -79,7 +79,7 @@ All credentials below are **dev-only** and hardcoded in the compose stack. Never
 
 | Service | Address | Credentials (dev-only) |
 | :--- | :--- | :--- |
-| Web UI | http://localhost:3000 | log in as a dev user (below) |
+| Web UI | http://localhost:13001 | log in as a dev user (below) |
 | Gateway | http://localhost:8080 | OIDC bearer token (see below) |
 | Keycloak admin | http://localhost:8081 | `admin` / `admin` |
 | Vespa query + document API | http://localhost:8082 | — |
@@ -111,7 +111,7 @@ curl -s http://localhost:8081/realms/asker/protocol/openid-connect/token \
 
 ## Try it
 
-Run `make dev-up`, open http://localhost:3000, and log in as `alice` / `password123` — that
+Run `make dev-up`, open http://localhost:13001, and log in as `alice` / `password123` — that
 is the search UI. To give Alice something to search, seed the local fake Gmail and connect it
 through the API (connector sync starts within ~30 seconds; a new document is typically
 searchable in under a minute):
