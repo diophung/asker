@@ -1305,8 +1305,13 @@ type DeleteReport struct {
 	BlobsDeleted              int64                  `protobuf:"varint,6,opt,name=blobs_deleted,json=blobsDeleted,proto3" json:"blobs_deleted,omitempty"`
 	RedisPurged               bool                   `protobuf:"varint,7,opt,name=redis_purged,json=redisPurged,proto3" json:"redis_purged,omitempty"`
 	VerifiedEmpty             bool                   `protobuf:"varint,8,opt,name=verified_empty,json=verifiedEmpty,proto3" json:"verified_empty,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// actor attributes the erasure for the audit trail: "self" for a self-serve
+	// DeleteTenant, or "admin:<subject>" where <subject> is the VERIFIED operator
+	// identity the gateway forwarded for an AdminDeleteTenant (finding M6-#6).
+	// Never a token.
+	Actor         string `protobuf:"bytes,9,opt,name=actor,proto3" json:"actor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteReport) Reset() {
@@ -1393,6 +1398,13 @@ func (x *DeleteReport) GetVerifiedEmpty() bool {
 		return x.VerifiedEmpty
 	}
 	return false
+}
+
+func (x *DeleteReport) GetActor() string {
+	if x != nil {
+		return x.Actor
+	}
+	return ""
 }
 
 type DeleteTenantResponse struct {
@@ -2099,7 +2111,7 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\x15connector_instance_id\x18\x01 \x01(\tR\x13connectorInstanceId\"\x15\n" +
 	"\x13DeleteTokenResponse\"/\n" +
 	"\x13DeleteTenantRequest\x12\x18\n" +
-	"\aconfirm\x18\x01 \x01(\tR\aconfirm\"\xd4\x02\n" +
+	"\aconfirm\x18\x01 \x01(\tR\aconfirm\"\xea\x02\n" +
 	"\fDeleteReport\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12>\n" +
 	"\x1bconnector_instances_deleted\x18\x02 \x01(\x03R\x19connectorInstancesDeleted\x12%\n" +
@@ -2108,7 +2120,8 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\x12vespa_group_purged\x18\x05 \x01(\bR\x10vespaGroupPurged\x12#\n" +
 	"\rblobs_deleted\x18\x06 \x01(\x03R\fblobsDeleted\x12!\n" +
 	"\fredis_purged\x18\a \x01(\bR\vredisPurged\x12%\n" +
-	"\x0everified_empty\x18\b \x01(\bR\rverifiedEmpty\"S\n" +
+	"\x0everified_empty\x18\b \x01(\bR\rverifiedEmpty\x12\x14\n" +
+	"\x05actor\x18\t \x01(\tR\x05actor\"S\n" +
 	"\x14DeleteTenantResponse\x12;\n" +
 	"\x06report\x18\x01 \x01(\v2#.asker.controlplane.v1.DeleteReportR\x06report\"\x19\n" +
 	"\x17ListAllInstancesRequest\"_\n" +

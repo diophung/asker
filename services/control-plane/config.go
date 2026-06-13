@@ -1,6 +1,10 @@
 package main
 
-import "github.com/asker/asker/platform/config"
+import (
+	"strings"
+
+	"github.com/asker/asker/platform/config"
+)
 
 // controlPlaneConfig is loaded from the environment. Names and defaults are
 // the pinned M1 service contract (gRPC :9100, HTTP health :9101).
@@ -48,9 +52,25 @@ type controlPlaneConfig struct {
 }
 
 // isProd reports whether the deployment is marked production (the KEK
-// fail-closed guard).
+// fail-closed guard). The marker is NORMALIZED (trim + lowercase) before the
+// comparison so a typo of casing/whitespace ("Production", "prod ", " PROD")
+// cannot silently disable the fail-closed guard (finding M6-#9). The recognized
+// production markers are {prod, production, staging}: staging counts as
+// production for the KEK guard because it must also use Vault, never an
+// ephemeral dev file KEK. connector-hub applies the identical normalization.
 func (c controlPlaneConfig) isProd() bool {
-	return c.Env == "production" || c.Env == "prod"
+	return isProdEnv(c.Env)
+}
+
+// isProdEnv normalizes a raw ASKER_ENV value and reports whether it names a
+// production-class environment for the KEK fail-closed guard.
+func isProdEnv(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "prod", "production", "staging":
+		return true
+	default:
+		return false
+	}
 }
 
 func loadConfig() (controlPlaneConfig, error) {

@@ -1,12 +1,48 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"google.golang.org/grpc/metadata"
+
 	controlplanev1 "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1"
 )
+
+// adminSubjectMetadataKey carries the VERIFIED operator identity (the JWT "sub")
+// from the gateway to the control plane so admin audit logs and DeleteReports
+// name the actual operator, not a literal "admin" (finding M6-#6). It is set
+// ONLY from verified claims, never from request input, and never carries the
+// token itself. The control-plane adminServer reads the same key.
+const adminSubjectMetadataKey = "x-asker-admin-subject"
+
+// adminSubject returns the verified operator's identifier for the audit trail:
+// the "sub" claim (a stable, server-issued Keycloak subject), falling back to
+// the "email" claim, else "unknown". It reads only verified claims — never a
+// token, never request input.
+func adminSubject(claims map[string]any) string {
+	if claims == nil {
+		return "unknown"
+	}
+	for _, key := range []string{"sub", "email"} {
+		if v, ok := claims[key].(string); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				return v
+			}
+		}
+	}
+	return "unknown"
+}
+
+// withAdminSubject attaches the verified operator subject as outgoing gRPC
+// metadata so the control plane can attribute the admin action. The value comes
+// from the verified claims in ctx (set by the auth middleware); requireAdmin has
+// already proven the caller is an admin before any handler runs.
+func withAdminSubject(ctx context.Context) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, adminSubjectMetadataKey, adminSubject(claimsFromContext(ctx)))
+}
 
 // Admin authorization (M6): /v1/admin/* is gated by a DISTINCT admin claim in
 // the verified token — NOT mere authentication. A request that authenticates as
@@ -98,7 +134,7 @@ func (d *deps) handleAdminListTenants(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Limit = int32(n)
 	}
-	resp, err := d.admin.ListTenants(r.Context(), req)
+	resp, err := d.admin.ListTenants(withAdminSubject(r.Context()), req)
 	if err != nil {
 		d.upstreamError(w, r, "Admin.ListTenants", err)
 		return
@@ -108,7 +144,7 @@ func (d *deps) handleAdminListTenants(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminGetTenant serves GET /v1/admin/tenants/{tenant} (usage triage).
 func (d *deps) handleAdminGetTenant(w http.ResponseWriter, r *http.Request) {
-	resp, err := d.admin.GetTenantUsage(r.Context(), &controlplanev1.GetTenantUsageRequest{
+	resp, err := d.admin.GetTenantUsage(withAdminSubject(r.Context()), &controlplanev1.GetTenantUsageRequest{
 		TenantId: r.PathValue("tenant"),
 	})
 	if err != nil {
@@ -127,7 +163,7 @@ func (d *deps) handleAdminSuspendTenant(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	resp, err := d.admin.SuspendTenant(r.Context(), &controlplanev1.SuspendTenantRequest{
+	resp, err := d.admin.SuspendTenant(withAdminSubject(r.Context()), &controlplanev1.SuspendTenantRequest{
 		TenantId:  r.PathValue("tenant"),
 		Suspended: body.Suspended,
 	})
@@ -146,7 +182,7 @@ func (d *deps) handleAdminSuspendTenant(w http.ResponseWriter, r *http.Request) 
 // initiated GDPR erasure of an ARBITRARY tenant (abuse takedown / right-to-
 // erasure on behalf of a user). Audit-logged at the control plane.
 func (d *deps) handleAdminDeleteTenant(w http.ResponseWriter, r *http.Request) {
-	resp, err := d.admin.AdminDeleteTenant(r.Context(), &controlplanev1.AdminDeleteTenantRequest{
+	resp, err := d.admin.AdminDeleteTenant(withAdminSubject(r.Context()), &controlplanev1.AdminDeleteTenantRequest{
 		TenantId: r.PathValue("tenant"),
 	})
 	if err != nil {
@@ -164,5 +200,6 @@ func (d *deps) handleAdminDeleteTenant(w http.ResponseWriter, r *http.Request) {
 		"blobs_deleted":               rep.GetBlobsDeleted(),
 		"redis_purged":                rep.GetRedisPurged(),
 		"verified_empty":              rep.GetVerifiedEmpty(),
+		"actor":                       rep.GetActor(),
 	})
 }

@@ -153,16 +153,19 @@ These steps run **after** `helm install`, in order:
 
 3. **Point envelope crypto at Vault** (prod KEK, ADR-015): set `VAULT_ADDR` (and the least-privilege
    token via Vault Agent / CSI / External Secrets) for **control-plane** and **connector-hub** — the
-   two services that own envelope crypto. With `VAULT_ADDR` set they select `NewVaultKEK`; unset they
+   two services that own envelope crypto. As of **M6** the provider selection is WIRED in both
+   binaries (`platform/crypto.SelectKEK`): with `VAULT_ADDR` set they use `NewVaultKEK`; unset, they
    fall back to the file-KEK (`KEK_FILE`). Both services MUST agree on the same `KeyName`
-   (`asker-kek`).
-   > ⚠️ **The chart does NOT inject `VAULT_ADDR` into the app workloads.** The `vault.*` values
-   > configure only the (dev) Vault Deployment + its init Job — they do **not** flow to the
-   > control-plane/connector-hub pod env (those `services/**` binaries are frozen per ADR-015 §3, which
-   > leaves the `main.go` provider-selection wiring as an integrator step). You must add `VAULT_ADDR` /
-   > `VAULT_TOKEN` to the control-plane and connector-hub pods yourself (Vault Agent injector annotations,
-   > a CSI volume, or an External Secrets-synced env). Until you do, both services stay on the file-KEK
-   > even with a Vault deployed. See ADR-015 for the wiring contract.
+   (`VAULT_KEK_KEY_NAME`, default `asker-kek`).
+   > ✅ **Prod fail-closed guard (M6):** set **`ASKER_ENV=production`** on control-plane + connector-hub.
+   > With it set and `VAULT_ADDR` empty, the service **errors at startup** rather than silently minting
+   > an ephemeral dev file-KEK — so a misconfigured prod deploy fails loud, not insecure.
+   > ⚠️ The chart still does **not** inject `VAULT_ADDR`/`VAULT_TOKEN` into the app workloads (the
+   > `vault.*` values configure only the dev Vault Deployment + init Job). You must add `VAULT_ADDR` /
+   > `VAULT_TOKEN` / `ASKER_ENV=production` to the control-plane and connector-hub pods yourself (Vault
+   > Agent injector annotations, a CSI volume, or an External Secrets-synced env). Note: control-plane
+   > also needs the MinIO creds (already in its `secretKeys`) because the M6 GDPR delete cascade purges
+   > a deleted tenant's blobs.
 
 4. **Provision credentials out-of-band** when `secrets.strategy` is `vault` or `external` — the chart
    renders no credentials; a Secret named `<release>-secrets` (helper `asker.secretName`) must exist,

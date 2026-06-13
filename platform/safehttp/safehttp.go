@@ -46,7 +46,14 @@
 //	    ranges) on top of the built-in private/loopback/etc set.
 //	ASKER_SAFEHTTP_ALLOW_HOSTS=example.com,api.example.org
 //	    Optional exact-match hostname allowlist. When set, only these hosts may
-//	    be dialed (still subject to the IP guard). Empty means "any public host".
+//	    be requested (enforced at the REQUEST layer — the initial request and
+//	    every redirect hop — on the URL hostname, since the dialer only sees a
+//	    resolved IP and cannot match a name; still subject to the IP guard).
+//	    Empty means "any public host".
+//
+// Outbound proxies are NOT supported: the guarded transport sets Proxy=nil so an
+// HTTP(S)_PROXY cannot route a blocked target via a proxy the connect-time dialer
+// guard never inspects. Guarded traffic always dials its destination directly.
 package safehttp
 
 import (
@@ -99,6 +106,45 @@ var ErrTooManyRedirects = errors.New("safehttp: too many redirects")
 // — even ASKER_SAFEHTTP_ALLOW_PRIVATE will not open it unless an operator also
 // allowlists its host.
 var metadataIP = net.IPv4(169, 254, 169, 254)
+
+// nat64Prefix is the RFC 6052 NAT64 well-known prefix 64:ff9b::/96. In a
+// DNS64/NAT64 cluster a name resolves to 64:ff9b::<v4>, so 64:ff9b::a9fe:a9fe is
+// the metadata IP (169.254.169.254) and 64:ff9b::7f00:1 is 127.0.0.1. Without
+// unwrapping the embedded IPv4 the family checks below judge it as a plain
+// public IPv6 and let it through — a metadata/loopback/RFC1918 bypass. checkIP
+// extracts the trailing 4 bytes and recurses on the embedded IPv4.
+var nat64Prefix = []byte{0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0}
+
+// builtinDeniedCIDRs are ALWAYS denied, even under AllowPrivate: ranges that
+// IsPrivate()/IsLoopback() do NOT cover but that must never be a tenant fetch
+// target. AllowPrivate exists for the dev/CI compose loopback network; none of
+// these is a dev loopback, so opening private space must not open them.
+//
+//   - 100.64.0.0/10  carrier-grade NAT (RFC 6598); IsPrivate() == false.
+//   - 192.0.0.0/24   IETF protocol assignments (RFC 6890) incl. 192.0.0.0/29 DS-Lite.
+//   - 198.18.0.0/15  benchmarking (RFC 2544); routable-looking but reserved.
+//   - 240.0.0.0/4    reserved/"future use" (RFC 1112); never a legitimate target.
+var builtinDeniedCIDRs = mustParseCIDRs(
+	"100.64.0.0/10",
+	"192.0.0.0/24",
+	"198.18.0.0/15",
+	"240.0.0.0/4",
+)
+
+// mustParseCIDRs parses static, known-good CIDRs at init; a typo is a build-time
+// programming error, surfaced as a panic on first import rather than silently
+// dropping a deny rule.
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic(fmt.Sprintf("safehttp: bad built-in denied CIDR %q: %v", c, err))
+		}
+		out = append(out, n)
+	}
+	return out
+}
 
 // Options configures a client/transport. The zero value is secure: guard on, no
 // relaxations. Fields left zero fall back to the environment, then to the secure
@@ -218,6 +264,14 @@ func (g *guard) checkIP(ip net.IP) error {
 	if ip == nil {
 		return fmt.Errorf("%w: nil IP", ErrBlockedAddress)
 	}
+	// NAT64 / IPv4-embedded IPv6 (RFC 6052): a 16-byte address in 64:ff9b::/96
+	// carries a real IPv4 in its trailing 4 bytes. Unwrap and recurse so
+	// 64:ff9b::a9fe:a9fe is judged as 169.254.169.254 (metadata) and
+	// 64:ff9b::7f00:1 as 127.0.0.1 (loopback) — not slipped past as a plain
+	// public IPv6 in a DNS64/NAT64 cluster. Done BEFORE To4()/family checks.
+	if v4 := embeddedNAT64(ip); v4 != nil {
+		return g.checkIP(v4)
+	}
 	// Normalize so an IPv4-mapped IPv6 address (::ffff:127.0.0.1) is judged as
 	// the IPv4 it really is, not slipped past the v4 checks.
 	if v4 := ip.To4(); v4 != nil {
@@ -231,6 +285,12 @@ func (g *guard) checkIP(ip net.IP) error {
 	}
 	if ip.IsUnspecified() {
 		return fmt.Errorf("%w: %s is the unspecified address", ErrBlockedAddress, ip)
+	}
+
+	// Built-in reserved ranges (CGNAT etc.) denied unconditionally — they are
+	// not dev loopbacks, so AllowPrivate must not open them.
+	if cidrContains(builtinDeniedCIDRs, ip) {
+		return fmt.Errorf("%w: %s is in a reserved/denied range", ErrBlockedAddress, ip)
 	}
 
 	if g.extraDenied(ip) {
@@ -268,7 +328,12 @@ func (g *guard) checkIP(ip net.IP) error {
 
 // extraDenied reports whether ip falls in any configured extra-deny CIDR.
 func (g *guard) extraDenied(ip net.IP) bool {
-	for _, n := range g.extraDeny {
+	return cidrContains(g.extraDeny, ip)
+}
+
+// cidrContains reports whether ip falls in any of the given CIDRs.
+func cidrContains(nets []*net.IPNet, ip net.IP) bool {
+	for _, n := range nets {
 		if n.Contains(ip) {
 			return true
 		}
@@ -276,9 +341,31 @@ func (g *guard) extraDenied(ip net.IP) bool {
 	return false
 }
 
-// checkHost enforces the optional allowlist on the connection's host (the host
-// portion of the dialed address, lowercased). With no allowlist, any host is
-// permitted (still subject to checkIP).
+// embeddedNAT64 returns the IPv4 embedded in a 64:ff9b::/96 (RFC 6052) address,
+// or nil when ip is not a NAT64 well-known-prefix address. The match is on the
+// 16-byte form: bytes 0..11 equal the prefix (00 64 ff 9b then 8 zero bytes) and
+// bytes 12..15 are the embedded IPv4. An IPv4-mapped (::ffff:) or plain IPv4
+// address is NOT a NAT64 address and returns nil (To4() != nil rules it out).
+func embeddedNAT64(ip net.IP) net.IP {
+	v6 := ip.To16()
+	if v6 == nil || ip.To4() != nil {
+		return nil
+	}
+	for i := 0; i < len(nat64Prefix); i++ {
+		if v6[i] != nat64Prefix[i] {
+			return nil
+		}
+	}
+	return net.IPv4(v6[12], v6[13], v6[14], v6[15])
+}
+
+// checkHost enforces the optional hostname allowlist. It is called at the
+// REQUEST layer (the guardedRoundTripper on the initial request and
+// checkRedirect on every hop) against req.URL.Hostname() — NOT from the dialer
+// Control hook, which only ever sees a resolved IP literal that could never
+// match a hostname (the bug this fix closes). The IP guard still runs at
+// connect time on every dial; the allowlist is an additional name-level
+// restriction. With no allowlist configured, any host is permitted.
 func (g *guard) checkHost(host string) error {
 	if g.allowAll || len(g.allowHosts) == 0 {
 		return nil
@@ -307,9 +394,6 @@ func (g *guard) control(_, address string, _ syscall.RawConn) error {
 		// Control always receives host:port; treat a parse failure as the whole
 		// string being the host.
 		host = address
-	}
-	if err := g.checkHost(host); err != nil {
-		return err
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -353,13 +437,26 @@ func NewTransport(opts ...Option) (*http.Transport, error) {
 	// DialTLSContext forces the transport to use DialContext (then wrap TLS
 	// itself), so HTTPS connections are guarded too.
 	base.DialTLSContext = nil
+	// Disable proxy support: http.DefaultTransport inherits Proxy =
+	// ProxyFromEnvironment, so an HTTP(S)_PROXY could route a blocked target via
+	// a proxy the connect-time dialer guard never inspects (the dialer would only
+	// see the proxy's IP, not the real destination). Guarded outbound traffic
+	// goes direct; outbound proxies are deliberately NOT supported.
+	base.Proxy = nil
 	return base, nil
 }
 
 // NewClient builds an *http.Client whose transport is guarded (NewTransport) and
 // whose CheckRedirect re-applies the guard on every hop and caps the chain.
+// When an AllowHosts allowlist is configured it is enforced at the REQUEST layer
+// (on req.URL.Hostname()): the transport is wrapped to check the initial request
+// and CheckRedirect checks each hop.
 func NewClient(opts ...Option) (*http.Client, error) {
 	o, err := buildOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+	g, err := newGuard(o)
 	if err != nil {
 		return nil, err
 	}
@@ -368,10 +465,25 @@ func NewClient(opts ...Option) (*http.Client, error) {
 		return nil, err
 	}
 	return &http.Client{
-		Transport:     tr,
+		Transport:     hostGuarded(g, tr),
 		Timeout:       o.Timeout,
-		CheckRedirect: checkRedirect(o.MaxRedirects),
+		CheckRedirect: checkRedirect(g, o.MaxRedirects),
 	}, nil
+}
+
+// hostGuarded wraps rt so the optional hostname allowlist is enforced on the
+// outgoing request's URL host before the dial. When no allowlist is configured
+// it returns rt unwrapped (zero overhead, identical behavior to before).
+func hostGuarded(g *guard, rt http.RoundTripper) http.RoundTripper {
+	if len(g.allowHosts) == 0 {
+		return rt
+	}
+	return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if err := g.checkHost(r.URL.Hostname()); err != nil {
+			return nil, err
+		}
+		return rt.RoundTrip(r)
+	})
 }
 
 // NewClientOrDefault is the non-erroring form of [NewClient] for connector
@@ -394,16 +506,19 @@ func NewClientOrDefault(opts ...Option) *http.Client {
 	return c
 }
 
-// GuardedBase returns a guarded *http.Transport suitable for use as the `base`
-// RoundTripper of a credential-injecting transport (the connectors'
-// bearerTransport pattern). On a configuration error it logs and falls back to a
-// guarded transport with default options so a connector constructor that cannot
-// return an error still gets a guarded dial rather than the raw
-// http.DefaultTransport.
+// GuardedBase returns a guarded RoundTripper suitable for use as the `base` of a
+// credential-injecting transport (the connectors' bearerTransport pattern). The
+// connect-time IP guard always runs; when an AllowHosts allowlist is configured
+// it is additionally enforced at the request layer on req.URL.Hostname(). On a
+// configuration error it logs and falls back to a guarded transport with default
+// options so a connector constructor that cannot return an error still gets a
+// guarded dial rather than the raw http.DefaultTransport.
 func GuardedBase(opts ...Option) http.RoundTripper {
+	o, oErr := buildOptions(opts...)
 	tr, err := NewTransport(opts...)
-	if err != nil {
-		slog.Default().Error("safehttp: falling back to default-option guarded transport", "err", err)
+	if err != nil || oErr != nil {
+		slog.Default().Error("safehttp: falling back to default-option guarded transport", "err", errors.Join(oErr, err))
+		o = Options{}
 		tr, err = NewTransport()
 		if err != nil {
 			// Cannot happen with no options; if it somehow does, fail closed by
@@ -413,14 +528,23 @@ func GuardedBase(opts ...Option) http.RoundTripper {
 			})
 		}
 	}
-	return tr
+	// Apply the hostname allowlist (if any) at the request layer; a bad config
+	// already degraded to default options above (no allowlist), so newGuard here
+	// cannot fail.
+	g, gErr := newGuard(o)
+	if gErr != nil {
+		return tr
+	}
+	return hostGuarded(g, tr)
 }
 
-// checkRedirect builds an http.Client.CheckRedirect that caps hops. The guard
-// itself runs at dial time on every hop's connection, so this function's job is
-// the hop cap and refusing a redirect to a non-http(s) scheme; the IP/host re-
-// check happens unconditionally in control when the next hop connects.
-func checkRedirect(max int) func(req *http.Request, via []*http.Request) error {
+// checkRedirect builds an http.Client.CheckRedirect that caps hops. The IP
+// guard runs at dial time on every hop's connection, so this function's job is
+// the hop cap, refusing a redirect to a non-http(s) scheme, and re-applying the
+// optional hostname allowlist to each hop's target (the dialer only ever sees a
+// resolved IP and so cannot enforce a hostname). The IP re-check happens
+// unconditionally in control when the next hop connects.
+func checkRedirect(g *guard, max int) func(req *http.Request, via []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if max < 0 {
 			return http.ErrUseLastResponse
@@ -431,6 +555,9 @@ func checkRedirect(max int) func(req *http.Request, via []*http.Request) error {
 		if req.URL != nil {
 			if s := strings.ToLower(req.URL.Scheme); s != "http" && s != "https" {
 				return fmt.Errorf("%w: redirect to %q", ErrBlockedScheme, req.URL.Scheme)
+			}
+			if err := g.checkHost(req.URL.Hostname()); err != nil {
+				return err
 			}
 		}
 		return nil

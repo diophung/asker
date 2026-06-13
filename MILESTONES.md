@@ -12,7 +12,7 @@ passing tests before the next begins. Source of truth for scope:
 | M3 | Media pipeline | **Complete** (2026-06-13; e2e green locally — spoken phrase → video@timestamp + text→image) |
 | M4 | Production deployment | **Complete** (2026-06-13; chart deploys + kind chaos exit criterion runs in CI — see PROGRESS.md) |
 | M5 | Scale & SLO verification | **Complete** (2026-06-13; SLO metrics + Grafana dashboards/alerts + k6 load/soak tooling; full-scale load + 2h soak run in CI — see PROGRESS.md) |
-| M6 | Hardening | Not started |
+| M6 | Hardening | **Complete** (2026-06-13; security review executed, SSRF guard + GDPR delete + quotas + Vault-KEK + admin API; ship-review signed off — see docs/ship-review.md) |
 
 ## M0 — Foundations (skeleton that runs)
 

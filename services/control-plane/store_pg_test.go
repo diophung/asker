@@ -133,7 +133,7 @@ func TestPGStoreIntegration(t *testing.T) {
 			DisplayName: "work mail",
 			ConfigJSON:  []byte(`{"label":"INBOX"}`),
 			Status:      "ACTIVE",
-		})
+		}, 0)
 		if err != nil {
 			t.Fatalf("CreateConnectorInstance: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestPGStoreIntegration(t *testing.T) {
 			ConnectorID: "upload",
 			ConfigJSON:  []byte("{}"),
 			Status:      "ACTIVE",
-		})
+		}, 0)
 		if err != nil {
 			t.Fatalf("create for unregistered tenant: %v", err)
 		}
@@ -439,7 +439,7 @@ func TestPGStoreListAllIntegration(t *testing.T) {
 			ConnectorID: connector,
 			ConfigJSON:  []byte("{}"),
 			Status:      "ACTIVE",
-		})
+		}, 0)
 		if err != nil {
 			t.Fatalf("CreateConnectorInstance(%s/%s): %v", tenant, connector, err)
 		}

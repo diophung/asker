@@ -4,14 +4,39 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	controlplanev1 "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
+
+// adminSubjectMetadataKey carries the VERIFIED operator identity (the JWT "sub")
+// the gateway derived from verified claims and forwarded so admin audit logs and
+// DeleteReports name the actual operator instead of a literal "admin" (finding
+// M6-#6). It mirrors the gateway's constant; never a token, never request input.
+const adminSubjectMetadataKey = "x-asker-admin-subject"
+
+// adminActor builds the audit actor string for an admin RPC: "admin:<subject>"
+// where <subject> is the verified operator identity forwarded by the gateway in
+// adminSubjectMetadataKey. A missing/blank value (a direct internal caller that
+// did not set it) records "admin:unknown" so the audit line is never silently
+// attributed to a bare "admin". The value is metadata, NOT a token.
+func adminActor(ctx context.Context) string {
+	subject := "unknown"
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if vals := md.Get(adminSubjectMetadataKey); len(vals) > 0 {
+			if s := strings.TrimSpace(vals[0]); s != "" {
+				subject = s
+			}
+		}
+	}
+	return "admin:" + subject
+}
 
 // defaultAdminListLimit / maxAdminListLimit bound AdminService.ListTenants
 // paging so an operator call cannot ask for an unbounded scan.
@@ -58,7 +83,7 @@ func (a *adminServer) ListTenants(ctx context.Context, req *controlplanev1.ListT
 	if limit > maxAdminListLimit {
 		limit = maxAdminListLimit
 	}
-	a.logger.InfoContext(ctx, "admin: ListTenants", "limit", limit, "after", req.GetPageToken())
+	a.logger.InfoContext(ctx, "admin: ListTenants", "actor", adminActor(ctx), "limit", limit, "after", req.GetPageToken())
 	usages, err := a.store.ListTenants(ctx, req.GetPageToken(), limit)
 	if err != nil {
 		return nil, a.storeErr(ctx, "ListTenants", err)
@@ -81,7 +106,7 @@ func (a *adminServer) GetTenantUsage(ctx context.Context, req *controlplanev1.Ge
 	if err != nil {
 		return nil, err
 	}
-	a.logger.InfoContext(ctx, "admin: GetTenantUsage", "target_tenant", tenantID)
+	a.logger.InfoContext(ctx, "admin: GetTenantUsage", "actor", adminActor(ctx), "target_tenant", tenantID)
 	u, err := a.store.GetTenantUsage(ctx, tenantID)
 	if err != nil {
 		return nil, a.storeErr(ctx, "GetTenantUsage", err)
@@ -99,7 +124,7 @@ func (a *adminServer) SuspendTenant(ctx context.Context, req *controlplanev1.Sus
 		newStatus = controlplanev1.ConnectorStatus_ACTIVE.String()
 	}
 	a.logger.InfoContext(ctx, "admin: SuspendTenant",
-		"target_tenant", tenantID, "suspended", req.GetSuspended())
+		"actor", adminActor(ctx), "target_tenant", tenantID, "suspended", req.GetSuspended())
 	n, err := a.store.SetTenantConnectorStatus(ctx, tenantID, newStatus)
 	if err != nil {
 		return nil, a.storeErr(ctx, "SuspendTenant", err)
@@ -112,8 +137,10 @@ func (a *adminServer) AdminDeleteTenant(ctx context.Context, req *controlplanev1
 	if err != nil {
 		return nil, err
 	}
-	a.logger.WarnContext(ctx, "admin: AdminDeleteTenant (irreversible erasure)", "target_tenant", tenantID)
-	report, err := a.deleter.cascadeDelete(ctx, tenantID, "admin")
+	actor := adminActor(ctx)
+	a.logger.WarnContext(ctx, "admin: AdminDeleteTenant (irreversible erasure)",
+		"target_tenant", tenantID, "actor", actor)
+	report, err := a.deleter.cascadeDelete(ctx, tenantID, actor)
 	if err != nil {
 		return nil, err
 	}

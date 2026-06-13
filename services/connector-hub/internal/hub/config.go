@@ -14,6 +14,7 @@ package hub
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/asker/asker/platform/config"
@@ -101,7 +102,16 @@ func (c Config) validate() error {
 }
 
 // IsProd reports whether the deployment is marked production (the KEK
-// fail-closed guard, ADR-015).
+// fail-closed guard, ADR-015). The marker is NORMALIZED (trim + lowercase)
+// before comparison so a casing/whitespace typo ("Production", "prod ") cannot
+// silently disable the guard (finding M6-#9); the recognized production markers
+// are {prod, production, staging}, identical to the control plane's isProdEnv so
+// the two services make the same KEK choice.
 func (c Config) IsProd() bool {
-	return c.Env == "production" || c.Env == "prod"
+	switch strings.ToLower(strings.TrimSpace(c.Env)) {
+	case "prod", "production", "staging":
+		return true
+	default:
+		return false
+	}
 }

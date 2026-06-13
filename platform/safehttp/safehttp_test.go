@@ -55,6 +55,16 @@ func TestCheckIP_Blocks(t *testing.T) {
 		{"multicast v6", "ff02::1"},
 		{"ipv4-mapped loopback", "::ffff:127.0.0.1"},
 		{"ipv4-mapped metadata", "::ffff:169.254.169.254"},
+		// NAT64 / RFC 6052 64:ff9b::/96 embedded-IPv4 bypass (finding #1): the
+		// embedded v4 must be unwrapped and judged, not slipped past as public v6.
+		{"nat64 metadata", "64:ff9b::a9fe:a9fe"}, // 169.254.169.254
+		{"nat64 loopback", "64:ff9b::7f00:1"},    // 127.0.0.1
+		{"nat64 rfc1918", "64:ff9b::a00:1"},      // 10.0.0.1
+		// CGNAT + reserved ranges denied unconditionally (finding #2).
+		{"cgnat 100.64/10", "100.64.0.1"},
+		{"reserved 240/4", "240.0.0.1"},
+		{"benchmarking 198.18/15", "198.18.0.1"},
+		{"protocol 192.0.0/24", "192.0.0.1"},
 	}
 	for _, tc := range blocked {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,15 +172,14 @@ func TestControl_NonIPHostFailsClosed(t *testing.T) {
 }
 
 func TestExtraDenyCIDR(t *testing.T) {
-	g := strictGuard(t, WithExtraDenyCIDRs("100.64.0.0/16"))
-	// In the denied cluster range -> blocked even though it is a public-ish CGNAT
-	// address (not caught by IsPrivate).
-	if err := g.checkIP(net.ParseIP("100.64.1.1")); !errors.Is(err, ErrBlockedAddress) {
-		t.Fatalf("checkIP(100.64.1.1) = %v, want blocked by extra CIDR", err)
+	g := strictGuard(t, WithExtraDenyCIDRs("203.0.113.0/24"))
+	// In the configured extra-deny cluster range -> blocked.
+	if err := g.checkIP(net.ParseIP("203.0.113.5")); !errors.Is(err, ErrBlockedAddress) {
+		t.Fatalf("checkIP(203.0.113.5) = %v, want blocked by extra CIDR", err)
 	}
 	// Outside the denied range and public -> allowed.
-	if err := g.checkIP(net.ParseIP("100.65.0.1")); err != nil {
-		t.Fatalf("checkIP(100.65.0.1) = %v, want allowed", err)
+	if err := g.checkIP(net.ParseIP("198.51.100.7")); err != nil {
+		t.Fatalf("checkIP(198.51.100.7) = %v, want allowed", err)
 	}
 }
 
@@ -202,6 +211,70 @@ func TestAllowHosts(t *testing.T) {
 	g2 := strictGuard(t)
 	if err := g2.checkHost("anything.example.org"); err != nil {
 		t.Fatalf("checkHost with no allowlist = %v, want allowed", err)
+	}
+}
+
+// TestAllowHosts_EnforcedAtRequestLayer proves the allowlist (finding #3) is now
+// FUNCTIONAL: a client built WithAllowHosts refuses a request to a host not on
+// the list at the request layer (the dialer only ever sees a resolved IP and so
+// could never match a hostname — the bug this fix closes). The allowed host is
+// permitted through the host check (it then fails later at dial/DNS, which is
+// fine — we only assert the host gate's verdict here).
+func TestAllowHosts_EnforcedAtRequestLayer(t *testing.T) {
+	// Allowlist a host under the reserved .invalid TLD (RFC 6761): it never
+	// resolves, so the request reaches the host gate but cannot actually dial.
+	const allowed = "allowed.invalid"
+	client, err := NewClient(WithAllowHosts(allowed))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	// A disallowed host is refused with ErrBlockedAddress BEFORE any dial.
+	_, err = client.Get("http://blocked.invalid/")
+	if !errors.Is(err, ErrBlockedAddress) {
+		t.Fatalf("request to disallowed host = %v, want ErrBlockedAddress", err)
+	}
+	if !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("error = %v, want it to mention the allowlist", err)
+	}
+	// The allowlisted host passes the host gate (it then fails at DNS resolution,
+	// which is NOT a host-allowlist rejection — we assert only that the allowlist
+	// did not reject it).
+	_, err = client.Get("http://" + allowed + "/")
+	if errors.Is(err, ErrBlockedAddress) && strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("allowlisted host was blocked by the allowlist: %v", err)
+	}
+}
+
+// TestCGNATAndNAT64BlockedEvenUnderAllowPrivate proves the unconditional denies
+// (findings #1 and #2) survive AllowPrivate: CGNAT is never a dev loopback, and
+// a NAT64-embedded internal IP must stay blocked even in a relaxed dev client.
+func TestCGNATAndNAT64BlockedEvenUnderAllowPrivate(t *testing.T) {
+	g := strictGuard(t, WithAllowPrivate(true))
+	stillBlocked := []string{
+		"100.64.0.1",         // CGNAT
+		"240.0.0.1",          // reserved
+		"198.18.0.1",         // benchmarking
+		"64:ff9b::a9fe:a9fe", // NAT64-embedded metadata IP (always denied)
+		// A NAT64-embedded RFC1918 (64:ff9b::a00:1 = 10.0.0.1) is NOT listed:
+		// under AllowPrivate it correctly unwraps to an allowed dev-private IP.
+	}
+	for _, ipStr := range stillBlocked {
+		if err := g.checkIP(net.ParseIP(ipStr)); !errors.Is(err, ErrBlockedAddress) {
+			t.Fatalf("AllowPrivate checkIP(%s) = %v, want still blocked", ipStr, err)
+		}
+	}
+}
+
+// TestNewTransport_DisablesProxy proves finding #4: the guarded transport does
+// not inherit http.DefaultTransport.Proxy, so an HTTP(S)_PROXY cannot tunnel a
+// blocked target past the connect-time dialer guard.
+func TestNewTransport_DisablesProxy(t *testing.T) {
+	tr, err := NewTransport()
+	if err != nil {
+		t.Fatalf("NewTransport: %v", err)
+	}
+	if tr.Proxy != nil {
+		t.Fatal("guarded transport Proxy is non-nil; outbound proxies must be disabled")
 	}
 }
 
@@ -264,7 +337,7 @@ func TestRedirect_ToBlockedHostIsRefused(t *testing.T) {
 }
 
 func TestCheckRedirect_HopCap(t *testing.T) {
-	cr := checkRedirect(2)
+	cr := checkRedirect(strictGuard(t), 2)
 	// 0 and 1 prior hops are fine.
 	if err := cr(req("http://a/"), make([]*http.Request, 0)); err != nil {
 		t.Fatalf("0 hops = %v, want nil", err)
@@ -279,7 +352,7 @@ func TestCheckRedirect_HopCap(t *testing.T) {
 }
 
 func TestCheckRedirect_BlocksNonHTTPScheme(t *testing.T) {
-	cr := checkRedirect(5)
+	cr := checkRedirect(strictGuard(t), 5)
 	if err := cr(req("file:///etc/passwd"), nil); !errors.Is(err, ErrBlockedScheme) {
 		t.Fatalf("file:// redirect = %v, want ErrBlockedScheme", err)
 	}

@@ -88,8 +88,9 @@ const (
 )
 
 // newPreAuthLimiter builds the throttle. perIPPerMinute/globalPerSecond <= 0
-// disable that dimension. trustProxy uses X-Forwarded-For's left-most hop as
-// the client IP (only safe behind a trusted proxy that sets it).
+// disable that dimension. trustProxy uses X-Forwarded-For's RIGHT-most hop (the
+// address the trusted proxy appended, not an attacker-spoofable left hop) as the
+// client IP (only safe behind a trusted proxy that sets it).
 func newPreAuthLimiter(perIPPerMinute, globalPerSecond, globalBurst int, trustProxy bool) *preAuthLimiter {
 	return newPreAuthLimiterClock(perIPPerMinute, globalPerSecond, globalBurst, trustProxy, time.Now)
 }
@@ -168,15 +169,27 @@ func (l *preAuthLimiter) sweepLocked(now time.Time) {
 	}
 }
 
-// clientIP extracts the source IP: the TCP peer by default, or the left-most
-// X-Forwarded-For hop when trustProxy is set (only behind a trusted proxy).
+// clientIP extracts the source IP for throttling: the TCP peer by default, or —
+// when trustProxy is set (only behind a trusted reverse proxy) — the RIGHT-most
+// X-Forwarded-For hop.
+//
+// The right-most hop is the address the TRUSTED proxy itself appended; every hop
+// to its LEFT is attacker-supplied and spoofable, so keying the throttle on the
+// left-most hop (the prior bug, finding M6-#11) would let one attacker mint
+// unlimited synthetic client IPs and evade the per-IP bucket entirely. Taking
+// the right-most appended hop ties the bucket to a value the attacker cannot
+// forge through the trusted proxy. A single-proxy deployment is assumed; a chain
+// of N trusted proxies would index the (N)th-from-right hop instead.
 func (l *preAuthLimiter) clientIP(r *http.Request) string {
 	if l.trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if i := indexByte(xff, ','); i >= 0 {
-				return trimSpace(xff[:i])
+			if i := lastIndexByte(xff, ','); i >= 0 {
+				if hop := trimSpace(xff[i+1:]); hop != "" {
+					return hop
+				}
+			} else if hop := trimSpace(xff); hop != "" {
+				return hop
 			}
-			return trimSpace(xff)
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -191,9 +204,10 @@ func tooMany(w http.ResponseWriter) {
 	writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 }
 
-// small dependency-free helpers (avoid importing strings just for two calls).
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
+// small dependency-free helpers (avoid importing strings just for a couple of
+// calls). lastIndexByte returns the index of the last b in s, or -1.
+func lastIndexByte(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == b {
 			return i
 		}

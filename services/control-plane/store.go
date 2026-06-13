@@ -14,6 +14,13 @@ import (
 // the control plane as a cross-tenant existence oracle.
 var ErrNotFound = errors.New("control-plane: not found")
 
+// ErrQuotaExceeded is returned by CreateConnectorInstance when the per-tenant
+// connector-instance cap would be exceeded. The cap is enforced ATOMICALLY in
+// the insert (an INSERT .. SELECT gated on the current count) so concurrent
+// creates cannot race past it (the check-then-insert TOCTOU, finding M6-#8).
+// The gRPC layer maps it to codes.ResourceExhausted.
+var ErrQuotaExceeded = errors.New("control-plane: connector instance quota exceeded")
+
 // Tenant is a registered tenant.
 type Tenant struct {
 	ID        tenancy.TenantID
@@ -79,7 +86,14 @@ type Store interface {
 	// returns it with ID and timestamps assigned. It implicitly ensures the
 	// tenant row exists (the tenant identity always originates from a
 	// verified JWT, so registering it here is exactly EnsureTenant).
-	CreateConnectorInstance(ctx context.Context, inst ConnectorInstance) (ConnectorInstance, error)
+	//
+	// maxInstances ATOMICALLY caps how many instances the tenant may hold: when
+	// > 0, the insert proceeds only if the tenant currently has fewer than
+	// maxInstances instances, evaluated in the SAME transaction/critical section
+	// as the insert so concurrent creates cannot exceed the cap (finding M6-#8).
+	// At or over the cap it returns ErrQuotaExceeded and writes nothing. A
+	// maxInstances <= 0 disables the cap.
+	CreateConnectorInstance(ctx context.Context, inst ConnectorInstance, maxInstances int) (ConnectorInstance, error)
 
 	// ListConnectorInstances returns the tenant's instances ordered by
 	// creation time (then ID, for a stable order).

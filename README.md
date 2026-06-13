@@ -44,11 +44,16 @@ corpora. Vespa streaming mode scopes every query to a single tenant's document g
 shared `platform/tenancy` library is the only way to construct a data-access context. Details
 in [docs/architecture.md](docs/architecture.md).
 
-**Current state (M1):** the vertical slice runs end to end in the dev stack — Gmail and
-upload connectors → connector hub → Kafka → ingest/chunk → embed (TEI) → Vespa streaming
-index → query service with hybrid search and a React web UI with snippets, highlights, and
-filters. Tombstones/deletes propagate. Connector breadth, media, Helm/K8s, and scale
-verification arrive in later milestones — see [MILESTONES.md](MILESTONES.md).
+**Current state (M0–M6 complete):** the full V1 is built. The vertical slice (Gmail/upload
+connectors → connector hub → Kafka → ingest/chunk → embed → Vespa streaming index → query +
+React UI) runs end to end; 13 source connectors with a contract-test harness (M2); the media
+pipeline (CLIP/OCR/Whisper, spoken-phrase → video@timestamp) (M3); a cloud-agnostic Helm chart
+with a kind chaos test in CI (M4); SLO metrics + Grafana dashboards + k6 load/soak tooling (M5);
+and the security hardening — app-layer SSRF guard, per-tenant GDPR delete cascade with crypto-shred,
+quotas, a prod fail-closed Vault KEK, an admin API, and the [ship review](docs/ship-review.md) (M6).
+The full-scale load/soak, kind chaos, and NetworkPolicy enforcement run in CI (the 8GB dev VM can't
+host them). See [MILESTONES.md](MILESTONES.md), [PROGRESS.md](PROGRESS.md), and the
+[threat model](docs/security.md).
 
 ## Quickstart
 
@@ -169,6 +174,8 @@ asker/
 - [PROGRESS.md](PROGRESS.md) — session-by-session log (read this first each session)
 - [docs/architecture.md](docs/architecture.md) — system architecture and technology decisions
 - [docs/capacity.md](docs/capacity.md) — scale model (finalized in M5)
-- [docs/security.md](docs/security.md) — tenancy model and dev-vs-prod security gaps
-- [docs/adr/](docs/adr/) — architecture decision records
-- [docs/runbooks/](docs/runbooks/) — operational runbooks (written in M6)
+- [docs/security.md](docs/security.md) — threat model, authz matrix, SSRF & GDPR guarantees (M6)
+- [docs/ship-review.md](docs/ship-review.md) — the M6 exit-criterion sign-off (milestone status, SLO posture, accepted risks, deploy-from-docs checklist)
+- [docs/adr/](docs/adr/) — architecture decision records (ADR-001 … ADR-017)
+- [docs/runbooks/](docs/runbooks/) — operational runbooks, incl. the [top-10 failure modes](docs/runbooks/top-10-failure-modes.md) (M6)
+- [deploy/k8s-docs.md](deploy/k8s-docs.md) — deploy to Kubernetes (Helm umbrella chart, M4)

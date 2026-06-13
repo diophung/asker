@@ -125,26 +125,22 @@ func (s *server) CreateConnectorInstance(ctx context.Context, req *controlplanev
 	}
 
 	// Per-tenant connector-instance quota (M6 abuse control): cap how many
-	// instances one tenant can create, so a single tenant cannot spawn
-	// unbounded scheduler goroutines in the hub. <= 0 disables the cap.
-	if s.cfg.maxConnectorInstances > 0 {
-		n, err := s.store.CountConnectorInstances(ctx, tc.TenantID())
-		if err != nil {
-			return nil, s.rpcErr(ctx, "CreateConnectorInstance", tc, err)
-		}
-		if n >= int64(s.cfg.maxConnectorInstances) {
-			return nil, status.Errorf(codes.ResourceExhausted,
-				"connector instance quota reached (%d); delete an existing connector first", s.cfg.maxConnectorInstances)
-		}
-	}
-
+	// instances one tenant can create, so a single tenant cannot spawn unbounded
+	// scheduler goroutines in the hub. The cap is enforced ATOMICALLY inside the
+	// store create (a gated INSERT .. SELECT under a per-tenant lock), NOT a
+	// check-then-insert here, so concurrent creates cannot race past it (finding
+	// M6-#8). <= 0 disables the cap. ErrQuotaExceeded -> RESOURCE_EXHAUSTED.
 	inst, err := s.store.CreateConnectorInstance(ctx, ConnectorInstance{
 		TenantID:    tc.TenantID(),
 		ConnectorID: req.GetConnectorId(),
 		DisplayName: req.GetDisplayName(),
 		ConfigJSON:  configJSON,
 		Status:      controlplanev1.ConnectorStatus_ACTIVE.String(),
-	})
+	}, s.cfg.maxConnectorInstances)
+	if errors.Is(err, ErrQuotaExceeded) {
+		return nil, status.Errorf(codes.ResourceExhausted,
+			"connector instance quota reached (%d); delete an existing connector first", s.cfg.maxConnectorInstances)
+	}
 	if err != nil {
 		return nil, s.rpcErr(ctx, "CreateConnectorInstance", tc, err)
 	}

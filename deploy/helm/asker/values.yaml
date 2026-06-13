@@ -667,12 +667,15 @@ services:
     config:
       controlPlaneAddr: ":9100"
       controlPlaneHealthAddr: ":9101"
-    # [WORKLOADS wave] control-plane reads ONLY DATABASE_URL (Postgres token vault)
-    # from the shared Secret. secretKeys scopes it via explicit secretKeyRef (no
-    # MinIO/Keycloak creds it never uses; ADR-014 §7).
+    # [WORKLOADS wave] control-plane reads DATABASE_URL (Postgres token vault) and,
+    # since M6, the MinIO creds — the GDPR per-tenant delete cascade (delete.go/
+    # purge.go) calls blob.DeletePrefix to purge a deleted tenant's blobs. secretKeys
+    # scopes it to exactly those (no Keycloak admin creds; ADR-014 §7).
     useSecret: true
     secretKeys:
       - DATABASE_URL
+      - MINIO_ACCESS_KEY
+      - MINIO_SECRET_KEY
     # [WORKLOADS wave] Shared KEK for the token vault's envelope crypto (ADR-013).
     # control-plane uses a Postgres DEK store (no file DEK writes), so it only needs
     # to LOAD or self-create the KEK file. With secretName empty (default) the chart

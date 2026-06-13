@@ -202,3 +202,28 @@ jobs:
       - name: Dump compose logs
         if: always()
         run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail=500 || true
+
+  e2e-gdpr:
+    name: e2e-gdpr
+    runs-on: ubuntu-latest
+    needs: [build]
+    timeout-minutes: 40
+    env:
+      # Small embedding model for CI speed (mirrors the other e2e jobs).
+      TEI_MODEL_ID: BAAI/bge-small-en-v1.5
+      EMBEDDING_DIM: "384"
+      CLIP_DIM: "512"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the dev stack
+        run: make dev-up
+      # The M6 GDPR per-tenant delete drill: seed a tenant's docs/blobs/token,
+      # DELETE /v1/me/data, assert the cascade purged every store (search 0 hits,
+      # blob prefix gone, token gone, DEK crypto-shredded) AND a second tenant is
+      # untouched. Destructive by design (erases its test tenant), so it runs in a
+      # dedicated job on a fresh stack — not alongside the leakage/m1 suites.
+      - name: Run M6 GDPR delete drill
+        run: make e2e-smoke && make e2e-gdpr
+      - name: Dump compose logs
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail=500 || true

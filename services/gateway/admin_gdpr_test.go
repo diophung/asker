@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc/metadata"
 )
 
 // adminClaims returns a base claim set carrying the realm admin role.
@@ -149,5 +152,44 @@ func TestIsAdminClaimShapes(t *testing.T) {
 				t.Errorf("isAdmin = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// TestAdminSubjectFromClaims proves the operator audit identity (finding M6-#6)
+// is read from VERIFIED claims: the "sub" claim is preferred, then "email", and
+// a missing/blank identity falls back to "unknown" — never a token.
+func TestAdminSubjectFromClaims(t *testing.T) {
+	cases := []struct {
+		name   string
+		claims map[string]any
+		want   string
+	}{
+		{"sub preferred", map[string]any{"sub": "op-1", "email": "op@x.com"}, "op-1"},
+		{"email fallback", map[string]any{"email": "op@x.com"}, "op@x.com"},
+		{"blank sub falls through to email", map[string]any{"sub": "  ", "email": "op@x.com"}, "op@x.com"},
+		{"none", map[string]any{}, "unknown"},
+		{"nil", nil, "unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := adminSubject(c.claims); got != c.want {
+				t.Errorf("adminSubject = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestWithAdminSubjectAttachesMetadata proves the gateway forwards the verified
+// operator subject as outgoing gRPC metadata under x-asker-admin-subject so the
+// control plane can attribute the admin action.
+func TestWithAdminSubjectAttachesMetadata(t *testing.T) {
+	ctx := context.WithValue(context.Background(), claimsContextKey, map[string]any{"sub": "operator-42"})
+	out := withAdminSubject(ctx)
+	md, ok := metadata.FromOutgoingContext(out)
+	if !ok {
+		t.Fatal("no outgoing metadata attached")
+	}
+	if got := md.Get(adminSubjectMetadataKey); len(got) != 1 || got[0] != "operator-42" {
+		t.Fatalf("%s metadata = %v, want [operator-42]", adminSubjectMetadataKey, got)
 	}
 }

@@ -17,6 +17,49 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — M6 hardening (complete) — V1 BUILD COMPLETE (M0–M6)
+
+- Done: **M6 complete — the security review was executed, the hardening landed, and the ship-review
+  is signed off (docs/ship-review.md). M0–M6 are all complete; Asker V1 is built.** Done as: a
+  pre-build adversarial security audit (28 agents, skeptic-verified: 10 confirmed / 12 refuted) →
+  a 2-builder hardening vertical → a focused review of the new security code (22 agents: 13
+  confirmed / 4 refuted) → all 13 fixed → docs + ship-review.
+  - **SSRF (the named deliverable; was HIGH):** new `platform/safehttp` — an SSRF-safe HTTP client
+    whose `net.Dialer.Control` decides on the RESOLVED IP at connect time (closing DNS-rebinding /
+    TOCTOU), re-checks every redirect hop, disables proxy-env tunnelling, and blocks loopback/
+    link-local/IMDS/RFC1918/ULA/unspecified PLUS NAT64 (`64:ff9b::/96`) and CGNAT (`100.64/10`) +
+    IETF-reserved (the close-out review caught the NAT64/CGNAT holes). Wired into all 12 connector
+    fetchers (AuthNone via `NewClientOrDefault`/`NewTransport`; the 8 OAuth connectors via
+    `GuardedBase` under the bearer transport — so a `base_url` override can't ship the decrypted
+    token to an internal host). Defense-in-depth with the M4 NetworkPolicy egress.
+  - **GDPR per-tenant delete cascade (greenfield):** control-plane `DeleteTenant` + gateway
+    `DELETE /v1/me/data` (caller's own tenant) — Postgres rows + **crypto-shred** of `tenant_deks`
+    (destroying the DEK shreds all the tenant's ciphertext), Vespa group delete, MinIO prefix purge,
+    Redis purge, an audit line + verification. It **suspends the tenant's connectors first**
+    (re-ingest fence) and is idempotent. `tools/e2e/gdpr-delete.sh` proves the tenant is gone and a
+    second tenant is untouched. (Residual: a per-tenant Kafka tombstone for in-flight records is a
+    documented follow-up.)
+  - **Quotas/DoS:** atomic per-tenant connector-instance cap (no TOCTOU), a gateway **pre-auth
+    throttle** in front of JWT verify (the post-auth per-tenant limiter can't stop an unauth flood),
+    JWKS bounding, query/upload caps.
+  - **Vault-KEK wiring (was MEDIUM):** control-plane + connector-hub select `NewVaultKEK` when
+    `VAULT_ADDR` is set, else the file-KEK, with a **fail-closed prod guard** (`ASKER_ENV=production`
+    + empty `VAULT_ADDR` → startup error; tolerant of capitalization).
+  - **Admin API (greenfield):** `AdminService` (ListTenants/GetTenantUsage/SuspendTenant/
+    AdminDeleteTenant) + gateway `/v1/admin/*` gated by the `asker-admin` role claim, audit-logged
+    with the **verified operator identity** (`x-asker-admin-subject`). Web UI deferred.
+  - **Docs:** `docs/security.md` (threat model + authz matrix + the audit dispositions),
+    `docs/runbooks/top-10-failure-modes.md`, `docs/ship-review.md` (the exit-criterion sign-off).
+  - **Hygiene:** the coverage gate now enforces the CLAUDE.md contract for EVERY `platform/*`
+    package (was a hardcoded 3); `platform/safehttp` is at 87%.
+- Next: **none — V1 (M0–M6) is complete.** Post-V1 follow-ups (tracked in docs/ship-review.md §5):
+  the admin web console, the GDPR in-flight-Kafka tombstone, turning on `networkPolicy.restrictEgress`
+  + a policy-enforcing CNI in prod, internal mTLS via a mesh, and live OAuth/webhook push (M2).
+- Known issues / accepted risks (see docs/ship-review.md §5): the kind chaos (M4), full load + 2h
+  soak (M5), NetworkPolicy enforcement, and the GDPR drill run in **CI / on a real cluster only**,
+  not on the 8GB dev VM. Dev creds/Vault/Keycloak are loudly dev-only. `restrictEgress` is opt-in,
+  so the app-layer `safehttp` guard is the active SSRF control by default.
+
 ## 2026-06-13 — M5 scale & SLO verification (complete; full-scale load + soak run in CI)
 
 - Done: **M5 complete — the SLO instrumentation, the load/soak tooling, and the observability

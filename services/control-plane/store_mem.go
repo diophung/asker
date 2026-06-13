@@ -52,12 +52,26 @@ func (m *memStore) EnsureTenant(ctx context.Context, tenantID tenancy.TenantID) 
 	return Tenant{ID: tenantID, CreatedAt: created}, nil
 }
 
-func (m *memStore) CreateConnectorInstance(ctx context.Context, inst ConnectorInstance) (ConnectorInstance, error) {
+func (m *memStore) CreateConnectorInstance(ctx context.Context, inst ConnectorInstance, maxInstances int) (ConnectorInstance, error) {
 	if err := ctx.Err(); err != nil {
 		return ConnectorInstance{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Atomic cap (finding M6-#8): the count + insert happen under the same lock,
+	// so concurrent creates cannot race past maxInstances. Mirrors the pgStore
+	// gated INSERT .. SELECT.
+	if maxInstances > 0 {
+		var n int
+		for _, existing := range m.instances {
+			if existing.TenantID == inst.TenantID {
+				n++
+			}
+		}
+		if n >= maxInstances {
+			return ConnectorInstance{}, ErrQuotaExceeded
+		}
+	}
 	if _, ok := m.tenants[inst.TenantID]; !ok {
 		m.tenants[inst.TenantID] = time.Now().UTC()
 	}

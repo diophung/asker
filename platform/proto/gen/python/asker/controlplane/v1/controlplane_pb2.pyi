@@ -201,7 +201,7 @@ class DeleteTenantRequest(_message.Message):
     def __init__(self, confirm: _Optional[str] = ...) -> None: ...
 
 class DeleteReport(_message.Message):
-    __slots__ = ("tenant_id", "connector_instances_deleted", "tokens_deleted", "dek_destroyed", "vespa_group_purged", "blobs_deleted", "redis_purged", "verified_empty")
+    __slots__ = ("tenant_id", "connector_instances_deleted", "tokens_deleted", "dek_destroyed", "vespa_group_purged", "blobs_deleted", "redis_purged", "verified_empty", "actor")
     TENANT_ID_FIELD_NUMBER: _ClassVar[int]
     CONNECTOR_INSTANCES_DELETED_FIELD_NUMBER: _ClassVar[int]
     TOKENS_DELETED_FIELD_NUMBER: _ClassVar[int]
@@ -210,6 +210,7 @@ class DeleteReport(_message.Message):
     BLOBS_DELETED_FIELD_NUMBER: _ClassVar[int]
     REDIS_PURGED_FIELD_NUMBER: _ClassVar[int]
     VERIFIED_EMPTY_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_FIELD_NUMBER: _ClassVar[int]
     tenant_id: str
     connector_instances_deleted: int
     tokens_deleted: int
@@ -218,7 +219,8 @@ class DeleteReport(_message.Message):
     blobs_deleted: int
     redis_purged: bool
     verified_empty: bool
-    def __init__(self, tenant_id: _Optional[str] = ..., connector_instances_deleted: _Optional[int] = ..., tokens_deleted: _Optional[int] = ..., dek_destroyed: _Optional[bool] = ..., vespa_group_purged: _Optional[bool] = ..., blobs_deleted: _Optional[int] = ..., redis_purged: _Optional[bool] = ..., verified_empty: _Optional[bool] = ...) -> None: ...
+    actor: str
+    def __init__(self, tenant_id: _Optional[str] = ..., connector_instances_deleted: _Optional[int] = ..., tokens_deleted: _Optional[int] = ..., dek_destroyed: _Optional[bool] = ..., vespa_group_purged: _Optional[bool] = ..., blobs_deleted: _Optional[int] = ..., redis_purged: _Optional[bool] = ..., verified_empty: _Optional[bool] = ..., actor: _Optional[str] = ...) -> None: ...
 
 class DeleteTenantResponse(_message.Message):
     __slots__ = ("report",)

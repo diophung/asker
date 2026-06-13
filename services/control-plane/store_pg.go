@@ -39,12 +39,24 @@ func (s *pgStore) EnsureTenant(ctx context.Context, tenantID tenancy.TenantID) (
 	return t, nil
 }
 
-func (s *pgStore) CreateConnectorInstance(ctx context.Context, inst ConnectorInstance) (ConnectorInstance, error) {
+func (s *pgStore) CreateConnectorInstance(ctx context.Context, inst ConnectorInstance, maxInstances int) (ConnectorInstance, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return ConnectorInstance{}, fmt.Errorf("create connector instance: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Serialize concurrent creates for THIS tenant on a per-tenant transaction
+	// advisory lock so the count-gated insert below is race-free even under READ
+	// COMMITTED (where a bare count subquery in two overlapping transactions
+	// could each read "below cap" and both insert). The lock is keyed by a hash
+	// of the tenant id and released automatically at commit/rollback; it
+	// serializes only same-tenant creates, never cross-tenant ones.
+	if maxInstances > 0 {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(inst.TenantID)); err != nil {
+			return ConnectorInstance{}, fmt.Errorf("create connector instance: lock: %w", err)
+		}
+	}
 
 	// Implicit EnsureTenant (see Store docs): satisfies the FK without a
 	// failure mode for the legitimate first-instance-before-EnsureTenant case.
@@ -54,13 +66,27 @@ func (s *pgStore) CreateConnectorInstance(ctx context.Context, inst ConnectorIns
 		return ConnectorInstance{}, fmt.Errorf("create connector instance: ensure tenant: %w", err)
 	}
 
+	// Atomic per-tenant cap (finding M6-#8): the cap is evaluated INSIDE the
+	// insert via INSERT .. SELECT gated on the live count, in the same
+	// transaction (and behind the per-tenant advisory lock above), so two
+	// concurrent creates cannot both pass a check-then-insert and exceed the cap.
+	// When the tenant is at/over the cap the SELECT yields no row, the insert
+	// writes nothing, and RETURNING comes back empty -> we map that to
+	// ErrQuotaExceeded. maxInstances <= 0 disables the cap (the WHERE $6 <= 0
+	// short-circuits true).
 	const q = `
 		INSERT INTO connector_instances (tenant_id, connector_id, display_name, config_json, status)
-		VALUES ($1, $2, $3, $4::jsonb, $5)
+		SELECT $1, $2, $3, $4::jsonb, $5
+		WHERE $6 <= 0
+		   OR (SELECT count(*) FROM connector_instances WHERE tenant_id = $1) < $6
 		RETURNING id, created_at, updated_at`
 	err = tx.QueryRow(ctx, q,
-		string(inst.TenantID), inst.ConnectorID, inst.DisplayName, string(inst.ConfigJSON), inst.Status,
+		string(inst.TenantID), inst.ConnectorID, inst.DisplayName, string(inst.ConfigJSON), inst.Status, maxInstances,
 	).Scan(&inst.ID, &inst.CreatedAt, &inst.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The gated SELECT produced no row: the tenant is at or over the cap.
+		return ConnectorInstance{}, ErrQuotaExceeded
+	}
 	if err != nil {
 		return ConnectorInstance{}, fmt.Errorf("create connector instance: insert: %w", err)
 	}

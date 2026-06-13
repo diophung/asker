@@ -13,10 +13,16 @@ import (
 )
 
 // jwksFetchTimeout bounds every JWKS fetch so a slow/hung Keycloak cannot pin
-// goroutines on token verification indefinitely (DoS hardening, M6). go-oidc's
-// RemoteKeySet already rate-limits refetches (it will not re-hit JWKS more than
-// once per minute for an unknown kid) and caches keys; this timeout + the
-// pre-auth throttle bound the rest of the amplification surface.
+// goroutines on token verification indefinitely (DoS hardening, M6).
+//
+// JWKS refetch behavior (corrected, finding M6-#10): go-oidc's RemoteKeySet does
+// NOT enforce a fixed "once per minute" refetch for an unknown kid. It caches
+// keys until the JWKS response's HTTP Cache-Control max-age expires, and it
+// DEDUPES concurrent fetches (a single in-flight request serves all waiters),
+// so a flood of tokens carrying the same unknown kid collapses to one upstream
+// fetch rather than one per request. The real amplification bound is therefore
+// the pre-auth throttle (in front of verification) plus this bounded JWKS client
+// (timeout + capped idle pool) — NOT a per-kid rate limiter that go-oidc lacks.
 const jwksFetchTimeout = 5 * time.Second
 
 // boundedJWKSClient is the HTTP client go-oidc uses to fetch JWKS: a strict

@@ -185,6 +185,11 @@ message DeleteReport {
   int64 blobs_deleted = 6;
   bool redis_purged = 7;
   bool verified_empty = 8;
+  // actor attributes the erasure for the audit trail: "self" for a self-serve
+  // DeleteTenant, or "admin:<subject>" where <subject> is the VERIFIED operator
+  // identity the gateway forwarded for an AdminDeleteTenant (finding M6-#6).
+  // Never a token.
+  string actor = 9;
 }
 
 message DeleteTenantResponse {
