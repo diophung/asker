@@ -17,6 +17,35 @@ Newest entries go first.
 
 ---
 
+## 2026-06-13 — Search results link to their original source (post-V1)
+
+- Done: **Every search result now carries a `source_url` the web renders as a "View original ↗"
+  link** — jump from a hit straight to the item at its origin (the Gmail message in Gmail, the
+  Drive file, the Slack permalink, the Outlook/Jira/Confluence/Teams/calendar item, …).
+  - **No proto/Vespa/index-writer change.** `Document.metadata` already flows end to end
+    (connector → `metadata_json` summary → `Hit.metadata` → gateway JSON → web). Most connectors
+    already recorded a link under inconsistent keys (Outlook/Outlook-cal `web_link`, Drive
+    `web_view_link`, Slack `permalink`, GCal `html_link`, Teams/Confluence/Jira `web_url`, iCal
+    `url`); the **gateway** now derives ONE canonical `source_url` from them in priority order
+    (`services/gateway/search.go` `sourceURLFromMetadata`). Safety gate: only an absolute http(s)
+    URL **with a host** becomes a link — never `javascript:`/`data:`/scheme-relative/opaque — since
+    the web renders it as an href.
+  - **Gmail** was the one connector with no link in its metadata; added
+    `web_link = https://mail.google.com/mail/u/0/#all/<id>`.
+  - **Web:** `Hit.source_url`; `ResultCard` renders the link `target=_blank rel="noopener
+    noreferrer"`; `.result-meta` is now a flex row. Degrades to no link when absent.
+  - **Tested + reviewed:** gateway `TestSourceURLFromMetadata` (15 cases incl. the blocked dangerous
+    schemes), pinned-shape test updated, gmail golden metadata, web 91 tests (3 new). Adversarial
+    review (link-safety + contract, 17 agents skeptic-verified): **no defects**; the one hostless-URL
+    nit was fixed. Committed `982aa76`. Live in the dev stack (gateway+web rebuilt).
+- Next: optional — an Asker-served link for sources with NO web origin (uploaded files, WhatsApp
+  export, iMessage): a gateway `/v1/download` (or extend `/v1/media`) route serving the decrypted
+  original blob, then surface it as the `source_url` fallback for FILE hits. Currently those hits
+  correctly show no link.
+- Known issues: the Gmail deep link uses `/u/0/` (the browser's first signed-in Google account); a
+  user signed into multiple Google accounts in the same browser may land in the wrong account's
+  Gmail. Acceptable for the common single-account case.
+
 ## 2026-06-13 — Connector OAuth integrations + dev-stack fixes (post-V1)
 
 - Done: **Real OAuth2 (auth-code + PKCE + refresh) for all four providers — Google, Microsoft,
