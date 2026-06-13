@@ -18,6 +18,15 @@ from . import config as cfg
 from .config import Config, ConfigError, health_addr_from_env
 from .embedder import Embedder
 from .kafka_worker import Worker, ensure_topics
+from .media import MediaHandler
+from .media_clients import (
+    FFmpegVideoExtractor,
+    HttpClipClient,
+    HubMediaStore,
+    WhisperTranscriber,
+    pillow_thumbnailer,
+    tesseract_ocr,
+)
 
 log = logging.getLogger("enrich.main")
 
@@ -111,12 +120,35 @@ async def run(config: Config) -> None:
     from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
     embedder = Embedder(config.tei_url, config.embedding_dim)
+    # Media collaborators (ADR-013). HTTP clients (hub, clip) are constructed
+    # here; the heavy local models/binaries (whisper, ffmpeg, tesseract, Pillow)
+    # are wrapped in collaborators that import/spawn them lazily on first use, so
+    # startup is cheap and a media-free deployment never loads them.
+    media_store = HubMediaStore(config.hub_media_url)
+    clip_client = HttpClipClient(config.clip_url, config.clip_dim)
+    media_handler = MediaHandler(
+        embedder=embedder,
+        store=media_store,
+        clip=clip_client,
+        ocr=tesseract_ocr,
+        transcriber=WhisperTranscriber(config.whisper_model, config.whisper_compute_type),
+        video=FFmpegVideoExtractor(),
+        thumbnailer=pillow_thumbnailer(config.thumbnail_max_px),
+        max_keyframes=config.max_keyframes,
+    )
     consumer_started = False
 
     async def ready_check() -> tuple[bool, str]:
         if not consumer_started:
             return False, "kafka consumer not started"
-        return await embedder.healthy()
+        ok, msg = await embedder.healthy()
+        if not ok:
+            return False, msg
+        # CLIP being down must NOT fail readiness: the media path degrades and
+        # the dominant text/ASR/OCR arm (bge-m3 via TEI) stays healthy
+        # (ADR-006/013). Probe it only to surface a warning in the body.
+        clip_ok, clip_msg = await clip_client.healthy()
+        return True, "ok" if clip_ok else f"ok (clip degraded: {clip_msg})"
 
     health_server = await serve_health(config.health_host, config.health_port, ready_check)
 
@@ -137,7 +169,13 @@ async def run(config: Config) -> None:
         acks="all",
         enable_idempotence=True,
     )
-    worker = Worker(consumer, producer, embedder, max_poll_records=config.max_poll_records)
+    worker = Worker(
+        consumer,
+        producer,
+        embedder,
+        media_handler=media_handler,
+        max_poll_records=config.max_poll_records,
+    )
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -154,6 +192,10 @@ async def run(config: Config) -> None:
                 "brokers": ",".join(config.kafka_brokers),
                 "tei_url": config.tei_url,
                 "embedding_dim": config.embedding_dim,
+                "clip_url": config.clip_url,
+                "clip_dim": config.clip_dim,
+                "hub_media_url": config.hub_media_url,
+                "whisper_model": config.whisper_model,
                 "group": cfg.CONSUMER_GROUP,
                 "topic": cfg.TOPIC_DOCS_CHUNKED,
             },
@@ -170,6 +212,10 @@ async def run(config: Config) -> None:
         with contextlib.suppress(Exception):
             await producer.stop()
         await embedder.aclose()
+        with contextlib.suppress(Exception):
+            await media_store.aclose()
+        with contextlib.suppress(Exception):
+            await clip_client.aclose()
         health_server.close()
         await health_server.wait_closed()
 

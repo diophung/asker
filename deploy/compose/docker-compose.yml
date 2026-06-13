@@ -129,6 +129,8 @@ services:
       CLIP_DIM: ${CLIP_DIM:-512}
       HUB_MEDIA_URL: "http://connector-hub:9300"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    volumes:
+      - enrich-hf-cache:/home/nonroot/.cache/huggingface # whisper-tiny weights (M3)
     depends_on:
       redpanda:
         condition: service_healthy
@@ -428,3 +430,4 @@ volumes:
   # connector-hub blob store). Vault replaces this in M4.
   kek-keys:
   clip-cache: # open_clip model weights (M3)
+  enrich-hf-cache: # faster-whisper (whisper-tiny) weights (M3)
