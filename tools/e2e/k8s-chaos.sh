@@ -67,7 +67,8 @@ VESPA_QUERY_LPORT="${VESPA_QUERY_LPORT:-18082}"
 VESPA_CFG_LPORT="${VESPA_CFG_LPORT:-19071}"
 
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-600}"     # seconds to wait for each rollout
-VESPA_DEPLOY_TIMEOUT="${VESPA_DEPLOY_TIMEOUT:-300}" # vespa/deploy.sh per-step
+VESPA_DEPLOY_TIMEOUT="${VESPA_DEPLOY_TIMEOUT:-900}" # vespa/deploy.sh per-step
+# (generous: proton is slow to serve :8080 on a constrained kind node)
 EMBEDDING_DIM="${EMBEDDING_DIM:-384}"         # MUST match the CI TEI model
 CLIP_DIM="${CLIP_DIM:-512}"
 
@@ -235,28 +236,19 @@ fi
 begin "vespa: deploy application package (EMBEDDING_DIM=${EMBEDDING_DIM})"
 # Reuse the committed, tested deploy flow against the in-cluster config server
 # via the port-forward. The single-node vespa/app (node1, no hosts.xml) matches
-# the CI profile's 1-group/1-node Vespa StatefulSet. Retry a few times: on a
-# resource-constrained kind node the config server can briefly drop (the
-# port-forward then 502s/refuses) right as we deploy; re-confirm health and
-# retry rather than failing the whole run on a transient blip.
-deploy_ok=""
-for attempt in 1 2 3 4; do
-  if VESPA_CFG_URL="http://localhost:${VESPA_CFG_LPORT}" \
-    VESPA_QUERY_URL="http://localhost:${VESPA_QUERY_LPORT}" \
-    WAIT_TIMEOUT_SECS="$VESPA_DEPLOY_TIMEOUT" \
-    EMBEDDING_DIM="$EMBEDDING_DIM" CLIP_DIM="$CLIP_DIM" \
-    bash "${REPO_ROOT}/vespa/deploy.sh" >/dev/null 2>&1; then
-    deploy_ok=1
-    break
-  fi
-  printf '     .. deploy attempt %s failed; re-checking config server and retrying\n' "$attempt"
-  wait_local_http "http://localhost:${VESPA_CFG_LPORT}/state/v1/health" 60 || true
-  sleep 10
-done
-if [ -n "$deploy_ok" ]; then
+# the CI profile's 1-group/1-node Vespa StatefulSet. ONE attempt with a generous
+# wait: the prepare+activate succeed quickly, but on a resource-constrained kind
+# node proton is slow to start serving the query port :8080 — and deploy.sh waits
+# for that. Re-deploying would only restart that convergence, so do NOT retry;
+# give the single deploy a long WAIT_TIMEOUT_SECS instead (VESPA_DEPLOY_TIMEOUT).
+if VESPA_CFG_URL="http://localhost:${VESPA_CFG_LPORT}" \
+  VESPA_QUERY_URL="http://localhost:${VESPA_QUERY_LPORT}" \
+  WAIT_TIMEOUT_SECS="$VESPA_DEPLOY_TIMEOUT" \
+  EMBEDDING_DIM="$EMBEDDING_DIM" CLIP_DIM="$CLIP_DIM" \
+  bash "${REPO_ROOT}/vespa/deploy.sh" >/dev/null 2>&1; then
   pass
 else
-  fail "vespa/deploy.sh failed against :${VESPA_CFG_LPORT} after 4 attempts"
+  fail "vespa/deploy.sh failed against :${VESPA_CFG_LPORT} (config server up; proton slow to serve :8080?)"
 fi
 
 # --- 3. NOW wait for query + gateway (their /readyz needs the live Vespa :8080) -

@@ -48,7 +48,13 @@ USER nonroot
 # single-consumer pipeline — even non-ASR docs wait behind it). The empty named
 # cache volume the integrator mounts here is populated from this image layer on
 # first start, so the mount and the bake coexist. Matches WHISPER_MODEL=tiny.
-RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-tiny')"
+# Retry with backoff: parallel CI image builds hammer the unauthenticated HF API
+# and get rate-limited (HTTP 429); a few backed-off retries clear it.
+RUN for i in 1 2 3 4 5 6; do \
+      python -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-tiny')" && break; \
+      if [ "$i" = 6 ]; then echo "whisper prefetch failed after 6 attempts" >&2; exit 1; fi; \
+      echo "whisper prefetch attempt $i failed (HF 429?); retrying in $((i*20))s"; sleep $((i*20)); \
+    done
 
 EXPOSE 9601
 

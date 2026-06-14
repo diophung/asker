@@ -38,7 +38,12 @@ USER nonroot
 # deploy/CI container is ready in seconds instead of downloading on first use
 # (the empty named cache volume mounted at /home/nonroot/.cache is populated from
 # this image layer on first start). Matches the default CLIP_MODEL/CLIP_PRETRAINED.
-RUN python -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')"
+# Retry with backoff in case the CDN/HF rate-limits parallel CI builds.
+RUN for i in 1 2 3 4 5 6; do \
+      python -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')" && break; \
+      if [ "$i" = 6 ]; then echo "clip prefetch failed after 6 attempts" >&2; exit 1; fi; \
+      echo "clip prefetch attempt $i failed; retrying in $((i*20))s"; sleep $((i*20)); \
+    done
 
 EXPOSE 9800
 
