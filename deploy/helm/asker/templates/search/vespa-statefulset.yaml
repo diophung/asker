@@ -65,6 +65,19 @@ spec:
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           args: ["configserver,services"]
           env:
+            # Vespa auto-detects its hostname as the pod FQDN
+            # (<pod>.<headless>.<ns>.svc.cluster.local), which would NOT match the
+            # short names used in VESPA_CONFIGSERVERS and the app package's
+            # hosts.xml — the config-server self-check then panics ("this host
+            # should not run a config server") and the pod CrashLoopBackOffs. Pin
+            # VESPA_HOSTNAME to the same short, in-namespace-resolvable name so
+            # every node identifies itself consistently across all three.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: VESPA_HOSTNAME
+              value: "$(POD_NAME).{{ $headless }}"
             # Point every node at the ordinal-0 pod's config server (stable
             # headless DNS). A multi-config-server quorum is a sizing follow-up.
             - name: VESPA_CONFIGSERVERS

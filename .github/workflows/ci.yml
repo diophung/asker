@@ -149,6 +149,15 @@ jobs:
       CLIP_DIM: "512"
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        # make dev-up builds 11 images + pulls TEI/clip-torch/whisper, which fills
+        # the runner's / past Vespa's 80% disk limit -> Vespa feed-blocks (HTTP 507)
+        # and every feed fails. Reclaim the ~25GB of preinstalled toolchains first.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup || true
+          sudo docker image prune -af || true
+          df -h /
       - name: Start the dev stack
         run: make dev-up
       - name: Run e2e smoke test
@@ -172,6 +181,13 @@ jobs:
       E2E_EMAIL_COUNT: "10000"
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        # See e2e-smoke: reclaim disk so Vespa does not feed-block (HTTP 507).
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup || true
+          sudo docker image prune -af || true
+          df -h /
       - name: Start the dev stack
         run: make dev-up
       - name: Run M1 e2e + leakage suites
@@ -194,7 +210,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Free disk space
-        run: docker image prune -af || true
+        # Heavy ML images make this the tightest job; reclaim the preinstalled
+        # toolchains too (not just docker images) so Vespa does not feed-block.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup || true
+          sudo docker image prune -af || true
+          df -h /
       - name: Start the dev stack
         run: make dev-up
       - name: Run M3 media exit suite
@@ -215,6 +237,13 @@ jobs:
       CLIP_DIM: "512"
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        # See e2e-smoke: reclaim disk so Vespa does not feed-block (HTTP 507).
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup || true
+          sudo docker image prune -af || true
+          df -h /
       - name: Start the dev stack
         run: make dev-up
       # The M6 GDPR per-tenant delete drill: seed a tenant's docs/blobs/token,
