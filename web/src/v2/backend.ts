@@ -30,6 +30,49 @@ export const BACKEND_ENABLED =
 // Same-origin path the Vite dev proxy forwards to the gateway.
 const SEARCH_PATH = "/v1/search";
 
+// --- Search preference (in-memory; the Settings page sets it). --------------
+
+export type SearchMode = "hybrid" | "keyword" | "vector";
+let searchMode: SearchMode = "hybrid";
+export function getSearchMode(): SearchMode {
+  return searchMode;
+}
+export function setSearchMode(m: SearchMode): void {
+  searchMode = m;
+}
+
+// --- Account + data controls (Settings page). -------------------------------
+
+export interface Me {
+  email: string;
+  tenantId: string;
+}
+
+export async function getMe(): Promise<Me> {
+  const token = await getToken();
+  const res = await fetch("/v1/me", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const j = (await res.json()) as { email: string; tenant_id: string };
+  return { email: j.email, tenantId: j.tenant_id };
+}
+
+/** GDPR per-tenant erasure (DELETE /v1/me/data) — DESTRUCTIVE, caller-confirmed. */
+export async function deleteMyData(): Promise<Record<string, unknown>> {
+  const token = await getToken();
+  const res = await fetch("/v1/me/data", {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Delete failed (HTTP ${res.status})`);
+  }
+  return (await res.json()) as Record<string, unknown>;
+}
+
 // --- The gateway /v1/search wire shape (mirrors web/src/api.ts Hit). ---------
 
 interface GatewayHit {
@@ -87,7 +130,7 @@ export async function searchBackend(
     q: query,
     limit: "20",
     offset: "0",
-    mode: "hybrid",
+    mode: searchMode,
   });
   if (source !== "all") {
     params.set("types", SOURCE_TYPES[source].join(","));

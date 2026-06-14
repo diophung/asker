@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LogOut } from "lucide-react";
+import { LogOut, Settings as SettingsIcon } from "lucide-react";
 import { currentUser, signOut } from "./auth";
 import { BACKEND_ENABLED } from "./backend";
+import { Settings } from "./Settings";
 import {
   getSuggestions,
   metaFor,
@@ -66,6 +67,7 @@ export function SearchApp() {
   // In backend mode the gateway needs a token — gate on a dev sign-in. In mock
   // mode there is no backend, so no sign-in is required.
   const [authed, setAuthed] = useState(!BACKEND_ENABLED);
+  const [view, setView] = useState<"search" | "settings">("search");
 
   const reqId = useRef(0);
   const jumpToTop = useRef(false);
@@ -131,25 +133,43 @@ export function SearchApp() {
     }
   }, [phase, results]);
 
+  function signOutAll() {
+    signOut();
+    setQuery("");
+    setBox("");
+    setSource("all");
+    setPhase("idle");
+    setView("search");
+    setAuthed(false);
+  }
+
   // Auth gate (after all hooks). Backend mode requires a signed-in dev session.
   if (BACKEND_ENABLED && !authed) {
     return <SignIn onSignedIn={() => setAuthed(true)} />;
   }
 
+  if (BACKEND_ENABLED && view === "settings") {
+    return <Settings onBack={() => setView("search")} onSignOut={signOutAll} />;
+  }
+
   const accountChip =
     BACKEND_ENABLED && authed ? (
-      <div className="fixed right-3 top-3 z-30 flex items-center gap-2 rounded-full border border-gline bg-white/90 px-3 py-1.5 text-[12.5px] shadow-sm backdrop-blur">
+      <div className="fixed right-3 top-3 z-30 flex items-center gap-2 rounded-full border border-gline bg-white/90 px-2.5 py-1.5 text-[12.5px] shadow-sm backdrop-blur">
         <span className="hidden text-gmuted sm:inline">{currentUser()}</span>
         <button
           type="button"
-          onClick={() => {
-            signOut();
-            setQuery("");
-            setBox("");
-            setSource("all");
-            setPhase("idle");
-            setAuthed(false);
-          }}
+          onClick={() => setView("settings")}
+          className="inline-flex items-center gap-1 text-gblue hover:underline"
+          title="Settings"
+        >
+          <SettingsIcon className="size-3.5" /> Settings
+        </button>
+        <span aria-hidden="true" className="text-gline">
+          |
+        </span>
+        <button
+          type="button"
+          onClick={signOutAll}
           className="inline-flex items-center gap-1 text-gblue hover:underline"
           title="Sign out"
         >
