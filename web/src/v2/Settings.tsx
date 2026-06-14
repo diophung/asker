@@ -6,10 +6,17 @@ import {
   Loader2,
   Lock,
   LogOut,
-  Plug,
+  Plus,
+  RotateCw,
   Trash2,
 } from "lucide-react";
 import { ConnectorClient, type ConnectorInstanceStatus } from "../api";
+import {
+  buildConfig,
+  CONNECTOR_CATALOG,
+  type ConnectorType,
+  oauthProviderLabel,
+} from "../connectors/catalog";
 import { currentUser, getToken } from "./auth";
 import {
   deleteMyData,
@@ -188,10 +195,19 @@ export function Settings({
               })}
             </ul>
           )}
-          <p className="mt-4 flex items-center gap-1.5 text-[12.5px] text-gmuted">
-            <Plug className="size-3.5" /> Connect new sources from the Asker app
-            (OAuth needs the registered redirect URI).
-          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <AddSource
+              client={client}
+              onChanged={() => void refreshConnectors()}
+            />
+            <button
+              type="button"
+              onClick={() => void refreshConnectors()}
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] text-gmuted hover:bg-gbg-soft"
+            >
+              <RotateCw className="size-3.5" /> Refresh
+            </button>
+          </div>
         </Section>
 
         {/* Search */}
@@ -375,6 +391,197 @@ function DangerZone() {
             )}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function requiredFilled(
+  type: ConnectorType,
+  values: Record<string, string>,
+): boolean {
+  return type.fields
+    .filter((f) => f.required)
+    .every((f) => (values[f.key] ?? "").trim() !== "");
+}
+
+/** Connect a new source: pick a type, fill required config, create the instance,
+ * and (for OAuth connectors) finish in a new tab — the gateway returns the OAuth
+ * flow to the main web app, and a pre-opened tab dodges popup blockers. */
+function AddSource({
+  client,
+  onChanged,
+}: {
+  client: ConnectorClient;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [type, setType] = useState<ConnectorType | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+
+  function close() {
+    setOpen(false);
+    setType(null);
+    setValues({});
+    setError("");
+    setInfo("");
+  }
+
+  function connect() {
+    if (!type) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setInfo("");
+    // Open the OAuth tab synchronously (in the click) so it isn't popup-blocked.
+    const tab = type.oauthProvider ? window.open("", "_blank") : null;
+    client
+      .createConnector(type.id, type.displayName, buildConfig(type, values))
+      .then(async (inst) => {
+        onChanged(); // the new instance appears immediately
+        if (type.oauthProvider) {
+          const url = await client.startOAuth(inst.id);
+          if (tab) {
+            tab.location.href = url;
+          } else {
+            window.open(url, "_blank", "noopener");
+          }
+          setInfo(
+            `Finish connecting with ${oauthProviderLabel(type.oauthProvider)} in the new tab, then Refresh.`,
+          );
+        } else {
+          setInfo(`${type.displayName} connected.`);
+        }
+        setType(null);
+        setValues({});
+      })
+      .catch((e: unknown) => {
+        tab?.close();
+        setError(e instanceof Error ? e.message : "Couldn't connect.");
+      })
+      .finally(() => setBusy(false));
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 rounded-full bg-gblue px-3 py-1.5 text-[13px] font-medium text-white hover:brightness-95"
+      >
+        <Plus className="size-3.5" /> Connect a source
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full rounded-xl border border-gline p-4">
+      {type === null ? (
+        <>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-[13px] font-medium text-gink">
+              Choose a source
+            </span>
+            <button
+              type="button"
+              onClick={close}
+              className="text-[13px] text-gmuted hover:underline"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {CONNECTOR_CATALOG.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => {
+                  setType(t);
+                  setValues({});
+                  setError("");
+                }}
+                className="flex items-center gap-2 rounded-lg border border-gline px-3 py-2 text-left text-[13.5px] text-gink hover:bg-gbg-soft"
+              >
+                <SourceDot source={CONNECTOR_LABEL[t.id]?.source ?? "Drive"} />
+                <span className="truncate">{t.displayName}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mb-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setType(null)}
+              aria-label="Back"
+              className="rounded-full p-1 text-gmuted hover:bg-gbg-soft"
+            >
+              <ArrowLeft className="size-4" />
+            </button>
+            <SourceDot source={CONNECTOR_LABEL[type.id]?.source ?? "Drive"} />
+            <span className="text-[14.5px] font-medium text-gink">
+              {type.displayName}
+            </span>
+          </div>
+          {type.fields.length > 0 && (
+            <div className="space-y-2.5">
+              {type.fields.map((f) => (
+                <label key={f.key} className="block">
+                  <span className="mb-1 block text-[12px] text-gmuted">
+                    {f.label}
+                    {f.required && <span className="text-[#d93025]"> *</span>}
+                  </span>
+                  <input
+                    type="text"
+                    value={values[f.key] ?? ""}
+                    placeholder={f.placeholder}
+                    autoComplete="off"
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-gline px-3 py-2 text-[14px] text-gink outline-none focus:border-gblue"
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+          {error !== "" && (
+            <p className="mt-2 text-[13px] text-[#c5221f]" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={close}
+              className="rounded-full border border-gline px-4 py-1.5 text-[13px] text-gink hover:bg-gbg-soft"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={busy || !requiredFilled(type, values)}
+              onClick={connect}
+              className="rounded-full bg-gblue px-4 py-1.5 text-[13px] font-medium text-white hover:brightness-95 disabled:opacity-40"
+            >
+              {busy
+                ? "Connecting…"
+                : type.oauthProvider
+                  ? `Connect with ${oauthProviderLabel(type.oauthProvider)}`
+                  : "Connect"}
+            </button>
+          </div>
+        </>
+      )}
+      {info !== "" && (
+        <p className="mt-3 flex items-center gap-1.5 text-[13px] text-gprov">
+          <Check className="size-3.5" /> {info}
+        </p>
       )}
     </div>
   );
