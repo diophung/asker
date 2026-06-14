@@ -67,7 +67,13 @@ services:
       CONTROL_PLANE_GRPC_ADDR: "dns:///control-plane:9100"
       HUB_HTTP_URL: "http://connector-hub:9300"
       REDIS_ADDR: "redis:6379"
-      RATE_LIMIT_PER_MINUTE: "600"
+      # Rate limiting DISABLED for the dev stack (per request): the v2 web UI
+      # re-runs /v1/search on every recount + source-tab switch, which trips the
+      # default throttle and returns 429. "<= 0" disables each dimension. The
+      # whole compose stack is dev-only (127.0.0.1, dev creds) — NEVER ship this.
+      RATE_LIMIT_PER_MINUTE: "0"
+      PREAUTH_PER_IP_PER_MINUTE: "0"
+      PREAUTH_GLOBAL_PER_SEC: "0"
       # Web UI origin(s). Both host forms because macOS resolves `localhost` to
       # IPv6 (::1) first and the web container binds IPv4 (127.0.0.1) — see the
       # web service note below for why the host port is 13001, not 3000.

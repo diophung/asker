@@ -17,6 +17,30 @@ Newest entries go first.
 
 ---
 
+## 2026-06-14 — Deploy v2 (Google-style) UI + disable dev rate limiting (post-V1)
+
+- Done: **The v2 search UI is now the deployed web app, and the dev-stack API rate limit is off.**
+  - **Rate limit removed (dev only):** the v2 UI re-runs `/v1/search` on every recount +
+    source-tab switch, which tripped the gateway throttle (HTTP 429). Set all three dimensions to
+    `0` (disabled) in the **dev compose** gateway env: `RATE_LIMIT_PER_MINUTE`,
+    `PREAUTH_PER_IP_PER_MINUTE`, `PREAUTH_GLOBAL_PER_SEC`. **Production (Helm) limits untouched.**
+    Verified: 250 unauth + 120 authed rapid requests → 0× 429 (`docker inspect` confirms env=0).
+  - **Main build fix:** the break was only stale local `web/node_modules` — `lucide-react` /
+    Tailwind v4 landed in the committed lockfile via PR #11 but were never installed in the main
+    checkout. `npm ci` resolves it; `npm run build` + `make build` both green. No repo change.
+  - **v2 deploy:** rebuilt the `web` image (now builds the v2 app from `main`) and added an nginx
+    backend proxy in `web/nginx.conf` — `/v1 -> gateway:8080`, `/kc/ -> keycloak:8080` (prefix
+    stripped, `Host` pinned to `localhost:8081` so token `iss` stays valid). This is the
+    production analogue of the Vite dev proxy: the SPA stays same-origin, no CORS. `:13001` now
+    serves the v2 UI; verified end-to-end (sign-in via `/kc`, 828 real Gmail hits via `/v1`).
+- Next: for a REAL production deploy, swap the v2 auth seam (`web/src/v2/auth.ts`, dev password
+  grant) back to the OIDC redirect flow (`src/auth.ts`) — `:13001` is a registered redirect URI,
+  unlike the `:5180` dev port, so this is now viable. Re-enable rate limiting outside dev.
+- Known issues: the deployed `:13001` app still uses the **dev-only** password grant + dev creds
+  (alice/password123). Fine for the dev stack (127.0.0.1, dev realm); MUST NOT ship as-is.
+
+---
+
 ## 2026-06-13 — Search results link to their original source (post-V1)
 
 - Done: **Every search result now carries a `source_url` the web renders as a "View original ↗"
