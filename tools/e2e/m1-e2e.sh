@@ -702,9 +702,24 @@ for i in 0 1 2; do
   fi
 
   begin "${user}: common word 'tighter' -> multiple hits, all EMAIL, scores descending"
-  if search_as "${TOKENS[i]}" "q=tighter" "types=EMAIL" "limit=20" &&
-    read -r scount stypes sdesc <<<"$(xt shape)" &&
-    [ "$scount" -ge 2 ] && [ "$stypes" = "yes" ] && [ "$sdesc" = "yes" ]; then
+  # The full 10K-email corpus is still indexing asynchronously (TEI embeddings)
+  # when this runs, so a tenant's 'tighter' matches can be landing one at a time
+  # (seen in CI: one tenant at 1 hit while the others already had >=2). Poll until
+  # the assertion holds or a bounded timeout, varying limit to bust the 60s
+  # query-result cache.
+  scount="?"; stypes="?"; sdesc="?"; common_ok=""; c21_start=$(date +%s); c21_n=0
+  while :; do
+    if search_as "${TOKENS[i]}" "q=tighter" "types=EMAIL" "limit=$((20 + c21_n % 30))" &&
+      read -r scount stypes sdesc <<<"$(xt shape)" &&
+      [ "$scount" -ge 2 ] && [ "$stypes" = "yes" ] && [ "$sdesc" = "yes" ]; then
+      common_ok=1
+      break
+    fi
+    [ "$(($(date +%s) - c21_start))" -ge "${COMMON_WORD_TIMEOUT:-300}" ] && break
+    c21_n=$((c21_n + 1))
+    sleep 5
+  done
+  if [ -n "$common_ok" ]; then
     pass
     printf '     -> %s hits, all EMAIL, descending scores\n' "$scount"
   else

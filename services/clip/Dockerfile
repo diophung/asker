@@ -34,6 +34,12 @@ RUN groupadd --gid 65532 nonroot && \
     mkdir -p /home/nonroot/.cache && chown -R nonroot:nonroot /home/nonroot/.cache
 USER nonroot
 
+# Bake the CLIP ViT-B-32/openai weights into the image at build time so a fresh
+# deploy/CI container is ready in seconds instead of downloading on first use
+# (the empty named cache volume mounted at /home/nonroot/.cache is populated from
+# this image layer on first start). Matches the default CLIP_MODEL/CLIP_PRETRAINED.
+RUN python -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')"
+
 EXPOSE 9800
 
 # Compose healthcheck: ["CMD", "python", "-m", "clip.main", "-healthcheck"]

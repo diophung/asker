@@ -42,6 +42,14 @@ RUN groupadd --gid 65532 nonroot && \
     chown -R 65532:65532 /home/nonroot/.cache
 USER nonroot
 
+# Bake the whisper-tiny weights into the image at build time (into HF_HOME above)
+# so a fresh deploy/CI container is ready immediately instead of blocking the
+# worker on a first-doc Hugging Face download (which head-of-line stalls the
+# single-consumer pipeline — even non-ASR docs wait behind it). The empty named
+# cache volume the integrator mounts here is populated from this image layer on
+# first start, so the mount and the bake coexist. Matches WHISPER_MODEL=tiny.
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-tiny')"
+
 EXPOSE 9601
 
 # Compose healthcheck: ["CMD", "python", "-m", "enrich.main", "-healthcheck"]

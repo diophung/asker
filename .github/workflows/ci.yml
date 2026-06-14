@@ -235,6 +235,10 @@ jobs:
       TEI_MODEL_ID: BAAI/bge-small-en-v1.5
       EMBEDDING_DIM: "384"
       CLIP_DIM: "512"
+      # Async ingest (upload -> blob/DEK -> embed -> index) is slower on a loaded
+      # runner than the script's 300s default; give it more room so the
+      # precondition (DEK + blob present, searchable) doesn't race the pipeline.
+      WAIT_SECS: "600"
     steps:
       - uses: actions/checkout@v4
       - name: Free disk space
