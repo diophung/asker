@@ -137,7 +137,7 @@ export function ResultItem({
     return (
       <article className="flex gap-4">
         <div className="flex h-[60px] w-[52px] shrink-0 flex-col items-center justify-center rounded-lg border border-gline">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-[#ea4335]">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-gmuted">
             {result.month}
           </span>
           <span className="text-[22px] font-medium leading-6 text-gink">
@@ -190,7 +190,9 @@ export function ResultItem({
             <Chip icon={CornerUpLeft}>{result.replyCount} in thread</Chip>
           ) : null}
           {result.type === "file" && (
-            <span className="text-[12.5px] text-gmuted">{result.folder}</span>
+            <span className="text-[12.5px] text-gmuted">
+              {result.owner} · {result.folder}
+            </span>
           )}
           {result.type === "message" && result.reactions ? (
             <Chip icon={Heart}>{result.reactions}</Chip>

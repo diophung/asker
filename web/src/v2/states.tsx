@@ -56,7 +56,7 @@ export function NoResults({
   return (
     <div className="max-w-prose">
       <p className="text-[16px] text-gink">
-        Nothing matched <em className="not-italic font-medium">{query}</em> in
+        Nothing matched <em className="font-medium text-gink">{query}</em> in
         your data. Try a name, a date, or fewer words.
       </p>
       <p className="mt-3 text-[13px] text-gmuted">Try one of these:</p>
