@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # coverage_gate.sh <coverage.out>
 #
-# Enforces per-package statement-coverage floors on a Go coverage profile:
-#   platform/tenancy   == 100.0%
-#   platform/config    >=  75.0%
-#   platform/telemetry >=  75.0%
+# Enforces per-package statement-coverage floors on a Go coverage profile
+# (the CLAUDE.md contract): platform/tenancy == 100.0%, and EVERY other
+# platform/* package >= 75.0%. The platform package list is discovered
+# dynamically (go list, excluding the generated platform/proto tree), so a new
+# platform package is gated automatically and an untested one fails.
 #
 # Per-package numbers are computed by filtering the profile down to one
 # package's files and reading the "total:" line of `go tool cover -func`,
@@ -60,12 +61,26 @@ meets() {
   }'
 }
 
-# Gated packages: "<pkg> <op> <floor>"
-GATES=(
-  "platform/tenancy == 100.0"
-  "platform/config >= 75.0"
-  "platform/telemetry >= 75.0"
-)
+# Floors (CLAUDE.md contract): platform/tenancy == 100%, every OTHER platform/*
+# package >= 75%. We discover the platform packages dynamically from `go list`
+# (excluding the generated protobuf tree) so a NEW platform package is gated
+# automatically — and an untested one fails as ABSENT rather than slipping
+# through. tenancy carries the strict 100% floor; the rest default to >= 75%.
+# (No associative arrays — keep this bash-3.2 / macOS-default compatible.)
+GATES=()
+while IFS= read -r pkg; do
+  [ -n "$pkg" ] || continue
+  if [ "$pkg" = "platform/tenancy" ]; then
+    GATES+=("$pkg == 100.0")
+  else
+    GATES+=("$pkg >= 75.0")
+  fi
+done < <(go list ./platform/... 2>/dev/null | sed "s#^${MODULE}/##" | grep -vE '^platform/proto(/|$)' | sort)
+
+if [ ${#GATES[@]} -eq 0 ]; then
+  echo "error: could not enumerate platform packages (go list failed?)" >&2
+  exit 2
+fi
 
 violations=0
 echo "Coverage gate (profile: $profile)"

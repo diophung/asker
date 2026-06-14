@@ -1,0 +1,27 @@
+{
+  "images": [
+    {
+      "color": "blue",
+      "file": "blue.png",
+      "title": "M3 e2e blue image",
+      "word": "OCEAN"
+    },
+    {
+      "color": "red",
+      "file": "red.png",
+      "title": "M3 e2e red image",
+      "word": "SUNSET"
+    }
+  ],
+  "video": {
+    "asr_words": [
+      "tuesday",
+      "planning",
+      "afternoon"
+    ],
+    "duration_ms": 5375,
+    "file": "speech.mp4",
+    "phrase": "the quarterly planning review happens on tuesday afternoon",
+    "title": "M3 e2e speech clip"
+  }
+}

@@ -1,10 +1,72 @@
 # Asker web UI
 
-React 18 + TypeScript + Vite single-page app: the M1 search page (query box,
-filters, result cards with safe snippet highlighting, paging) authenticated
-against the dev Keycloak.
+React 18 + TypeScript + Vite single-page app, authenticated against the dev
+Keycloak. Two views, switched by top-bar tabs (a `view` state toggle in
+`App.tsx` — no router):
+
+- **Search** — the M1 search page (query box, filters, result cards with safe
+  snippet highlighting, paging). M3 adds rich rendering for media hits (image
+  thumbnails, video/audio timestamp deep-links and modality badges).
+- **Connectors** — M2 connector management: connect a source from the catalog
+  and watch existing instances sync.
 
 No UI framework — one plain stylesheet (`src/styles.css`).
+
+## Connectors view
+
+`src/connectors/ConnectorsPage.tsx` drives the management UI against the
+gateway's connector endpoints (all behind the OIDC bearer):
+
+```
+GET    /v1/connectors            -> [{instance, sync}]
+POST   /v1/connectors            {connector_id, display_name, config} -> instance
+DELETE /v1/connectors/{id}
+PUT    /v1/connectors/{id}/token {token}
+```
+
+- **Catalog** (`src/connectors/catalog.ts`): the known connector types grouped
+  by category, each with config-field hints mirroring the Go connector schemas
+  (e.g. gmail needs `user_email`, s3 needs `endpoint`/`bucket`, ical needs
+  `feed_url`). Token/OAuth2 connectors are flagged `needsToken`.
+- **Connect form** (`ConnectForm.tsx`): a display name + the connector's config
+  fields + (for token connectors) a dev "paste a token" field. Submitting calls
+  `createConnector` then `putConnectorToken` on the new instance. Real OAuth
+  redirect is hub work — the form shows a clear dev affordance.
+- **Instance list** (`InstanceList.tsx`): each instance's status badge, sync
+  phase, `docs_emitted`, last-sync relative time, and `last_error` (surfaced as
+  an alert). Delete is two-step (confirm). The page polls `listConnectors`
+  every ~15s so sync progress updates live.
+
+`ConnectorClient` lives in `src/api.ts` alongside `SearchClient` (same bearer
+auth + `AbortController` plumbing). The Connectors view never uses
+`dangerouslySetInnerHTML`; forms are label-associated and accessible.
+
+## Media results (M3)
+
+Media hits (`IMAGE` / `VIDEO` / `AUDIO`) carry four extra fields on the pinned
+`/v1/search` Hit (snake_case, matching the gateway's hand-written JSON for
+every other field): `start_ms`, `end_ms`, `modality`, `thumbnail_key`. They are
+optional in `src/api.ts` because text-document hits omit them.
+
+`ResultCard` (`src/components/ResultCard.tsx`) branches by `hit.type`:
+
+- **IMAGE** — shows the thumbnail; a modality badge (e.g. "OCR") when an OCR
+  chunk matched. Text snippet renders as before.
+- **VIDEO / AUDIO** — shows the poster/thumbnail if present, and when
+  `start_ms > 0` a visible, accessible "Jump to M:SS" deep-link plus a modality
+  badge ("transcript" / "caption"). The link targets a media fragment
+  (`#t=<seconds>`); wiring an actual seeking player is future work.
+- **Text docs** — unchanged.
+
+Thumbnails are bearer-authenticated, so `<img src>` cannot fetch them directly.
+`MediaClient.fetchThumbnail(key)` (in `src/api.ts`) calls
+`GET {API}/v1/media?key=...` with the JWT and returns an object URL; the
+gateway proxies the internal-only hub endpoint and derives the tenant from the
+verified token only. The `Thumbnail` component (`src/components/Thumbnail.tsx`)
+runs that fetch in an effect (so the list never blocks on image bytes), shows a
+shimmer placeholder until it resolves, falls back gracefully on error, and
+revokes the object URL on unmount. As everywhere in this UI, nothing uses
+`dangerouslySetInnerHTML`; timestamps and modality labels are plain text nodes.
 
 ## Prerequisites
 
@@ -84,13 +146,18 @@ the realm auto-imported by the compose stack.
 
 ```
 src/
-  api.ts               typed /v1/search client (abortable, bearer auth)
+  api.ts               typed /v1/search + /v1/connectors clients (bearer auth)
   auth.ts              keycloak-js wrapper (init once, token refresh)
+  App.tsx              auth gate + Search/Connectors tab switch
   search/filters.ts    filter state model -> SearchRequest mapping
+  search/media.ts      media helpers (timestamp + modality formatting)
   SearchPage.tsx       search state machine (debounce, paging, states)
   components/          SearchBar, FilterSidebar, ResultCard, Snippet,
-                       Pagination, States (skeleton/error/empty/idle)
-  mocks/searchMock.ts  test-only response fixture
+                       Thumbnail (bearer-auth media preview), Pagination,
+                       States (skeleton/error/empty/idle)
+  connectors/          catalog, ConnectorsPage, ConnectForm, InstanceList,
+                       relativeTime (the connector management view)
+  mocks/               test-only response fixtures (search + connectors)
 public/
   silent-check-sso.html  keycloak silent SSO iframe endpoint
 ```

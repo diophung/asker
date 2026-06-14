@@ -1,0 +1,29 @@
+# ==============================================================================
+# Asker — Grafana datasource provisioning (M5, OPT-IN observability stack).
+#
+# A single Prometheus datasource. The FIXED contract every dashboard JSON (owned
+# by the dashboards builder) references:
+#     name: "prometheus"   uid: "prometheus"   type: prometheus
+#     url:  http://prometheus:9090
+#
+# In compose, "prometheus" is the service name on the shared `asker` network
+# (docker-compose.observability.yml). In K8s, the gated Helm chart renders a
+# Service literally named "prometheus" in the release namespace, so this same
+# URL resolves there too. uid "prometheus" is hard-pinned so dashboards remain
+# portable between compose and the chart (panels select the datasource by uid).
+# ==============================================================================
+apiVersion: 1
+
+datasources:
+  - name: prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Match the Prometheus scrape_interval so $__rate_interval picks a sane
+      # default window for rate()/histogram_quantile() in the SLO dashboards.
+      timeInterval: 15s
+      httpMethod: POST

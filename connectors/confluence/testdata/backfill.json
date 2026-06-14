@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/content",
+        "query": "type=page&status=current&expand=body.storage,version,space,history&limit=50&start=0&spaceKey=DEV"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"results\":[{\"id\":\"100\",\"type\":\"page\",\"status\":\"current\",\"title\":\"Onboarding Guide\",\"body\":{\"storage\":{\"value\":\"<p>Welcome to the team.</p><p>Read the <strong>handbook</strong> first.</p>\",\"representation\":\"storage\"}},\"version\":{\"number\":3,\"when\":\"2026-06-01T09:15:00.000Z\",\"by\":{\"accountId\":\"acc-bob\",\"displayName\":\"Bob Editor\",\"email\":\"bob@example.com\"}},\"space\":{\"key\":\"DEV\",\"name\":\"Development\"},\"history\":{\"createdBy\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"},\"createdDate\":\"2026-05-20T08:00:00.000Z\"},\"_links\":{\"webui\":\"/spaces/DEV/pages/100/Onboarding+Guide\"}},{\"id\":\"101\",\"type\":\"page\",\"status\":\"current\",\"title\":\"Release Process\",\"body\":{\"storage\":{\"value\":\"<h2>Release Process</h2><ul><li>Cut a branch</li><li>Tag the release</li></ul>\",\"representation\":\"storage\"}},\"version\":{\"number\":1,\"when\":\"2026-06-02T11:30:00.000Z\",\"by\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"}},\"space\":{\"key\":\"DEV\",\"name\":\"Development\"},\"history\":{\"createdBy\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"},\"createdDate\":\"2026-06-02T11:30:00.000Z\"},\"_links\":{\"webui\":\"/spaces/DEV/pages/101/Release+Process\"}}],\"start\":0,\"limit\":50,\"size\":2,\"_links\":{\"base\":\"https://acme.atlassian.net/wiki\",\"next\":\"/rest/api/content?type=page&limit=50&start=2\"}}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/content",
+        "query": "type=page&status=current&expand=body.storage,version,space,history&limit=50&start=2&spaceKey=DEV"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"results\":[{\"id\":\"102\",\"type\":\"page\",\"status\":\"current\",\"title\":\"Incident Runbook\",\"body\":{\"storage\":{\"value\":\"<p>When paged, do the following:</p><ol><li>Ack the alert</li><li>Open a war room</li></ol><ac:structured-macro ac:name=\\\"info\\\"><ac:parameter ac:name=\\\"title\\\">Note</ac:parameter><ac:rich-text-body><p>Escalate after 15 minutes.</p></ac:rich-text-body></ac:structured-macro>\",\"representation\":\"storage\"}},\"version\":{\"number\":7,\"when\":\"2026-06-03T16:45:00.000Z\",\"by\":{\"accountId\":\"acc-carol\",\"displayName\":\"Carol Ops\",\"email\":\"carol@example.com\"}},\"space\":{\"key\":\"DEV\",\"name\":\"Development\"},\"history\":{\"createdBy\":{\"accountId\":\"acc-carol\",\"displayName\":\"Carol Ops\",\"email\":\"carol@example.com\"},\"createdDate\":\"2026-04-10T13:00:00.000Z\"},\"_links\":{\"webui\":\"/spaces/DEV/pages/102/Incident+Runbook\"}},{\"id\":\"103\",\"type\":\"page\",\"status\":\"current\",\"title\":\"Glossary\",\"body\":{\"storage\":{\"value\":\"<p>Terms &amp; definitions used across the org.</p>\",\"representation\":\"storage\"}},\"version\":{\"number\":2,\"when\":\"2026-05-28T07:00:00.000Z\",\"by\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"}},\"space\":{\"key\":\"DEV\",\"name\":\"Development\"},\"history\":{\"createdBy\":{\"accountId\":\"acc-alice\",\"displayName\":\"Alice Author\",\"email\":\"alice@example.com\"},\"createdDate\":\"2026-03-01T12:00:00.000Z\"},\"_links\":{\"webui\":\"/spaces/DEV/pages/103/Glossary\"}}],\"start\":2,\"limit\":50,\"size\":2,\"_links\":{\"base\":\"https://acme.atlassian.net/wiki\"}}"
+      }
+    }
+  ]
+}

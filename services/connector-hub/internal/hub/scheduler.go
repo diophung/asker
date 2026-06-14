@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,9 +17,23 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/asker/asker/connectors/sdk"
+	"github.com/asker/asker/platform/oauth"
 	controlplanev1 "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
+
+// refreshSkew is the margin before an access token's expiry at which the hub
+// proactively refreshes it, so a sync never hands a connector a token that
+// expires mid-pass. It must stay well under the steady sync interval.
+const refreshSkew = 60 * time.Second
+
+// tokenRefresher is the slice of *oauth.Service the scheduler needs to renew a
+// stored OAuth credential. It is an interface so the refresh path is testable
+// against a fake without standing up provider HTTP endpoints; *oauth.Service
+// (the production implementation) satisfies it.
+type tokenRefresher interface {
+	Refresh(ctx context.Context, p oauth.Provider, t oauth.Token) (oauth.Token, error)
+}
 
 // Scheduler defaults: at most maxConcurrentSyncs syncs run hub-wide at once;
 // repeated failures back off exponentially from failureBackoffBase to
@@ -41,6 +56,12 @@ type scheduler struct {
 	emit     *emitter
 	logger   *slog.Logger
 
+	// oauth refreshes stored Asker OAuth credentials before a sync. It is nil
+	// when no OAuth provider is configured (manual/legacy tokens still flow
+	// through unchanged); a NeedsRefresh OAuth token then fails the run with a
+	// clear error rather than handing the connector a stale bearer.
+	oauth tokenRefresher
+
 	webhookBase  string
 	syncInterval time.Duration
 	tick         time.Duration
@@ -48,11 +69,24 @@ type scheduler struct {
 	backoffCap   time.Duration
 	now          func() time.Time
 
+	// maxInstancesPerTenant bounds how many sync workers (goroutines) one
+	// tenant may occupy. <= 0 disables the cap. It is defense in depth behind
+	// the control plane's create-time connector-instance quota: even if stale
+	// rows slip past, no single tenant can dominate the scheduler.
+	maxInstancesPerTenant int
+
 	sem chan struct{}
 
-	mu      sync.Mutex
-	workers map[string]*worker
-	wg      sync.WaitGroup
+	mu sync.Mutex
+	// workers holds the active worker per instance id. draining holds workers
+	// that have been canceled (instance paused/removed) but whose goroutine
+	// may still be finishing an in-flight sync pass; a replacement worker for
+	// the same id is NOT spawned until the draining one has fully exited, so
+	// two sync passes can never run concurrently for one instance across a
+	// pause/resume or remove/re-add cycle.
+	workers  map[string]*worker
+	draining map[string]*worker
+	wg       sync.WaitGroup
 }
 
 // schedulerOpts collects the scheduler's collaborators; zero optional fields
@@ -63,12 +97,15 @@ type schedulerOpts struct {
 	registry     *sdk.Registry
 	emit         *emitter
 	logger       *slog.Logger
+	oauth        tokenRefresher // optional; nil when no OAuth provider is configured
 	webhookBase  string
 	syncInterval time.Duration
 	tick         time.Duration
 	backoffBase  time.Duration // optional
 	backoffCap   time.Duration // optional
 	now          func() time.Time
+
+	maxInstancesPerTenant int // optional; <= 0 disables the per-tenant cap
 }
 
 func newScheduler(o schedulerOpts) *scheduler {
@@ -82,19 +119,22 @@ func newScheduler(o schedulerOpts) *scheduler {
 		o.now = time.Now
 	}
 	return &scheduler{
-		cp:           o.cp,
-		sched:        o.sched,
-		registry:     o.registry,
-		emit:         o.emit,
-		logger:       o.logger,
-		webhookBase:  strings.TrimRight(o.webhookBase, "/"),
-		syncInterval: o.syncInterval,
-		tick:         o.tick,
-		backoffBase:  o.backoffBase,
-		backoffCap:   o.backoffCap,
-		now:          o.now,
-		sem:          make(chan struct{}, maxConcurrentSyncs),
-		workers:      make(map[string]*worker),
+		cp:                    o.cp,
+		sched:                 o.sched,
+		registry:              o.registry,
+		emit:                  o.emit,
+		logger:                o.logger,
+		oauth:                 o.oauth,
+		webhookBase:           strings.TrimRight(o.webhookBase, "/"),
+		syncInterval:          o.syncInterval,
+		tick:                  o.tick,
+		backoffBase:           o.backoffBase,
+		backoffCap:            o.backoffCap,
+		now:                   o.now,
+		maxInstancesPerTenant: o.maxInstancesPerTenant,
+		sem:                   make(chan struct{}, maxConcurrentSyncs),
+		workers:               make(map[string]*worker),
+		draining:              make(map[string]*worker),
 	}
 }
 
@@ -112,6 +152,7 @@ type worker struct {
 	instanceID string
 	cancel     context.CancelFunc
 	wake       chan struct{}
+	done       chan struct{} // closed when runWorker returns
 
 	mu   sync.Mutex
 	snap instanceSnap
@@ -182,15 +223,38 @@ func (s *scheduler) reconcile(ctx context.Context) {
 		desired[inst.GetId()] = instanceSnap{tenant: tc, inst: inst}
 	}
 
+	// Per-tenant worker cap (abuse control, M6): cap how many instances any one
+	// tenant may schedule, so a single tenant cannot spawn unbounded scheduler
+	// goroutines. Deterministic (sorted by instance id) so the SAME instances
+	// run every tick — no flapping.
+	s.applyTenantCap(ctx, desired)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Reap any draining workers that have finished exiting, so their ids are
+	// free to be scheduled again.
+	for id, w := range s.draining {
+		select {
+		case <-w.done:
+			delete(s.draining, id)
+		default:
+		}
+	}
+
 	for id, snap := range desired {
 		if w, ok := s.workers[id]; ok {
 			w.update(snap)
 			continue
 		}
+		// A previous worker for this id is still draining an in-flight pass;
+		// defer the replacement to a later tick so the two never overlap.
+		if _, draining := s.draining[id]; draining {
+			s.logger.InfoContext(ctx, "deferring sync worker; previous one still draining", "instance_id", id)
+			continue
+		}
 		wctx, cancel := context.WithCancel(ctx)
-		w := &worker{instanceID: id, cancel: cancel, wake: make(chan struct{}, 1)}
+		w := &worker{instanceID: id, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{})}
 		w.snap = snap
 		s.workers[id] = w
 		s.wg.Add(1)
@@ -202,8 +266,41 @@ func (s *scheduler) reconcile(ctx context.Context) {
 		if _, ok := desired[id]; !ok {
 			s.logger.InfoContext(ctx, "stopping sync worker (instance paused or removed)", "instance_id", id)
 			w.cancel()
+			// Move to draining: the goroutine may still be mid-pass. A
+			// replacement is withheld until w.done closes.
+			s.draining[id] = w
 			delete(s.workers, id)
 		}
+	}
+}
+
+// applyTenantCap drops, in place, any desired instances beyond
+// maxInstancesPerTenant for a given tenant. Selection is deterministic: per
+// tenant, instances are kept in ascending instance-id order, so the same set
+// runs every reconcile and the cap never flaps. <= 0 disables the cap. The
+// drop is logged once per over-cap tenant per reconcile so the condition is
+// visible.
+func (s *scheduler) applyTenantCap(ctx context.Context, desired map[string]instanceSnap) {
+	if s.maxInstancesPerTenant <= 0 {
+		return
+	}
+	// Group instance ids by tenant.
+	byTenant := make(map[tenancy.TenantID][]string)
+	for id, snap := range desired {
+		byTenant[snap.tenant.TenantID()] = append(byTenant[snap.tenant.TenantID()], id)
+	}
+	for tenant, ids := range byTenant {
+		if len(ids) <= s.maxInstancesPerTenant {
+			continue
+		}
+		sort.Strings(ids)
+		dropped := ids[s.maxInstancesPerTenant:]
+		for _, id := range dropped {
+			delete(desired, id)
+		}
+		s.logger.WarnContext(ctx, "per-tenant connector cap reached; not scheduling overflow instances",
+			"tenant", tenant, "cap", s.maxInstancesPerTenant,
+			"total", len(ids), "dropped", len(dropped))
 	}
 }
 
@@ -213,6 +310,12 @@ func (s *scheduler) stopAll() {
 	for id, w := range s.workers {
 		w.cancel()
 		delete(s.workers, id)
+	}
+	// Already-canceled workers still finishing a pass must be stopped too;
+	// the caller's wg.Wait covers their exit.
+	for id, w := range s.draining {
+		w.cancel()
+		delete(s.draining, id)
 	}
 }
 
@@ -248,6 +351,7 @@ func (s *scheduler) trigger(instanceID string) {
 // back off exponentially (capped); any success resets the schedule.
 func (s *scheduler) runWorker(ctx context.Context, w *worker) {
 	defer s.wg.Done()
+	defer close(w.done) // lets reconcile reap this id from the draining set
 	failures := 0
 	delay := time.Duration(0) // first pass runs immediately
 	for {
@@ -438,10 +542,11 @@ func (s *scheduler) recordFailure(tctx context.Context, run *syncRun, cause erro
 	}
 }
 
-// buildConfig assembles the sdk.Config for one run: the decrypted token from
-// the control-plane vault (absent for AuthNone connectors) and the instance
-// ConfigJSON with the hub-owned webhook_url merged in. tctx must carry the
-// instance tenant.
+// buildConfig assembles the sdk.Config for one run: the bearer the connector
+// uses (the decrypted vault credential — refreshed when it is an Asker OAuth
+// token, passed through verbatim when it is a legacy/manual token, absent for
+// AuthNone connectors; see fetchToken) and the instance ConfigJSON with the
+// hub-owned webhook_url merged in. tctx must carry the instance tenant.
 func (s *scheduler) buildConfig(tctx context.Context, snap instanceSnap, checkpoint sdk.Checkpoint) (sdk.Config, error) {
 	token, err := s.fetchToken(tctx, snap.inst.GetId())
 	if err != nil {
@@ -463,8 +568,28 @@ func (s *scheduler) buildConfig(tctx context.Context, snap instanceSnap, checkpo
 	}, nil
 }
 
-// fetchToken returns the instance's decrypted credential, or nil when none
-// is stored (AuthNone connectors, or not yet connected).
+// fetchToken returns the bearer the connector should use for this run.
+//
+// It reads the instance's decrypted credential from the control-plane vault,
+// then:
+//
+//   - no token stored (AuthNone connectors / not yet connected) -> nil.
+//   - the blob is NOT an Asker OAuth token (oauth.Parse ok=false: a legacy,
+//     manually-pasted opaque token such as "fake-gmail-token:...") -> the bytes
+//     are passed through UNCHANGED, preserving the manual-token / fake-gmail
+//     path that the m1 and leakage e2e suites rely on.
+//   - the blob IS an Asker OAuth Token: when it needs a refresh (expired or
+//     within refreshSkew of expiry, and it has a refresh token) the access
+//     token is renewed via the oauth service; if it changed it is re-stored in
+//     the vault (PutToken, under tctx's tenant) so the next run reuses it. The
+//     connector receives the (possibly refreshed) ACCESS token as the bearer.
+//
+// A refresh failure fails the run with a clear error — the connector can
+// re-auth — rather than handing it a stale or empty token.
+//
+// tctx MUST carry the instance tenant: the GetToken/PutToken calls are
+// tenant-scoped and the tenancy client interceptor stamps x-asker-tenant from
+// it. The tenant is never taken from the token blob or any request input.
 func (s *scheduler) fetchToken(tctx context.Context, instanceID string) ([]byte, error) {
 	resp, err := s.cp.GetToken(tctx, &controlplanev1.GetTokenRequest{ConnectorInstanceId: instanceID})
 	if err != nil {
@@ -473,7 +598,50 @@ func (s *scheduler) fetchToken(tctx context.Context, instanceID string) ([]byte,
 		}
 		return nil, fmt.Errorf("hub: get token for %s: %w", instanceID, err)
 	}
-	return resp.GetToken(), nil
+	stored := resp.GetToken()
+
+	tok, ok := oauth.Parse(stored)
+	if !ok {
+		// Legacy / manually-pasted opaque token: pass through verbatim.
+		return stored, nil
+	}
+
+	if !tok.NeedsRefresh(s.now(), refreshSkew) {
+		// Still valid (or non-expiring): use the stored access token as-is.
+		return []byte(tok.AccessToken), nil
+	}
+
+	if s.oauth == nil {
+		// An OAuth token is due for refresh but no provider is configured: do
+		// not hand the connector a stale bearer.
+		return nil, fmt.Errorf("hub: oauth token for %s needs refresh but no oauth service is configured", instanceID)
+	}
+
+	newTok, err := s.oauth.Refresh(tctx, tok.Provider, tok)
+	if err != nil {
+		return nil, fmt.Errorf("hub: refresh oauth token for %s: %w", instanceID, err)
+	}
+	if newTok.AccessToken == "" {
+		return nil, fmt.Errorf("hub: refresh oauth token for %s: empty access token", instanceID)
+	}
+
+	// Re-store only when the refresh actually changed the credential, so an
+	// unchanged token (x/oauth2 returns the same one when still valid) does not
+	// cause a needless vault write.
+	if newTok.AccessToken != tok.AccessToken || newTok.RefreshToken != tok.RefreshToken || !newTok.Expiry.Equal(tok.Expiry) {
+		blob, mErr := oauth.Marshal(newTok)
+		if mErr != nil {
+			return nil, fmt.Errorf("hub: marshal refreshed oauth token for %s: %w", instanceID, mErr)
+		}
+		if _, pErr := s.cp.PutToken(tctx, &controlplanev1.PutTokenRequest{
+			ConnectorInstanceId: instanceID,
+			Token:               blob,
+		}); pErr != nil {
+			return nil, fmt.Errorf("hub: store refreshed oauth token for %s: %w", instanceID, pErr)
+		}
+	}
+
+	return []byte(newTok.AccessToken), nil
 }
 
 // mergeWebhookURL merges the hub-owned webhook_url key into the instance

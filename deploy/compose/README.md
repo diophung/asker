@@ -28,11 +28,33 @@ make dev-down    # tear down
 | redis    | `redis:7`                                               | 16379 (6379 is taken on dev host)   | —                                      | `redis-cli ping` |
 | redpanda | `redpandadata/redpanda:v24.3.11`                        | 19092 (Kafka external), 9644 (admin) | —                                      | `rpk cluster health` + grep `Healthy: true` |
 
+### M1 application services (all built from repo Dockerfiles, distroless except enrich/web)
+
+| Service       | Build                                  | Host ports                | Internal addr            | Healthcheck |
+| ------------- | -------------------------------------- | ------------------------- | ------------------------ | ----------- |
+| control-plane | `services/control-plane/Dockerfile`    | — (internal only)         | gRPC 9100, health 9101   | `/control-plane -healthcheck` |
+| connector-hub | `services/connector-hub/Dockerfile`    | — (internal only)         | HTTP 9300, health 9301   | `/connector-hub -healthcheck` |
+| ingest        | `services/ingest/Dockerfile`           | — (internal only)         | health 9501              | `/ingest -healthcheck` |
+| enrich        | `services/enrich/Dockerfile` (Python)  | — (internal only)         | health 9601              | `python3` urllib probe of `/healthz` |
+| index-writer  | `services/index-writer/Dockerfile`     | — (internal only)         | health 9701              | `/index-writer -healthcheck` |
+| query         | `services/query/Dockerfile`            | — (internal only)         | gRPC 9200, health 9201   | `/query -healthcheck` |
+| fake-gmail    | `tools/fake-gmail/Dockerfile`          | 9400 (127.0.0.1, dev-only)| HTTP 9400                | `/fake-gmail -healthcheck` |
+| web           | `web/Dockerfile` (nginx)               | 3000 (127.0.0.1)          | HTTP 80                  | `wget /healthz` |
+
+The internal services publish **no host ports** — they are reachable only on the compose
+network, which is the M1 trust boundary (ADR-009). `fake-gmail` and `web` bind to 127.0.0.1
+only. The `gateway` (8080) is the single public entrypoint.
+
 Named volumes: `postgres-data`, `minio-data`, `redpanda-data`, `vespa-var`, `vespa-logs`,
-`tei-cache`. `docker compose down -v` wipes all state.
+`tei-cache`, `kek-keys` (shared dev KEK for the control-plane token vault + connector-hub blob
+store; Vault replaces it in M4). `make dev-clean` (`docker compose down -v`) wipes all state.
 
 ## First start notes
 
+- **Service images build serially.** `make dev-up` runs `make dev-build` first, which builds
+  the nine service images one at a time. Parallel BuildKit builds of all nine spike memory
+  hard enough to OOM-kill running containers on a small Docker VM (observed on an 8 GB shared
+  VM); serial builds avoid that. Budget 3–4 GB of free VM memory for the running stack.
 - **TEI downloads the embedding model on first start** (~2.3 GB for the default
   `BAAI/bge-m3`). The healthcheck `start_period` is 20 minutes to accommodate this; the
   model is cached in the `tei-cache` volume so subsequent starts are fast. TEI ships

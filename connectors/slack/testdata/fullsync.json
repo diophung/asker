@@ -1,0 +1,60 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/conversations.list", "query": "limit=200&types=public_channel,private_channel,mpim,im&exclude_archived=true"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"channels\":[{\"id\":\"C100\",\"name\":\"general\",\"is_private\":false,\"is_im\":false,\"members\":[\"U_ALICE\",\"U_BOB\"]},{\"id\":\"C200\",\"name\":\"secrets\",\"is_private\":true,\"is_im\":false,\"members\":[\"U_ALICE\"]}],\"response_metadata\":{\"next_cursor\":\"page2cursor\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.list", "query": "limit=200&types=public_channel,private_channel,mpim,im&exclude_archived=true&cursor=page2cursor"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"channels\":[{\"id\":\"D900\",\"is_im\":true,\"members\":[\"U_ALICE\",\"U_BOB\"]}],\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=C100&limit=200"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"messages\":[{\"type\":\"message\",\"user\":\"U_ALICE\",\"text\":\"morning team, standup at 10\",\"ts\":\"1700000300.000300\",\"team\":\"T1\"},{\"type\":\"message\",\"user\":\"U_BOB\",\"text\":\"on my way\",\"ts\":\"1700000200.000200\",\"thread_ts\":\"1700000100.000100\",\"team\":\"T1\"}],\"has_more\":true,\"response_metadata\":{\"next_cursor\":\"histcursorC100\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=C100&limit=200&cursor=histcursorC100"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"messages\":[{\"type\":\"message\",\"subtype\":\"channel_join\",\"user\":\"U_BOB\",\"text\":\"<@U_BOB> has joined the channel\",\"ts\":\"1700000110.000000\",\"team\":\"T1\"},{\"type\":\"message\",\"user\":\"U_ALICE\",\"text\":\"welcome!\",\"ts\":\"1700000100.000100\",\"team\":\"T1\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=C200&limit=200"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"messages\":[{\"type\":\"message\",\"user\":\"U_ALICE\",\"text\":\"the secret launch date is friday\",\"ts\":\"1700000050.000050\",\"team\":\"T1\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=D900&limit=200"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"messages\":[{\"type\":\"message\",\"user\":\"U_BOB\",\"text\":\"hey can you review my PR?\",\"ts\":\"1700000075.000075\",\"team\":\"T1\"}],\"has_more\":false,\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.info", "query": "channel=C100"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"channel\":{\"id\":\"C100\",\"name\":\"general\",\"is_private\":false,\"is_im\":false,\"members\":[\"U_ALICE\",\"U_BOB\"]}}"
+      }
+    }
+  ]
+}

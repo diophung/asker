@@ -1,0 +1,21 @@
+{{- /*
+Web Service. ClusterIP; public exposure via the Ingress (web host). metadata.name
+is the bare key "web" (compose DNS contract). nginx listens on :80.
+*/ -}}
+{{- $svc := "web" -}}
+{{- $cfg := .Values.services.web -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "asker.serviceName" (list . $svc) }}
+  labels:
+    {{- include "asker.serviceLabels" (list . $svc) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "asker.serviceSelectorLabels" (list . $svc) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $cfg.port }}
+      targetPort: http
+      protocol: TCP

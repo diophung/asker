@@ -18,8 +18,9 @@ import (
 //	from:<token>      -> participant filter
 //	type:<name>       -> DocType filter (case-insensitive enum name; a
 //	                     trailing plural 's' is tolerated, e.g. type:emails)
-//	after:YYYY-MM-DD  -> created_at lower bound (midnight UTC, inclusive)
-//	before:YYYY-MM-DD -> created_at upper bound (midnight UTC, inclusive)
+//	after:YYYY-MM-DD  -> created_at lower bound, inclusive (>= midnight UTC)
+//	before:YYYY-MM-DD -> created_at upper bound, inclusive of the whole named
+//	                     day (<= 23:59:59 UTC that day)
 //
 // A token that looks like a filter but does not parse (unknown type, bad
 // date, empty value) is left in the residual text rather than dropped: a
@@ -99,7 +100,10 @@ func extractInlineFilters(raw string) parsedQuery {
 				residual = append(residual, tok)
 				continue
 			}
-			p.To = day
+			// Inclusive of the named day: the upper bound is the last second
+			// of that day, so created_at <= bound keeps same-day documents
+			// (midnight alone would exclude almost the entire day).
+			p.To = day.Add(24*time.Hour - time.Second)
 		case strings.HasPrefix(lower, "after:"):
 			day, ok := parseDay(tok[len("after:"):])
 			if !ok {

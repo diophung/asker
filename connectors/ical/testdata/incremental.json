@@ -1,0 +1,15 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/calendar; charset=utf-8"]},
+        "body": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp//Asker Test//EN\r\nBEGIN:VEVENT\r\nUID:evt-standup@example.com\r\nDTSTAMP:20260606T090000Z\r\nCREATED:20260601T090000Z\r\nLAST-MODIFIED:20260606T090000Z\r\nSEQUENCE:1\r\nSTATUS:CONFIRMED\r\nSUMMARY:Daily standup (moved)\r\nDESCRIPTION:Now 15 minutes earlier.\r\nLOCATION:Zoom\r\nDTSTART;TZID=America/Los_Angeles:20260603T091500\r\nDTEND;TZID=America/Los_Angeles:20260603T093000\r\nORGANIZER;CN=Alice Anderson:mailto:alice@example.com\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:evt-launch@example.com\r\nDTSTAMP:20260606T100000Z\r\nSEQUENCE:3\r\nSTATUS:CANCELLED\r\nSUMMARY:Product launch review\r\nDTSTART;TZID=America/Los_Angeles:20260605T140000\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:evt-retro@example.com\r\nDTSTAMP:20260606T110000Z\r\nCREATED:20260606T110000Z\r\nSEQUENCE:0\r\nSTATUS:CONFIRMED\r\nSUMMARY:Sprint retro\r\nDESCRIPTION:What went well.\r\nLOCATION:Room 2\r\nDTSTART;TZID=America/Los_Angeles:20260607T160000\r\nDTEND;TZID=America/Los_Angeles:20260607T170000\r\nORGANIZER;CN=Erin Example:mailto:erin@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    }
+  ]
+}

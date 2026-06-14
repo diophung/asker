@@ -8,7 +8,9 @@
 #
 # @EMBEDDING_DIM@ is a template token substituted by ../deploy.sh from the
 # EMBEDDING_DIM environment variable (default 1024 for bge-m3; local dev .env
-# uses 384). This file is NOT a deployable schema until that substitution runs.
+# uses 384). @CLIP_DIM@ is the analogous token for the CLIP image/text space
+# (default 512 for ViT-B/32; M3, ADR-013), substituted from CLIP_DIM. This file
+# is NOT a deployable schema until those substitutions run.
 schema doc {
 
     document doc {
@@ -62,6 +64,78 @@ schema doc {
             attribute {
                 distance-metric: angular
             }
+        }
+
+        # CLIP image/text-space vectors (M3, ADR-013), one per chunk that carries
+        # one (image / video-keyframe chunks). Same mixed-tensor shape and storage
+        # rationale as `embedding`, but in a SEPARATE space (CLIP ViT-B/32,
+        # @CLIP_DIM@-dim, default 512) that text and image encoders share -- it is
+        # NOT comparable to bge-m3 `embedding`. The mapped `chunk` label is the
+        # stringified index into the `chunks` array, exactly as for `embedding`.
+        # - bfloat16 + attribute-only for the same reasons as `embedding`: vectors
+        #   are ranking inputs, never summary payload.
+        # - distance-metric angular = cosine; the clip service L2-normalizes both
+        #   text and image vectors, so angular closeness is cosine (angular stays
+        #   correct even if normalization drifts, unlike prenormalized-angular).
+        # - Streaming mode never builds HNSW: nearestNeighbor over this field is an
+        #   exact scan of the tenant group, identical to `embedding`.
+        # - SPARSE per document: present only on chunks that have a CLIP vector, so
+        #   the index-writer omits the whole field for text-only documents. A
+        #   missing field yields closeness 0 -- the CLIP arm simply contributes
+        #   nothing for that document, never an error.
+        field clip_embedding type tensor<bfloat16>(chunk{},x[@CLIP_DIM@]) {
+            indexing: attribute
+            attribute {
+                distance-metric: angular
+            }
+        }
+
+        # Per-chunk time anchors (M3), parallel to the `chunks` array: index i here
+        # is the start/end offset (ms) of chunks[i] within its source media, so a
+        # search hit can deep-link to the moment (ADR-013). 0 for text/OCR chunks
+        # (whole-document). attribute => available to ranking/grouping AND surfaced
+        # in summaries so the query service can read the matched chunk's offset.
+        field chunk_starts_ms type array<long> {
+            indexing: summary | attribute
+        }
+
+        field chunk_ends_ms type array<long> {
+            indexing: summary | attribute
+        }
+
+        # Per-chunk modality (M3), parallel to `chunks`: "text" | "ocr" | "asr" |
+        # "caption". Lets the query service label a hit by what matched. attribute
+        # (exact word match) + summary so the matched chunk's modality is readable.
+        field chunk_modalities type array<string> {
+            indexing: summary | attribute
+        }
+
+        # MediaInfo (M3, ADR-013) flattened onto the document; omitted/zero for
+        # text docs. All summary|attribute: result-card payload that the query
+        # service also exposes via Hit (thumbnail_key, duration, dimensions).
+        # media_width/media_height are `long` here -- Vespa has no 32-bit attribute
+        # type; the proto MediaInfo.width/height (int32) widen losslessly.
+        field media_duration_ms type long {
+            indexing: summary | attribute
+        }
+
+        field media_width type long {
+            indexing: summary | attribute
+        }
+
+        field media_height type long {
+            indexing: summary | attribute
+        }
+
+        # Blob key of the generated thumbnail / video poster frame (BlobRef key);
+        # returned as Hit.thumbnail_key for the UI to render. Empty for text docs.
+        field thumbnail_key type string {
+            indexing: summary | attribute
+        }
+
+        # Detected ASR transcript language (BCP-47, e.g. "en"); empty for non-ASR.
+        field transcript_lang type string {
+            indexing: summary | attribute
         }
 
         # Participant display strings, e.g. "Alice Smith <alice@example.com>".
@@ -147,6 +221,41 @@ schema doc {
         }
     }
 
+    # mode/arm=clip (M3, ADR-013): the text->image arm. The query service encodes
+    # the query text with the CLIP *text* encoder (services/clip /embed/text) and
+    # runs nearestNeighbor(clip_embedding, qclip); this profile ranks purely by
+    # CLIP closeness. The query service runs this as a SEPARATE Vespa query (its
+    # own ranking=clip + YQL nearestNeighbor over clip_embedding) and merges the
+    # hits with the bge-m3 text/hybrid arm in-process, deduping by doc_id (the two
+    # arms live in different vector spaces, so they are not blended inside one
+    # Vespa expression). Degradation (ADR-006): clip service down -> the query
+    # service drops this arm entirely; the text/OCR/ASR arm still answers.
+    # - query(qclip) is the CLIP query embedding (input.query(qclip)=[...]),
+    #   declared float so the bfloat16 document cells widen for the distance calc.
+    # - closeness(field, clip_embedding) = 1/(1+angular_distance) in [0,1]; for the
+    #   mixed chunk tensor the CLOSEST chunk vector per document is used (max over
+    #   the mapped `chunk` dimension), exactly like closeness(field, embedding).
+    # - closest(clip_embedding) is exposed in summary-features (see below) so the
+    #   query service can read WHICH chunk matched -> its start_ms/modality.
+    rank-profile clip {
+        inputs {
+            query(qclip) tensor<float>(x[@CLIP_DIM@])
+        }
+        first-phase {
+            expression: closeness(field, clip_embedding)
+        }
+        # closest(clip_embedding) returns a mapped tensor with a single cell whose
+        # LABEL is the chunk index of the document vector nearest to query(qclip)
+        # (Vespa "closest(name)" rank feature). Surfaced per hit in
+        # fields.summaryfeatures so the query service resolves the matched chunk ->
+        # chunk_starts_ms[index] / chunk_ends_ms[index] / chunk_modalities[index].
+        # summary-features are global to the active rank-profile and returned for
+        # every hit regardless of the selected document-summary class.
+        summary-features {
+            closest(clip_embedding)
+        }
+    }
+
     # Summary class for the query service (&presentation.summary=search): lean
     # result-card fields plus dynamic summaries of body and chunks -- extracted
     # fragments around matching query terms, terms wrapped in <hi>...</hi>.
@@ -179,5 +288,23 @@ schema doc {
             source: chunks
             dynamic
         }
+        # Matched-chunk resolution (M3, ADR-013). The query service maps a hit's
+        # matched chunk index -> time anchor + modality using these parallel
+        # arrays. The index comes from:
+        #   - CLIP arm: summaryfeatures["closest(clip_embedding)"] -- the single
+        #     cell label is the chunk index (see the `clip` rank-profile).
+        #   - text/ASR arm: chunk_snippets -- the element(s) carrying <hi> mark the
+        #     matched chunk; its position is the index.
+        # Both arrays are positionally aligned with `chunks`. Index 0 (text/OCR
+        # whole-doc chunks) yields start/end 0.
+        summary chunk_starts_ms {}
+        summary chunk_ends_ms {}
+        summary chunk_modalities {}
+        # Media result-card fields (Hit.thumbnail_key etc.); zero/empty for text.
+        summary media_duration_ms {}
+        summary media_width {}
+        summary media_height {}
+        summary thumbnail_key {}
+        summary transcript_lang {}
     }
 }

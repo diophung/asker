@@ -465,6 +465,131 @@ func TestHistoryPrunedStartHistoryID(t *testing.T) {
 	}
 }
 
+func (f *fixture) getProfile(token string) (wireProfile, int) {
+	f.t.Helper()
+	var prof wireProfile
+	code := f.do(http.MethodGet, "/gmail/v1/users/me/profile", token, nil, &prof)
+	return prof, code
+}
+
+func TestGetProfileShape(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	// Empty mailbox: zero totals, historyId 0.
+	prof, code := f.getProfile(testToken)
+	if code != http.StatusOK {
+		t.Fatalf("profile: status %d", code)
+	}
+	if prof.EmailAddress != testEmail {
+		t.Errorf("emailAddress = %q, want %q", prof.EmailAddress, testEmail)
+	}
+	if prof.MessagesTotal != 0 || prof.ThreadsTotal != 0 || prof.HistoryID != 0 {
+		t.Errorf("empty mailbox profile = %+v, want zero totals and historyId", prof)
+	}
+
+	f.seed(testEmail, 4, 11)
+
+	// Raw JSON: historyId must be a STRING (the generated client's Profile
+	// declares it with the `,string` option); the totals are plain numbers.
+	req, _ := http.NewRequest(http.MethodGet, f.ts.URL+"/gmail/v1/users/me/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := generic["historyId"].(string); !ok || got != "4" {
+		t.Errorf("historyId = %#v, want JSON string \"4\"", generic["historyId"])
+	}
+	if got, ok := generic["messagesTotal"].(float64); !ok || got != 4 {
+		t.Errorf("messagesTotal = %#v, want JSON number 4", generic["messagesTotal"])
+	}
+	if got, ok := generic["threadsTotal"].(float64); !ok || got != 4 {
+		t.Errorf("threadsTotal = %#v, want JSON number 4", generic["threadsTotal"])
+	}
+	if got, ok := generic["emailAddress"].(string); !ok || got != testEmail {
+		t.Errorf("emailAddress = %#v, want %q", generic["emailAddress"], testEmail)
+	}
+}
+
+func TestGetProfileTracksAdminMutations(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	msgA := f.addMessage(testEmail, "first", "body a") // history 1
+	prof, _ := f.getProfile(testToken)
+	if prof.HistoryID != msgA.HistoryID || prof.MessagesTotal != 1 || prof.ThreadsTotal != 1 {
+		t.Fatalf("after add: profile = %+v, want historyId %d and totals 1/1", prof, msgA.HistoryID)
+	}
+
+	msgB := f.addMessage(testEmail, "second", "body b") // history 2
+	edited := f.editMessage(testEmail, msgA.ID, "", "body a v2")
+	// The edit appends delete+add entries; the profile must report the
+	// CURRENT mailbox historyId (the add entry), not a stale one.
+	prof, _ = f.getProfile(testToken)
+	if prof.HistoryID != edited.HistoryID {
+		t.Errorf("after edit: profile historyId = %d, want %d", prof.HistoryID, edited.HistoryID)
+	}
+	if prof.MessagesTotal != 2 || prof.ThreadsTotal != 2 {
+		t.Errorf("after edit: totals = %d/%d, want 2/2", prof.MessagesTotal, prof.ThreadsTotal)
+	}
+
+	f.deleteMessage(testEmail, msgB.ID) // one more history entry
+	prof, _ = f.getProfile(testToken)
+	if prof.HistoryID != edited.HistoryID+1 {
+		t.Errorf("after delete: profile historyId = %d, want %d", prof.HistoryID, edited.HistoryID+1)
+	}
+	if prof.MessagesTotal != 1 || prof.ThreadsTotal != 1 {
+		t.Errorf("after delete: totals = %d/%d, want 1/1", prof.MessagesTotal, prof.ThreadsTotal)
+	}
+
+	// The profile and history.list views of "current historyId" agree.
+	var hist wireListHistoryResponse
+	if code := f.do(http.MethodGet, "/gmail/v1/users/me/history?startHistoryId="+fmt.Sprint(msgA.HistoryID), testToken, nil, &hist); code != http.StatusOK {
+		t.Fatalf("history: status %d", code)
+	}
+	if hist.HistoryID != prof.HistoryID {
+		t.Errorf("history.list historyId = %d, profile historyId = %d; must agree", hist.HistoryID, prof.HistoryID)
+	}
+}
+
+func TestGetProfileAuthMapping(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.addMessage(testEmail, "hello", "world")
+
+	cases := []struct {
+		name   string
+		token  string
+		userID string
+		want   int
+	}{
+		{"no token", "", "me", http.StatusUnauthorized},
+		{"wrong prefix", "some-google-token", "me", http.StatusUnauthorized},
+		{"valid me", testToken, "me", http.StatusOK},
+		{"valid explicit self", testToken, testEmail, http.StatusOK},
+		{"explicit other user", testToken, "bob@example.com", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gerr googleError
+			code := f.do(http.MethodGet, "/gmail/v1/users/"+tc.userID+"/profile", tc.token, nil, &gerr)
+			if code != tc.want {
+				t.Fatalf("status %d, want %d", code, tc.want)
+			}
+			if tc.want != http.StatusOK && gerr.Error.Code != tc.want {
+				t.Fatalf("google error body code = %d, want %d", gerr.Error.Code, tc.want)
+			}
+		})
+	}
+}
+
 func TestAuthMapping(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

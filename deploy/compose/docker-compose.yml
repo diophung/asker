@@ -3,6 +3,45 @@
 # then vespa/deploy.sh pushes the Vespa application package).
 name: asker
 
+# Connector OAuth (dev): point every provider's authorize/token endpoints at the
+# fake-oauth service (auto-consents, issues dev tokens). Real deployments set
+# ASKER_OAUTH_<P>_CLIENT_ID/_SECRET to a registered app and DROP the *_URL
+# overrides so the real provider endpoints are used (see docs/oauth.md). Shared by
+# the gateway (code exchange) and connector-hub (token refresh).
+# ASKER_SAFEHTTP_ALLOW_PRIVATE relaxes the SSRF guard so the in-network fake-oauth
+# host is reachable — DEV/CI ONLY, never production (the metadata IP stays blocked).
+# AUTH_URL is BROWSER-facing (the user's host browser is redirected there), so it
+# uses the host-published address localhost:9500; TOKEN_URL is GATEWAY/HUB-facing
+# (server-side code exchange + refresh), so it uses the in-network fake-oauth:9500.
+# Same split as OIDC_ISSUER (localhost:8081) vs OIDC_JWKS_URL (keycloak:8080).
+x-oauth-env: &oauth-env
+  ASKER_SAFEHTTP_ALLOW_PRIVATE: "1" # dev-only: reach the in-network fake-oauth
+  # Google: defaults are the dev fake provider. To connect a REAL Gmail account,
+  # set these four in deploy/compose/.env (gitignored) — see docs/oauth.md. The
+  # real-Google values for the two URLs are commented in that .env block ready to
+  # uncomment; CLIENT_ID/SECRET come from your Google Cloud OAuth client.
+  ASKER_OAUTH_GOOGLE_CLIENT_ID: "${ASKER_OAUTH_GOOGLE_CLIENT_ID:-dev-google-client}"
+  ASKER_OAUTH_GOOGLE_CLIENT_SECRET: "${ASKER_OAUTH_GOOGLE_CLIENT_SECRET:-dev-google-secret}"
+  ASKER_OAUTH_GOOGLE_AUTH_URL: "${ASKER_OAUTH_GOOGLE_AUTH_URL:-http://localhost:9500/google/authorize}"
+  ASKER_OAUTH_GOOGLE_TOKEN_URL: "${ASKER_OAUTH_GOOGLE_TOKEN_URL:-http://fake-oauth:9500/google/token}"
+  # Microsoft / Outlook: defaults are the dev fake provider. To connect a REAL
+  # Outlook/Office365 mailbox, set these in deploy/compose/.env (gitignored) — see
+  # docs/oauth.md and that .env block (ready to uncomment). The real Microsoft
+  # auth/token URLs embed your Entra TENANT (default "common" = multi-tenant);
+  # replace it with your tenant ID in .env if your app is single-tenant.
+  ASKER_OAUTH_MICROSOFT_CLIENT_ID: "${ASKER_OAUTH_MICROSOFT_CLIENT_ID:-dev-microsoft-client}"
+  ASKER_OAUTH_MICROSOFT_CLIENT_SECRET: "${ASKER_OAUTH_MICROSOFT_CLIENT_SECRET:-dev-microsoft-secret}"
+  ASKER_OAUTH_MICROSOFT_AUTH_URL: "${ASKER_OAUTH_MICROSOFT_AUTH_URL:-http://localhost:9500/microsoft/authorize}"
+  ASKER_OAUTH_MICROSOFT_TOKEN_URL: "${ASKER_OAUTH_MICROSOFT_TOKEN_URL:-http://fake-oauth:9500/microsoft/token}"
+  ASKER_OAUTH_SLACK_CLIENT_ID: "dev-slack-client" # dev-only
+  ASKER_OAUTH_SLACK_CLIENT_SECRET: "dev-slack-secret" # dev-only
+  ASKER_OAUTH_SLACK_AUTH_URL: "http://localhost:9500/slack/authorize"
+  ASKER_OAUTH_SLACK_TOKEN_URL: "http://fake-oauth:9500/slack/token"
+  ASKER_OAUTH_ATLASSIAN_CLIENT_ID: "dev-atlassian-client" # dev-only
+  ASKER_OAUTH_ATLASSIAN_CLIENT_SECRET: "dev-atlassian-secret" # dev-only
+  ASKER_OAUTH_ATLASSIAN_AUTH_URL: "http://localhost:9500/atlassian/authorize"
+  ASKER_OAUTH_ATLASSIAN_TOKEN_URL: "http://fake-oauth:9500/atlassian/token"
+
 services:
   gateway:
     build:
@@ -11,6 +50,13 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     environment:
+      <<: *oauth-env
+      # Public base used to build the OAuth redirect_uri (<base>/v1/oauth/callback)
+      # and the post-callback redirect back to the web UI. Override in .env (e.g.
+      # to http://127.0.0.1:8080 if localhost resolves to IPv6 on your machine);
+      # the registered redirect URI at Google must match this base exactly.
+      GATEWAY_PUBLIC_URL: "${GATEWAY_PUBLIC_URL:-http://localhost:8080}"
+      WEB_APP_URL: "http://localhost:13001"
       GATEWAY_ADDR: ":8080"
       OIDC_ISSUER: "http://localhost:8081/realms/asker"
       # Token `iss` is the host-visible URL (KC_HOSTNAME), but the gateway fetches
@@ -22,7 +68,10 @@ services:
       HUB_HTTP_URL: "http://connector-hub:9300"
       REDIS_ADDR: "redis:6379"
       RATE_LIMIT_PER_MINUTE: "600"
-      CORS_ALLOWED_ORIGINS: "http://localhost:3000"
+      # Web UI origin(s). Both host forms because macOS resolves `localhost` to
+      # IPv6 (::1) first and the web container binds IPv4 (127.0.0.1) — see the
+      # web service note below for why the host port is 13001, not 3000.
+      CORS_ALLOWED_ORIGINS: "http://localhost:13001,http://127.0.0.1:13001"
       MAX_UPLOAD_MB: "32"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
@@ -63,6 +112,7 @@ services:
       context: ../..
       dockerfile: services/connector-hub/Dockerfile
     environment:
+      <<: *oauth-env
       HUB_ADDR: ":9300"
       HUB_HEALTH_ADDR: ":9301"
       HUB_WEBHOOK_BASE: "http://connector-hub:9300"
@@ -123,11 +173,20 @@ services:
       TEI_URL: "http://tei:80"
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       ENRICH_HEALTH_ADDR: ":9601"
+      # Media pipeline (M3, used by wave-1 media handlers): CLIP embeddings, and
+      # the hub's internal decrypt/encrypt endpoint for original media + thumbnails.
+      CLIP_URL: "http://clip:9800"
+      CLIP_DIM: ${CLIP_DIM:-512}
+      HUB_MEDIA_URL: "http://connector-hub:9300"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    volumes:
+      - enrich-hf-cache:/home/nonroot/.cache/huggingface # whisper-tiny weights (M3)
     depends_on:
       redpanda:
         condition: service_healthy
       tei:
+        condition: service_healthy
+      clip:
         condition: service_healthy
     healthcheck:
       test:
@@ -148,6 +207,7 @@ services:
       KAFKA_BROKERS: "redpanda:9092"
       VESPA_URL: "http://vespa:8080"
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      CLIP_DIM: ${CLIP_DIM:-512}
       INDEX_WRITER_HEALTH_ADDR: ":9701"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
@@ -173,6 +233,9 @@ services:
       TEI_URL: "http://tei:80"
       REDIS_ADDR: "redis:6379"
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      # CLIP text->image arm (M3, ADR-013); degrades gracefully if clip is down.
+      CLIP_URL: "http://clip:9800"
+      CLIP_DIM: ${CLIP_DIM:-512}
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
       vespa:
@@ -186,12 +249,43 @@ services:
       retries: 5
       start_period: 30s
 
+  clip:
+    # CLIP model service (M3, ADR-013): one open_clip model serves both the text
+    # and image encoders so text->image queries and image embeddings share a
+    # space. Dev/CI use ViT-B/32 (small). First start loads/downloads the model.
+    build:
+      context: ../../services/clip
+      dockerfile: Dockerfile
+    environment:
+      CLIP_MODEL: ${CLIP_MODEL:-ViT-B-32}
+      CLIP_PRETRAINED: ${CLIP_PRETRAINED:-openai}
+      CLIP_PORT: ":9800"
+    volumes:
+      # Mount at the image's nonroot HOME (HOME=/home/nonroot, HF_HOME under it):
+      # open_clip writes weights there, not /root/.cache. Without this the cache
+      # never persists and weights re-download on every container restart.
+      - clip-cache:/home/nonroot/.cache # open_clip model weights cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9800/health', timeout=2).status==200 else 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      # Model download + load on first boot.
+      start_period: 10m
+
   fake-gmail:
     # Dev/CI only: local Gmail API fake (ADR-008). Admin API is unauthenticated
-    # by design — NEVER expose beyond the compose network.
+    # by design — bound to 127.0.0.1 ONLY so the host e2e driver can seed it;
+    # NEVER expose beyond the local machine.
     build:
       context: ../..
       dockerfile: tools/fake-gmail/Dockerfile
+    ports:
+      - "127.0.0.1:9400:9400"
     environment:
       FAKE_GMAIL_ADDR: ":9400"
     healthcheck:
@@ -201,12 +295,42 @@ services:
       retries: 5
       start_period: 15s
 
-  web:
+  fake-oauth:
+    # Dev/CI only: a standards-correct fake OAuth 2.0 authorization server that the
+    # gateway (code exchange) and connector-hub (refresh) point every provider at.
+    # It AUTO-CONSENTS — any caller gets a token for the configured subject — so it
+    # is bound to 127.0.0.1 / the compose network ONLY; NEVER expose it. For Google
+    # it issues "fake-gmail-token:<subject>" so the post-OAuth gmail sync reaches the
+    # fake-gmail service end to end.
     build:
       context: ../..
-      dockerfile: web/Dockerfile
+      dockerfile: tools/fake-oauth/Dockerfile
     ports:
-      - "127.0.0.1:3000:80"
+      - "127.0.0.1:9500:9500"
+    environment:
+      ADDR: ":9500"
+      FAKE_OAUTH_SUBJECT: "alice@example.com" # dev default identity
+    healthcheck:
+      test: ["CMD", "/fake-oauth", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      # Self-contained npm build — context is web/ itself, not the repo root.
+      context: ../../web
+      dockerfile: Dockerfile
+    ports:
+      # Host port 13001, NOT the Next.js-default 3000: that port commonly collides
+      # with another local dev app, and because macOS resolves `localhost` to IPv6
+      # (::1) before IPv4 while this container binds IPv4 only, a squatter on
+      # ::1:3000 would intercept the browser and break the Keycloak silent-SSO
+      # flow ("Could not reach the identity provider"). 13001 sits with the other
+      # host-facing UIs (Grafana 13000) and is collision-free. (Same rationale as
+      # Postgres→15432, Redis→16379, Redpanda→19092 — ADR-003 §4.)
+      - "127.0.0.1:13001:80"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
       interval: 15s
@@ -387,3 +511,5 @@ volumes:
   # Shared dev KEK for envelope encryption (control-plane token vault +
   # connector-hub blob store). Vault replaces this in M4.
   kek-keys:
+  clip-cache: # open_clip model weights (M3)
+  enrich-hf-cache: # faster-whisper (whisper-tiny) weights (M3)

@@ -1,0 +1,109 @@
+// Out-of-process connector plugin transport (ADR-010).
+//
+// A third-party connector runs as its own gRPC server implementing
+// ConnectorPlugin; the hub dials it and adapts it to the in-process
+// sdk.Connector interface. The connector receives ONLY its own per-call
+// credential (Config.token) — never the hub's token vault or any other
+// tenant's data.
+//
+// Emit and Checkpoint are hub-side callbacks, so the sync RPCs are
+// server-streaming: the plugin streams a sequence of SyncEvents (each an
+// emitted Document, an intermediate checkpoint cursor, or the terminal Done
+// carrying the final cursor). The hub processes events as they arrive; if a
+// hub-side Emit/Checkpoint fails the hub cancels the stream, which surfaces to
+// the plugin as a context error from Send — preserving the in-process
+// contract that an Emit/Checkpoint error is terminal for the pass.
+syntax = "proto3";
+
+package asker.plugin.v1;
+
+import "asker/v1/document.proto";
+
+option go_package = "github.com/asker/asker/platform/proto/gen/go/asker/plugin/v1;pluginv1";
+
+// ConnectorPluginService is the gRPC form of sdk.Connector.
+service ConnectorPluginService {
+  rpc Spec(SpecRequest) returns (SpecResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc FullSync(FullSyncRequest) returns (stream SyncEvent);
+  rpc IncrementalSync(IncrementalSyncRequest) returns (stream SyncEvent);
+  rpc HandleWebhook(HandleWebhookRequest) returns (stream SyncEvent);
+}
+
+// AuthType mirrors sdk.AuthType.
+enum AuthType {
+  AUTH_TYPE_UNSPECIFIED = 0;
+  AUTH_NONE = 1;
+  AUTH_OAUTH2 = 2;
+  AUTH_TOKEN = 3;
+}
+
+// Config is the wire form of sdk.Config minus the Checkpoint callback (which
+// the stream carries) — the plugin gets only what it needs to talk to its
+// source for one tenant.
+message Config {
+  string tenant_id = 1;
+  string instance_id = 2;
+  bytes config_json = 3;
+  bytes token = 4; // already-decrypted per-instance credential; never logged
+}
+
+message SpecRequest {}
+
+message SpecResponse {
+  string id = 1;
+  string display_name = 2;
+  AuthType auth_type = 3;
+  bytes config_schema = 4; // JSONSchema
+  bool supports_webhook = 5;
+}
+
+message ValidateRequest {
+  Config config = 1;
+}
+
+message ValidateResponse {}
+
+message FullSyncRequest {
+  Config config = 1;
+}
+
+message IncrementalSyncRequest {
+  Config config = 1;
+  string cursor = 2;
+}
+
+message HandleWebhookRequest {
+  Config config = 1;
+  HttpRequest request = 2;
+}
+
+// HttpRequest is a webhook delivery serialized for the plugin. The hub has
+// already matched it to this tenant+instance; the plugin verifies and acts.
+message HttpRequest {
+  string method = 1;
+  string url = 2; // path + query as received
+  map<string, HeaderValues> headers = 3;
+  bytes body = 4;
+}
+
+message HeaderValues {
+  repeated string values = 1;
+}
+
+// SyncEvent is one item a streaming sync RPC sends back. Exactly one field set.
+message SyncEvent {
+  oneof event {
+    // document is an emitted canonical Document (hub stamps ts.ingested).
+    asker.v1.Document document = 1;
+    // checkpoint is an intermediate resume cursor to persist mid-backfill.
+    string checkpoint = 2;
+    // done is the terminal event carrying the cursor IncrementalSync resumes
+    // from; it MUST be the last message on a successful stream.
+    SyncDone done = 3;
+  }
+}
+
+message SyncDone {
+  string cursor = 1;
+}

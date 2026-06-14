@@ -1,0 +1,65 @@
+{{- /*
+============================================================================
+  DEV-MODE Vault Service + ServiceAccount + dev token Secret.
+  NON-PRODUCTION (see vault-deployment.yaml and ADR-015). Rendered only when
+  vault.deploy is true.
+============================================================================
+The Service is named "vault" (bare, not release-prefixed — same convention as
+the app Services in _helpers.tpl) so control-plane / connector-hub can select
+the Vault KEK in prod simply by pointing VAULT_ADDR at http://vault:8200. When
+an external/managed Vault is used instead, set vault.deploy=false and point
+vault.addr at that host; the app workloads' VAULT_ADDR wiring (integrator-added,
+see ADR-015) is unchanged.
+*/ -}}
+{{- if eq (include "asker.vault.enabled" .) "true" }}
+{{- $cfg := include "asker.vault.config" . | fromYaml }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $cfg.serviceAccountName }}
+  labels:
+    {{- include "asker.vault.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  labels:
+    {{- include "asker.vault.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "asker.vault.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $cfg.port }}
+      targetPort: http
+      protocol: TCP
+      appProtocol: http
+---
+{{- /*
+DEV-ONLY Vault token Secret. In dev mode Vault boots with a fixed root token
+(vault.devRootToken) so the init Job and the app services can authenticate
+without an unseal/auth-method dance. This token is the X-Vault-Token the Go
+vaultKEK (platform/crypto/vault.go) sends.
+
+PRODUCTION: do NOT use a static root token. Provision a least-privilege Vault
+token (policy granting only transit/encrypt + transit/decrypt on the asker-kek
+key) via Vault Agent injection / the Kubernetes auth method / External Secrets,
+synced into a Secret of this same name. The app workloads reference the fixed
+name regardless (ADR-015), so the strategy flips without a workload change.
+*/ -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $cfg.tokenSecretName }}
+  labels:
+    {{- include "asker.vault.labels" . | nindent 4 }}
+    asker.dev/secret-source: chart-dev-literals
+  annotations:
+    asker.dev/warning: "DEV-ONLY Vault root token. Replace with a least-privilege transit token (Vault Agent / k8s auth / external-secrets) in production. See ADR-015."
+type: Opaque
+stringData:
+  VAULT_TOKEN: {{ $cfg.devRootToken | quote }}
+{{- end }}

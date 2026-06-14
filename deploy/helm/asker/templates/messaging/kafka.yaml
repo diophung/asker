@@ -1,0 +1,81 @@
+{{- /*
+Strimzi Kafka cluster (kafka.strimzi.io/v1beta2) — the production event backbone
+(ADR-003 §1, ADR-014 §4). Replaces compose Redpanda. Gated behind
+`kafka.strimzi.enabled` (default false) so the default app-tier render is
+unchanged and the chart installs cleanly on a cluster WITHOUT Strimzi.
+
+This renders the Kafka CUSTOM RESOURCE only — the Strimzi cluster operator (which
+reconciles it into StatefulSets/Services) MUST be installed separately, e.g.:
+
+    helm repo add strimzi https://strimzi.io/charts/
+    helm install strimzi-operator strimzi/strimzi-kafka-operator -n kafka
+
+The CR's apiVersion (kafka.strimzi.io/...) has no kubeconform schema and is
+skipped via -ignore-missing-schemas; the operator validates it on apply.
+
+KRaft / ZK-less: current Strimzi (>=0.46) runs Kafka in KRaft mode via KafkaNodePool
+CRs and the "strimzi.io/node-pools: enabled" + "strimzi.io/kraft: enabled"
+annotations. We render the matching KafkaNodePool below (kafka-nodepool.yaml). No
+ZooKeeper section is emitted.
+
+Cloud-agnostic storage: `kafka.strimzi.storage.type` is "ephemeral" or
+"persistent-claim"; for persistent-claim the size + a configurable storageClass
+(default "" => cluster default, falling back to persistence.storageClass) apply.
+NO provider-specific class names.
+*/ -}}
+{{- $kafka := .Values.kafka | default dict -}}
+{{- $strimzi := $kafka.strimzi | default dict -}}
+{{- if $strimzi.enabled -}}
+{{- $storage := $strimzi.storage | default dict -}}
+{{- $storageType := $storage.type | default "persistent-claim" -}}
+{{- $persistence := .Values.persistence | default dict -}}
+{{- $storageClass := $storage.storageClass | default $persistence.storageClass | default "" -}}
+{{- $version := $strimzi.kafkaVersion | default "3.9.0" -}}
+{{- $replicas := int ($strimzi.replicas | default 3) -}}
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: {{ include "asker.kafka.clusterName" . }}
+  labels:
+    {{- include "asker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: messaging
+  annotations:
+    # KRaft (ZK-less) via node pools — the current Strimzi mode.
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: {{ $version | quote }}
+    # metadataVersion tracks the Kafka version's inter-broker protocol in KRaft.
+    metadataVersion: {{ printf "%s-IV0" (regexReplaceAll "\\.\\d+$" $version "") | quote }}
+    # Listeners: a plain internal listener on :9092 (the bootstrap the app workers
+    # dial) and a TLS listener on :9093 for the wave-2 mTLS hardening (ADR-009).
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    config:
+      # Replication sized for the broker count (capped at 3) — prod-safe defaults.
+      offsets.topic.replication.factor: {{ min $replicas 3 }}
+      transaction.state.log.replication.factor: {{ min $replicas 3 }}
+      transaction.state.log.min.isr: {{ max 1 (sub (min $replicas 3) 1) }}
+      default.replication.factor: {{ min $replicas 3 }}
+      min.insync.replicas: {{ max 1 (sub (min $replicas 3) 1) }}
+      {{- with $strimzi.config }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+    {{- with $strimzi.resources }}
+    resources:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  # entityOperator runs the Topic + User operators so the KafkaTopic CRs below are
+  # reconciled into real topics.
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+{{- end }}

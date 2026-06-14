@@ -8,6 +8,11 @@ lint:
     # The M0 contract fixes DocType values as EMAIL, CHAT_MESSAGE, ... without
     # the DOC_TYPE_ prefix; the zero value keeps the _UNSPECIFIED convention.
     - ENUM_VALUE_PREFIX
+    # The connector-plugin streaming RPCs (FullSync/IncrementalSync/
+    # HandleWebhook) deliberately share one SyncEvent response type — a single
+    # event stream is the design, not three near-identical copies (ADR-010).
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_RESPONSE_STANDARD_NAME
 breaking:
   use:
     - FILE

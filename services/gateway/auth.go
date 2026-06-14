@@ -5,11 +5,39 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
 	"github.com/asker/asker/platform/tenancy"
 )
+
+// jwksFetchTimeout bounds every JWKS fetch so a slow/hung Keycloak cannot pin
+// goroutines on token verification indefinitely (DoS hardening, M6).
+//
+// JWKS refetch behavior (corrected, finding M6-#10): go-oidc's RemoteKeySet does
+// NOT enforce a fixed "once per minute" refetch for an unknown kid. It caches
+// keys until the JWKS response's HTTP Cache-Control max-age expires, and it
+// DEDUPES concurrent fetches (a single in-flight request serves all waiters),
+// so a flood of tokens carrying the same unknown kid collapses to one upstream
+// fetch rather than one per request. The real amplification bound is therefore
+// the pre-auth throttle (in front of verification) plus this bounded JWKS client
+// (timeout + capped idle pool) — NOT a per-kid rate limiter that go-oidc lacks.
+const jwksFetchTimeout = 5 * time.Second
+
+// boundedJWKSClient is the HTTP client go-oidc uses to fetch JWKS: a strict
+// timeout and a capped idle-connection pool so a flood cannot fan out unbounded
+// sockets to Keycloak.
+func boundedJWKSClient() *http.Client {
+	return &http.Client{
+		Timeout: jwksFetchTimeout,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+}
 
 type ctxKey int
 
@@ -29,9 +57,12 @@ type authenticator struct {
 
 // newAuthenticator builds the OIDC token verifier. oidc.NewRemoteKeySet does
 // no network I/O at construction time — JWKS is fetched lazily on the first
-// verification — so the gateway starts even if Keycloak is not up yet.
+// verification — so the gateway starts even if Keycloak is not up yet. The
+// JWKS fetch uses a bounded HTTP client (timeout + capped connection pool) so a
+// flood of unverifiable tokens cannot amplify into unbounded JWKS load.
 func newAuthenticator(ctx context.Context, issuer, jwksURL, audience string, logger *slog.Logger) *authenticator {
-	keySet := oidc.NewRemoteKeySet(ctx, jwksURL)
+	keyCtx := oidc.ClientContext(ctx, boundedJWKSClient())
+	keySet := oidc.NewRemoteKeySet(keyCtx, jwksURL)
 	verifier := oidc.NewVerifier(issuer, keySet, &oidc.Config{ClientID: audience})
 	return &authenticator{verifier: verifier, logger: logger}
 }

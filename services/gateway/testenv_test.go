@@ -43,6 +43,7 @@ func testGatewayConfig(jwksURL string) gatewayConfig {
 		RateLimitPerMinute:   600,
 		CORSAllowedOrigins:   "http://localhost:3000",
 		MaxUploadMB:          32,
+		MaxMediaMB:           25,
 	}
 }
 
@@ -57,8 +58,10 @@ func newFakeDeps(t *testing.T) *deps {
 	return &deps{
 		hubURL:         "http://127.0.0.1:1",
 		hubClient:      &http.Client{Timeout: time.Second},
+		mediaClient:    &http.Client{Timeout: time.Second},
 		counter:        &fakeCounter{},
 		maxUploadBytes: 32 << 20,
+		maxMediaBytes:  25 << 20,
 		logger:         discardLogger(),
 	}
 }
@@ -134,12 +137,13 @@ func (f *fakeQuery) captured() (tenancy.TenantID, *queryv1.SearchRequest) {
 // which lets tests prove the gateway forwards the JWT tenant on each RPC.
 type fakeControlPlane struct {
 	controlplanev1.UnimplementedControlPlaneServiceServer
-	mu        sync.Mutex
-	nextID    int
-	ensured   []string
-	instances map[string]map[string]*controlplanev1.ConnectorInstance
-	order     map[string][]string
-	tokens    map[string][]byte
+	mu             sync.Mutex
+	nextID         int
+	ensured        []string
+	instances      map[string]map[string]*controlplanev1.ConnectorInstance
+	order          map[string][]string
+	tokens         map[string][]byte
+	deletedTenants []string
 	// injectable failures
 	ensureErr error
 	listErr   error
@@ -276,10 +280,75 @@ func (f *fakeControlPlane) PutToken(ctx context.Context, req *controlplanev1.Put
 	return &controlplanev1.PutTokenResponse{}, nil
 }
 
-// startGRPCBackends serves both fakes on a loopback listener behind the real
+// DeleteTenant records the (caller tenant, confirm) pair so the gateway test
+// can assert the gateway derives the confirm token from the verified tenant —
+// never from the request body — and returns a canned erasure report.
+func (f *fakeControlPlane) DeleteTenant(ctx context.Context, req *controlplanev1.DeleteTenantRequest) (*controlplanev1.DeleteTenantResponse, error) {
+	tenant, err := fakeCallerTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.GetConfirm() != tenant {
+		return nil, status.Error(codes.InvalidArgument, "confirm must equal caller tenant")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletedTenants = append(f.deletedTenants, tenant)
+	delete(f.instances, tenant)
+	return &controlplanev1.DeleteTenantResponse{Report: &controlplanev1.DeleteReport{
+		TenantId: tenant, DekDestroyed: true, VespaGroupPurged: true,
+		RedisPurged: true, VerifiedEmpty: true,
+	}}, nil
+}
+
+// fakeAdmin is the in-proc AdminService for gateway admin-route tests. It
+// records the target tenants it acted on; the gateway's admin-claim gate is
+// what these tests exercise, so the fake's logic is minimal.
+type fakeAdmin struct {
+	controlplanev1.UnimplementedAdminServiceServer
+	mu            sync.Mutex
+	listed        bool
+	deletedTenant string
+	suspended     map[string]bool
+}
+
+func newFakeAdmin() *fakeAdmin { return &fakeAdmin{suspended: map[string]bool{}} }
+
+func (a *fakeAdmin) ListTenants(_ context.Context, _ *controlplanev1.ListTenantsRequest) (*controlplanev1.ListTenantsResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.listed = true
+	return &controlplanev1.ListTenantsResponse{
+		Tenants: []*controlplanev1.TenantUsage{{TenantId: "tenant-x", ConnectorInstances: 2}},
+	}, nil
+}
+
+func (a *fakeAdmin) GetTenantUsage(_ context.Context, req *controlplanev1.GetTenantUsageRequest) (*controlplanev1.GetTenantUsageResponse, error) {
+	return &controlplanev1.GetTenantUsageResponse{Usage: &controlplanev1.TenantUsage{TenantId: req.GetTenantId()}}, nil
+}
+
+func (a *fakeAdmin) SuspendTenant(_ context.Context, req *controlplanev1.SuspendTenantRequest) (*controlplanev1.SuspendTenantResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.suspended[req.GetTenantId()] = req.GetSuspended()
+	return &controlplanev1.SuspendTenantResponse{InstancesChanged: 1}, nil
+}
+
+func (a *fakeAdmin) AdminDeleteTenant(_ context.Context, req *controlplanev1.AdminDeleteTenantRequest) (*controlplanev1.AdminDeleteTenantResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.deletedTenant = req.GetTenantId()
+	return &controlplanev1.AdminDeleteTenantResponse{Report: &controlplanev1.DeleteReport{
+		TenantId: req.GetTenantId(), DekDestroyed: true, VerifiedEmpty: true,
+	}}, nil
+}
+
+// startGRPCBackends serves the fakes on a loopback listener behind the real
 // tenancygrpc server interceptor and returns a client conn that uses the real
-// tenancygrpc client interceptor — the exact production wiring.
-func startGRPCBackends(t *testing.T, query queryv1.QueryServiceServer, control controlplanev1.ControlPlaneServiceServer) *grpc.ClientConn {
+// tenancygrpc client interceptor — the exact production wiring. The admin
+// methods are exempted from the tenant requirement, mirroring the real
+// control-plane main.go wiring.
+func startGRPCBackends(t *testing.T, query queryv1.QueryServiceServer, control controlplanev1.ControlPlaneServiceServer, admin controlplanev1.AdminServiceServer) *grpc.ClientConn {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -288,6 +357,9 @@ func startGRPCBackends(t *testing.T, query queryv1.QueryServiceServer, control c
 	srv := grpc.NewServer(grpc.UnaryInterceptor(tenancygrpc.UnaryServerInterceptor()))
 	queryv1.RegisterQueryServiceServer(srv, query)
 	controlplanev1.RegisterControlPlaneServiceServer(srv, control)
+	if admin != nil {
+		controlplanev1.RegisterAdminServiceServer(srv, admin)
+	}
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -309,6 +381,7 @@ type testEnv struct {
 	handler http.Handler
 	query   *fakeQuery
 	control *fakeControlPlane
+	admin   *fakeAdmin
 	counter *fakeCounter
 	deps    *deps
 	cfg     gatewayConfig
@@ -319,17 +392,23 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 	idp := newTestIdP(t)
 	query := &fakeQuery{}
 	control := newFakeControlPlane()
-	conn := startGRPCBackends(t, query, control)
+	admin := newFakeAdmin()
+	conn := startGRPCBackends(t, query, control, admin)
 
 	counter := &fakeCounter{}
 	cfg := testGatewayConfig(idp.jwks.URL)
 	d := &deps{
 		query:          queryv1.NewQueryServiceClient(conn),
 		control:        controlplanev1.NewControlPlaneServiceClient(conn),
+		admin:          controlplanev1.NewAdminServiceClient(conn),
 		hubURL:         "http://127.0.0.1:1",
 		hubClient:      &http.Client{Timeout: 5 * time.Second},
+		mediaClient:    &http.Client{Timeout: 5 * time.Second},
 		counter:        counter,
 		maxUploadBytes: cfg.MaxUploadMB << 20,
+		maxMediaBytes:  cfg.MaxMediaMB << 20,
+		oidcAudience:   cfg.OIDCAudience,
+		maxQueryChars:  cfg.MaxQueryChars,
 		logger:         discardLogger(),
 	}
 	for _, opt := range opts {
@@ -342,6 +421,7 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 		handler: newHandler(cfg, auth, d),
 		query:   query,
 		control: control,
+		admin:   admin,
 		counter: counter,
 		deps:    d,
 		cfg:     cfg,
@@ -368,6 +448,20 @@ func (e *testEnv) do(method, path string, body io.Reader, hdr http.Header) *http
 		for _, v := range vs {
 			req.Header.Add(k, v)
 		}
+	}
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// doWithClaims sends a request authenticated by a token minted from the given
+// claims (so a test can set/omit the admin role/scope).
+func (e *testEnv) doWithClaims(method, path string, body io.Reader, claims map[string]any) *httptest.ResponseRecorder {
+	e.t.Helper()
+	req := httptest.NewRequest(method, path, body)
+	req.Header.Set("Authorization", "Bearer "+e.idp.mint(e.t, claims))
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)

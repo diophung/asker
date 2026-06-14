@@ -1,0 +1,58 @@
+{{- /*
+Public Ingress — the only externally routable entry point. Cloud-agnostic:
+ingressClassName is a value (no nginx/traefik-specific annotation in defaults),
+and no provider LB annotations are injected here (set ingress.annotations per
+env). Host-based routing:
+  gatewayHost -> Service "gateway":8080  (the API edge; OIDC-authenticated)
+  webHost     -> Service "web":80         (the static SPA)
+
+TLS is gated behind ingress.tls.enabled and references a Secret named
+ingress.tls.secretName. cert-manager / an issuer (or an externally provisioned
+cert) populates that Secret in prod — that wiring is environment config injected
+via ingress.annotations, NOT a chart default (kept provider-neutral).
+*/ -}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "asker.fullname" . }}-edge
+  labels:
+    {{- include "asker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: edge
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.gatewayHost | quote }}
+        - {{ .Values.ingress.webHost | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.gatewayHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "asker.serviceName" (list . "gateway") }}
+                port:
+                  number: {{ .Values.services.gateway.port }}
+    - host: {{ .Values.ingress.webHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "asker.serviceName" (list . "web") }}
+                port:
+                  number: {{ .Values.services.web.port }}
+{{- end }}

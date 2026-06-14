@@ -1,0 +1,22 @@
+{{- /*
+Web PodDisruptionBudget — keeps the UI available during voluntary disruptions.
+*/ -}}
+{{- $svc := "web" -}}
+{{- $cfg := .Values.services.web -}}
+{{- if $cfg.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "asker.serviceFullname" (list . $svc) }}
+  labels:
+    {{- include "asker.serviceLabels" (list . $svc) | nindent 4 }}
+spec:
+  {{- if hasKey $cfg.pdb "minAvailable" }}
+  minAvailable: {{ $cfg.pdb.minAvailable }}
+  {{- else if hasKey $cfg.pdb "maxUnavailable" }}
+  maxUnavailable: {{ $cfg.pdb.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list . $svc) | nindent 6 }}
+{{- end }}

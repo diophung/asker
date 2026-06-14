@@ -1,0 +1,216 @@
+{{- /*
+================================================================================
+Prometheus — OPT-IN (M5). Gated on observability.enabled (DEFAULT FALSE): when
+off this file renders NOTHING and the default chart output is unchanged.
+
+Renders a small, memory-capped Prometheus:
+  - ConfigMap "<fullname>-prometheus-config": the scrape config. Targets are the
+    in-namespace release Service DNS + health port (gateway:8080, query:9201,
+    ingest:9501, index-writer:9701) — the SAME names/ports as the compose overlay
+    (deploy/observability/prometheus/prometheus.yml). STATIC targets (no
+    kubernetes_sd) keep it RBAC-free and identical to compose.
+  - ConfigMap "<fullname>-prometheus-rules": alert/recording rule groups. The
+    committed SLO rules live IN the chart at files/observability/prometheus/rules/
+    *.rules.yml and are embedded via .Files.Glob (single source of truth — the
+    compose overlay mounts the same files); any operator-supplied
+    .Values.observability.prometheus.rules map is merged on top. rule_files globs
+    this mount.
+  - Deployment (1 replica) + ClusterIP Service "prometheus":9090 (the bare name
+    the Grafana datasource dials at http://prometheus:9090).
+
+A Prometheus->service health-port ingress NetworkPolicy allow lives in
+templates/observability/netpol.yaml (so scraping works under default-deny).
+================================================================================
+*/ -}}
+{{- if eq (include "asker.obs.enabled" .) "true" }}
+{{- $root := . -}}
+{{- $o := .Values.observability.prometheus | default dict -}}
+{{- $img := $o.image | default dict -}}
+{{- $scrapeInterval := $o.scrapeInterval | default "15s" -}}
+{{- $evalInterval := $o.evaluationInterval | default "15s" -}}
+{{- $retention := $o.retention | default (dict "time" "24h" "size" "2GB") -}}
+{{- $persistence := $o.persistence | default dict -}}
+{{- $targets := $o.scrapeTargets | default list -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "prometheus-config") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "prometheus") | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ $scrapeInterval }}
+      scrape_timeout: 10s
+      evaluation_interval: {{ $evalInterval }}
+      external_labels:
+        stack: asker
+        namespace: {{ $root.Release.Namespace }}
+    rule_files:
+      - /etc/prometheus/rules/*.rules.yml
+    scrape_configs:
+      - job_name: prometheus
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["localhost:9090"]
+            labels:
+              service: prometheus
+      {{- range $t := $targets }}
+      - job_name: {{ $t.job | quote }}
+        metrics_path: /metrics
+        static_configs:
+          - targets: [{{ $t.target | quote }}]
+            labels:
+              service: {{ $t.job | quote }}
+      {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "prometheus-rules") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "prometheus") | nindent 4 }}
+data:
+  # The committed SLO rule groups ship WITH the chart: every *.rules.yml under
+  # files/observability/prometheus/rules/ is embedded here (single source of
+  # truth — the compose overlay mounts the same files). Any operator-supplied
+  # .Values.observability.prometheus.rules map (<filename> -> rule-group YAML) is
+  # merged on top. rule_files globs this mount.
+  {{- range $path, $_ := $root.Files.Glob "files/observability/prometheus/rules/*.rules.yml" }}
+  {{ base $path }}: |
+    {{- $root.Files.Get $path | nindent 4 }}
+  {{- end }}
+  {{- range $fname, $content := ($o.rules | default dict) }}
+  {{ $fname }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "prometheus") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "prometheus") | nindent 4 }}
+spec:
+  replicas: 1
+  # Single writer to one PVC — never run two against the same TSDB.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "asker.obs.selectorLabels" (list $root "prometheus") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.obs.labels" (list $root "prometheus") | nindent 8 }}
+      annotations:
+        # Roll the pod when the scrape config / rules change. Hash the values that
+        # drive the ConfigMaps (a self-include of this template would recurse).
+        checksum/config: {{ printf "%s|%s|%s|%v|%v" $scrapeInterval $evalInterval (toYaml $targets) ($root.Files.Glob "files/observability/prometheus/rules/*.rules.yml") ($o.rules | default dict) | sha256sum }}
+    spec:
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: {{ printf "%s:%s" ($img.repository | default "prom/prometheus") ($img.tag | default "v3.1.0") | quote }}
+          imagePullPolicy: {{ $img.pullPolicy | default $root.Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time={{ $retention.time | default "24h" }}"
+            - "--storage.tsdb.retention.size={{ $retention.size | default "2GB" }}"
+            - "--web.enable-lifecycle"
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml ($o.resources | default (dict "requests" (dict "cpu" "50m" "memory" "128Mi") "limits" (dict "cpu" "1" "memory" "512Mi"))) | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+              readOnly: true
+            - name: rules
+              mountPath: /etc/prometheus/rules
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "asker.obs.fullname" (list $root "prometheus-config") }}
+        - name: rules
+          configMap:
+            name: {{ include "asker.obs.fullname" (list $root "prometheus-rules") }}
+        - name: data
+        {{- if $persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "asker.obs.fullname" (list $root "prometheus") }}
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
+{{- if $persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "prometheus") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "prometheus") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "asker.obs.storageClass" (list $root $persistence) | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ $persistence.size | default "5Gi" | quote }}
+{{- end }}
+---
+# Dialable ClusterIP Service — metadata.name "prometheus" so the Grafana
+# datasource URL http://prometheus:9090 resolves unchanged (matches compose).
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    {{- include "asker.obs.labels" (list $root "prometheus") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "asker.obs.selectorLabels" (list $root "prometheus") | nindent 4 }}
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      protocol: TCP
+{{- end }}

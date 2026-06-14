@@ -1,0 +1,139 @@
+# ==============================================================================
+# Asker umbrella chart — DEV / kind / k3d overrides.
+#   helm template/install asker deploy/helm/asker -f deploy/helm/asker/values-dev.yaml
+#
+# For a single-node kind/k3d cluster (M4 exit: "full stack deploys to a kind/k3d
+# cluster in CI"). Mirrors the constrained-dev posture of ADR-003 / ADR-005:
+#   - embeddingDim 384 (bge-small-en-v1.5) so the dev TEI model + Vespa schema
+#     agree (ADR-005); clipDim stays 512 (ViT-B/32 is already small).
+#   - one replica per service, autoscaling + PDB OFF (a 1-node cluster cannot
+#     satisfy a PDB during drain, and HPA has nothing to spread onto).
+#   - chart-rendered dev Secret (secrets.strategy=chart) — no Vault in dev.
+#   - dependency addresses keep the compose Service names; the wave-1 dev
+#     stateful charts expose Services under those same names.
+#   - imageRegistry "" so locally built (kind load) images are used verbatim.
+# Override deps.* hostnames / image tags as needed for a given dev cluster.
+# ==============================================================================
+
+global:
+  # Use locally built images loaded into kind/k3d verbatim (no registry prefix).
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+
+# --- Shared config: dev embedding dim + compose-style dependency addresses ----
+config:
+  # bge-small-en-v1.5 on the dev TEI; must match the deployed Vespa schema (ADR-005).
+  embeddingDim: 384
+  clipDim: 512
+  # Dev uses Redpanda (ADR-003 §1); the wave-1 dev stack exposes it as "redpanda".
+  kafkaBrokers: "redpanda:9092"
+  vespaUrl: "http://vespa:8080"
+  teiUrl: "http://tei:80"
+  redisAddr: "redis:6379"
+  clipUrl: "http://clip:9800"
+  hubHttpUrl: "http://connector-hub:9300"
+  queryGrpcAddr: "dns:///query:9200"
+  controlPlaneGrpcAddr: "dns:///control-plane:9100"
+  postgresHost: "postgres"
+  postgresPort: 5432
+  postgresDb: "asker"
+  minioEndpoint: "minio:9000"
+  minioUseSsl: "false"
+  blobBucket: "asker-blobs"
+  otelExporterOtlpEndpoint: ""
+
+# --- Dev Secret (no Vault in dev) ---------------------------------------------
+secrets:
+  strategy: chart
+  dev:
+    minioAccessKey: "asker-minio"
+    minioSecretKey: "asker-minio-secret"
+    postgresUser: "asker"
+    postgresPassword: "asker"
+    keycloakAdminUser: "admin"
+    keycloakAdminPassword: "admin"
+
+# --- Ingress: localhost-style hosts, no TLS, cluster default class ------------
+ingress:
+  enabled: true
+  className: ""        # kind/k3d default ingress class
+  annotations: {}
+  gatewayHost: gateway.asker.local
+  webHost: app.asker.local
+  tls:
+    enabled: false
+
+# --- Per-service: 1 replica, autoscaling + PDB OFF on a 1-node cluster --------
+# Only the knobs that differ from values.yaml are set; everything else inherits.
+services:
+  gateway:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+    config:
+      # Dev gateway issuer/JWKS mirror the compose Keycloak split (ADR-003 §3),
+      # and CORS allows the dev web origin.
+      oidcIssuer: "http://localhost:8081/realms/asker"
+      oidcJwksUrl: "http://keycloak:8080/realms/asker/protocol/openid-connect/certs"
+      oidcAudience: "asker-web"
+      rateLimitPerMinute: 600
+      corsAllowedOrigins: "http://localhost:3000"
+      maxUploadMb: 32
+      maxMediaMb: 25
+  query:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+  ingest:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+  enrich:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+  index-writer:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+  connector-hub:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+  control-plane:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+  clip:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+  web:
+    replicaCount: 1
+    autoscaling: { enabled: false }
+    pdb: { enabled: false }
+
+# M4 wave 1 dev overrides: single-node kind/k3d sizing (small storage, single
+# brokers/groups, small TEI model agreeing with config.embeddingDim=384). The
+# heavy operator features stay OFF by default; the CI kind deploy (wave 2)
+# enables the lightweight forms it needs.
+stateful:
+  postgres: { storage: { size: 1Gi } }
+  minio: { storage: { size: 2Gi } }
+  tei: { modelId: BAAI/bge-small-en-v1.5, storage: { size: 2Gi } }
+kafka:
+  strimzi: { replicas: 1, storage: { type: ephemeral } }
+  topics: { partitions: 12, replicas: 1 }
+vespa:
+  groups: 1
+  nodesPerGroup: 1
+  storage: { size: 5Gi }
+
+# OPT-IN observability (M5): Prometheus + Grafana SLO stack. Left OFF here so the
+# dev render stays lean (the 8GB dev VM cannot host kind + the stack + monitoring;
+# observability is primarily for the CI load/soak cluster). To watch SLOs on a
+# roomier dev cluster, flip enabled true (or `--set observability.enabled=true`):
+# Grafana is then a ClusterIP Service "grafana":3000 (port-forward to view; the
+# compose overlay is the lighter local option — Grafana at 127.0.0.1:13000).
+observability:
+  enabled: false

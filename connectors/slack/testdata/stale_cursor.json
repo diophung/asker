@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/conversations.list", "query": "limit=200&types=public_channel,private_channel,mpim,im&exclude_archived=true"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":true,\"channels\":[{\"id\":\"C100\",\"name\":\"general\",\"is_private\":false,\"is_im\":false,\"members\":[\"U_ALICE\",\"U_BOB\"]}],\"response_metadata\":{\"next_cursor\":\"\"}}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/conversations.history", "query": "channel=C100&limit=200&oldest=1700000300.000300&inclusive=false"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"ok\":false,\"error\":\"invalid_cursor\"}"
+      }
+    }
+  ]
+}

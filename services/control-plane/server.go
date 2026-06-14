@@ -29,11 +29,34 @@ const (
 
 // tokenCipher is the slice of *crypto.TenantCipher (platform/crypto pinned
 // surface) the server needs: per-tenant envelope encryption for the token
-// vault. Narrowed to an interface so unit tests could substitute it, and so
-// server.go does not couple to the concrete type.
+// vault plus Forget for the GDPR crypto-shred. Narrowed to an interface so unit
+// tests could substitute it, and so server.go does not couple to the concrete
+// type.
 type tokenCipher interface {
 	Encrypt(ctx context.Context, tc tenancy.Context, plaintext []byte) ([]byte, error)
 	Decrypt(ctx context.Context, tc tenancy.Context, ciphertext []byte) ([]byte, error)
+	// Forget drops the tenant's cached unwrapped DEK so a crypto-shred is
+	// complete (no cached AEAD keeps serving post-delete).
+	Forget(tenantID tenancy.TenantID)
+}
+
+// dekDeleter is the crypto-shred seam: DEKStore.Delete. The default control-
+// plane store is the Postgres tenant_deks table; tests substitute a fake.
+type dekDeleter interface {
+	Delete(ctx context.Context, tenantID tenancy.TenantID) error
+}
+
+// serverConfig carries the quota/abuse caps and the (optional) external-store
+// purgers for the GDPR delete cascade. Zero/nil fields disable the
+// corresponding control: maxConnectorInstances <= 0 means unlimited, and a nil
+// purger skips that store (the cascade still purges Postgres + crypto-shreds
+// the DEK, the minimum that renders the tenant's data unreadable).
+type serverConfig struct {
+	maxConnectorInstances int
+	dek                   dekDeleter
+	vespa                 vespaPurger
+	blobs                 blobPurger
+	cache                 cachePurger
 }
 
 // server implements controlplanev1.ControlPlaneServiceServer. The tenant is
@@ -45,6 +68,7 @@ type server struct {
 
 	store  Store
 	cipher tokenCipher
+	cfg    serverConfig
 	logger *slog.Logger
 }
 
@@ -52,6 +76,12 @@ var _ controlplanev1.ControlPlaneServiceServer = (*server)(nil)
 
 func newServer(store Store, cipher tokenCipher, logger *slog.Logger) *server {
 	return &server{store: store, cipher: cipher, logger: logger}
+}
+
+// newServerWithConfig is the production constructor: it wires the quota caps
+// and the GDPR cascade purgers in addition to the store + cipher.
+func newServerWithConfig(store Store, cipher tokenCipher, cfg serverConfig, logger *slog.Logger) *server {
+	return &server{store: store, cipher: cipher, cfg: cfg, logger: logger}
 }
 
 func (s *server) EnsureTenant(ctx context.Context, _ *controlplanev1.EnsureTenantRequest) (*controlplanev1.EnsureTenantResponse, error) {
@@ -94,13 +124,23 @@ func (s *server) CreateConnectorInstance(ctx context.Context, req *controlplanev
 		return nil, status.Error(codes.InvalidArgument, "config_json is not valid JSON")
 	}
 
+	// Per-tenant connector-instance quota (M6 abuse control): cap how many
+	// instances one tenant can create, so a single tenant cannot spawn unbounded
+	// scheduler goroutines in the hub. The cap is enforced ATOMICALLY inside the
+	// store create (a gated INSERT .. SELECT under a per-tenant lock), NOT a
+	// check-then-insert here, so concurrent creates cannot race past it (finding
+	// M6-#8). <= 0 disables the cap. ErrQuotaExceeded -> RESOURCE_EXHAUSTED.
 	inst, err := s.store.CreateConnectorInstance(ctx, ConnectorInstance{
 		TenantID:    tc.TenantID(),
 		ConnectorID: req.GetConnectorId(),
 		DisplayName: req.GetDisplayName(),
 		ConfigJSON:  configJSON,
 		Status:      controlplanev1.ConnectorStatus_ACTIVE.String(),
-	})
+	}, s.cfg.maxConnectorInstances)
+	if errors.Is(err, ErrQuotaExceeded) {
+		return nil, status.Errorf(codes.ResourceExhausted,
+			"connector instance quota reached (%d); delete an existing connector first", s.cfg.maxConnectorInstances)
+	}
 	if err != nil {
 		return nil, s.rpcErr(ctx, "CreateConnectorInstance", tc, err)
 	}

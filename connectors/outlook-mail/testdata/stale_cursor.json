@@ -1,0 +1,16 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/messages/delta",
+        "query": "$select=id,subject,body,bodyPreview,from,toRecipients,ccRecipients,webLink,parentFolderId,conversationId,createdDateTime,lastModifiedDateTime&$deltatoken=EXPIRED_TOKEN"
+      },
+      "response": {
+        "status": 410,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"error\":{\"code\":\"SyncStateNotFound\",\"message\":\"The delta token is no longer valid; a full synchronization is required.\"}}"
+      }
+    }
+  ]
+}

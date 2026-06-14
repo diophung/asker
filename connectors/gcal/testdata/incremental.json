@@ -1,0 +1,16 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=250&syncToken=SYNCTOKEN-AFTER-BACKFILL"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"kind\":\"calendar#events\",\"summary\":\"alice@example.com\",\"accessRole\":\"owner\",\"nextSyncToken\":\"SYNCTOKEN-AFTER-INCREMENTAL\",\"items\":[{\"kind\":\"calendar#event\",\"etag\":\"\\\"3499\\\"\",\"id\":\"evt-launch\",\"status\":\"confirmed\",\"htmlLink\":\"https://www.google.com/calendar/event?eid=evt-launch\",\"created\":\"2026-06-01T12:00:00Z\",\"updated\":\"2026-06-06T09:00:00Z\",\"summary\":\"Product launch review (rescheduled)\",\"description\":\"Moved one day later. Final go/no-go.\",\"location\":\"HQ Room 7\",\"organizer\":{\"email\":\"carol@example.com\",\"displayName\":\"Carol Carter\"},\"start\":{\"dateTime\":\"2026-06-06T14:00:00-07:00\"},\"end\":{\"dateTime\":\"2026-06-06T15:00:00-07:00\"},\"attendees\":[{\"email\":\"alice@example.com\",\"displayName\":\"Alice Anderson\",\"responseStatus\":\"accepted\"},{\"email\":\"carol@example.com\",\"displayName\":\"Carol Carter\",\"organizer\":true,\"responseStatus\":\"accepted\"}]},{\"kind\":\"calendar#event\",\"etag\":\"\\\"3500\\\"\",\"id\":\"evt-standup\",\"status\":\"cancelled\"}]}"
+      }
+    }
+  ]
+}

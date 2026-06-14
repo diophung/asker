@@ -13,15 +13,17 @@ import (
 	"time"
 )
 
-// fakeRedis is a minimal RESP2 server good enough for INCR/EXPIRE: it parses
-// command arrays and keeps real counters, recording what it saw.
+// fakeRedis is a minimal RESP2 server good enough to stand in for Redis under
+// the go-redis-backed counter: it parses command arrays and keeps real
+// counters for INCR/EXPIRE, recording what it saw. Handshake commands the
+// client sends (HELLO, CLIENT SETINFO) get an -ERR reply, which go-redis
+// treats as "old server": it falls back to RESP2 and carries on.
 type fakeRedis struct {
 	lis net.Listener
 
 	mu      sync.Mutex
 	counts  map[string]int64
 	expires map[string]int64 // key -> seconds from the last EXPIRE
-	conns   int
 	// scripted reply: when non-empty it is sent verbatim for every command.
 	cannedReply string
 }
@@ -40,21 +42,12 @@ func newFakeRedis(t *testing.T) *fakeRedis {
 
 func (f *fakeRedis) addr() string { return f.lis.Addr().String() }
 
-func (f *fakeRedis) connCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.conns
-}
-
 func (f *fakeRedis) acceptLoop() {
 	for {
 		conn, err := f.lis.Accept()
 		if err != nil {
 			return
 		}
-		f.mu.Lock()
-		f.conns++
-		f.mu.Unlock()
 		go f.serve(conn)
 	}
 }
@@ -142,9 +135,16 @@ func respLine(br *bufio.Reader) (string, error) {
 	return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), nil
 }
 
+func newTestRedisCounter(t *testing.T, addr string) *redisCounter {
+	t.Helper()
+	rc := newRedisCounter(addr)
+	t.Cleanup(func() { _ = rc.Close() })
+	return rc
+}
+
 func TestRedisCounterIncrAndExpire(t *testing.T) {
 	srv := newFakeRedis(t)
-	rc := newRedisCounter(srv.addr())
+	rc := newTestRedisCounter(t, srv.addr())
 	ctx := context.Background()
 
 	for want := int64(1); want <= 3; want++ {
@@ -165,16 +165,11 @@ func TestRedisCounterIncrAndExpire(t *testing.T) {
 		t.Errorf("EXPIRE seconds = %d, want 90", sec)
 	}
 	srv.mu.Unlock()
-
-	// The pooled connection must be reused, not redialed per call.
-	if got := srv.connCount(); got != 1 {
-		t.Errorf("connections = %d, want 1 (pooling)", got)
-	}
 }
 
 func TestRedisCounterConcurrent(t *testing.T) {
 	srv := newFakeRedis(t)
-	rc := newRedisCounter(srv.addr())
+	rc := newTestRedisCounter(t, srv.addr())
 	const n = 20
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
@@ -199,9 +194,11 @@ func TestRedisCounterConcurrent(t *testing.T) {
 	}
 }
 
+// TestRedisCounterErrors: every failure mode must surface as an error from
+// Incr (never a bogus count) so the limiter middleware can fail open.
 func TestRedisCounterErrors(t *testing.T) {
 	t.Run("server down", func(t *testing.T) {
-		rc := newRedisCounter("127.0.0.1:1")
+		rc := newTestRedisCounter(t, "127.0.0.1:1")
 		if _, err := rc.Incr(context.Background(), "k", rateWindowTTL); err == nil {
 			t.Fatal("want dial error")
 		}
@@ -212,7 +209,7 @@ func TestRedisCounterErrors(t *testing.T) {
 		srv.mu.Lock()
 		srv.cannedReply = "-ERR oom\r\n"
 		srv.mu.Unlock()
-		rc := newRedisCounter(srv.addr())
+		rc := newTestRedisCounter(t, srv.addr())
 		_, err := rc.Incr(context.Background(), "k", rateWindowTTL)
 		if err == nil || !strings.Contains(err.Error(), "oom") {
 			t.Fatalf("err = %v, want error reply surfaced", err)
@@ -224,7 +221,7 @@ func TestRedisCounterErrors(t *testing.T) {
 		srv.mu.Lock()
 		srv.cannedReply = "?what\r\n"
 		srv.mu.Unlock()
-		rc := newRedisCounter(srv.addr())
+		rc := newTestRedisCounter(t, srv.addr())
 		if _, err := rc.Incr(context.Background(), "k", rateWindowTTL); err == nil {
 			t.Fatal("want protocol error")
 		}
@@ -232,7 +229,7 @@ func TestRedisCounterErrors(t *testing.T) {
 
 	t.Run("context already expired", func(t *testing.T) {
 		srv := newFakeRedis(t)
-		rc := newRedisCounter(srv.addr())
+		rc := newTestRedisCounter(t, srv.addr())
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		defer cancel()
 		if _, err := rc.Incr(ctx, "k", rateWindowTTL); err == nil {
@@ -240,9 +237,9 @@ func TestRedisCounterErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("connection dropped after error, next call recovers", func(t *testing.T) {
+	t.Run("error reply is transient, next call recovers", func(t *testing.T) {
 		srv := newFakeRedis(t)
-		rc := newRedisCounter(srv.addr())
+		rc := newTestRedisCounter(t, srv.addr())
 		srv.mu.Lock()
 		srv.cannedReply = "-ERR transient\r\n"
 		srv.mu.Unlock()
@@ -255,9 +252,6 @@ func TestRedisCounterErrors(t *testing.T) {
 		got, err := rc.Incr(context.Background(), "k", rateWindowTTL)
 		if err != nil || got != 1 {
 			t.Fatalf("recovery Incr = %d, %v; want 1, nil", got, err)
-		}
-		if srv.connCount() != 2 {
-			t.Errorf("connections = %d, want 2 (bad conn discarded)", srv.connCount())
 		}
 	})
 }

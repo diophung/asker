@@ -1,0 +1,16 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/changes",
+        "query": "pageToken=stale-token&pageSize=100&fields=changes(changeType,fileId,removed,time,file(id,name,mimeType,webViewLink,parents,size,version,md5Checksum,createdTime,modifiedTime,trashed,shared,owners(displayName,emailAddress,permissionId))),newStartPageToken,nextPageToken"
+      },
+      "response": {
+        "status": 410,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"error\":{\"code\":410,\"message\":\"The page token is no longer valid; restart the change feed.\"}}"
+      }
+    }
+  ]
+}

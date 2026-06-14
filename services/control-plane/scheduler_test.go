@@ -194,7 +194,7 @@ func TestMemStoreListAllSpansTenants(t *testing.T) {
 			ConnectorID: connector,
 			ConfigJSON:  []byte("{}"),
 			Status:      "ACTIVE",
-		})
+		}, 0)
 		if err != nil {
 			t.Fatalf("CreateConnectorInstance(%s): %v", tenant, err)
 		}

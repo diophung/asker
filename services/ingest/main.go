@@ -102,6 +102,10 @@ func run(ctx context.Context, cfg ingestConfig, logger *slog.Logger) error {
 	defer consumer.Close()
 
 	h := newHandler(producer, seen, logger)
+	pm := newPipelineMetrics()
+	// The ingest stage consumes docs.raw and produces docs.chunked; the metric
+	// topic label is the stage's output topic (TopicDocsChunked).
+	handle := pm.instrument(serviceName, kafkautil.TopicDocsChunked, h.Handle)
 
 	var ready atomic.Bool
 	healthSrv := &http.Server{
@@ -125,7 +129,7 @@ func run(ctx context.Context, cfg ingestConfig, logger *slog.Logger) error {
 	go func() {
 		logger.Info("consuming", "topic", kafkautil.TopicDocsRaw, "group", consumerGroup, "redis", cfg.RedisAddr)
 		ready.Store(true)
-		if err := consumer.Run(ctx, h.Handle); err != nil {
+		if err := consumer.Run(ctx, handle); err != nil {
 			errCh <- fmt.Errorf("consumer run: %w", err)
 			return
 		}

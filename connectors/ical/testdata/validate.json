@@ -1,0 +1,26 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/calendar; charset=utf-8"]},
+        "body": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp//Asker Test//EN\r\nBEGIN:VEVENT\r\nUID:evt-probe@example.com\r\nDTSTAMP:20260601T090000Z\r\nSUMMARY:Probe\r\nDTSTART:20260603T093000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/html"]},
+        "body": "<html><body>Not a calendar feed</body></html>"
+      }
+    }
+  ]
+}

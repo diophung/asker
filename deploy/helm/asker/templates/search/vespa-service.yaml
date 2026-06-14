@@ -1,0 +1,64 @@
+{{- /*
+Vespa Services (ADR-014 §3/§4). Two Services:
+
+  1. "vespa" (ClusterIP) — the client-facing query + document API on :8080 and the
+     config server on :19071. Named the bare "vespa" so config.vespaUrl
+     ("http://vespa:8080") and vespa/deploy.sh's config-server URL resolve
+     unchanged from the compose topology. App workers (query, index-writer) dial
+     this. NOTE the :8080 port only serves once the application package is
+     activated against the config server (vespa/deploy.sh) — same as compose.
+
+  2. "<fullname>-vespa-headless" (headless, clusterIP: None) — gives every Vespa
+     StatefulSet pod a stable DNS name (<pod>.<headless>.<ns>.svc) so config
+     servers and content nodes can form a cluster. publishNotReadyAddresses so
+     pods are discoverable during the bootstrap handshake before they pass probes.
+
+Gated behind `vespa.deploy` (default false).
+*/ -}}
+{{- $vespa := .Values.vespa | default dict -}}
+{{- if $vespa.deploy -}}
+apiVersion: v1
+kind: Service
+metadata:
+  # Bare "vespa" — the compose-DNS client contract (config.vespaUrl).
+  name: vespa
+  labels:
+    {{- include "asker.vespa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "asker.vespa.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: query
+      port: 8080
+      targetPort: query
+      protocol: TCP
+      appProtocol: http
+    - name: config
+      port: 19071
+      targetPort: config
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-headless" (include "asker.vespa.name" .) }}
+  labels:
+    {{- include "asker.vespa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "asker.vespa.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: query
+      port: 8080
+      targetPort: query
+      protocol: TCP
+    - name: config
+      port: 19071
+      targetPort: config
+      protocol: TCP
+{{- end }}

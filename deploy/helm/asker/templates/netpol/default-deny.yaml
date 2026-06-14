@@ -1,0 +1,35 @@
+{{- /*
+================================================================================
+default-deny-all-ingress — the foundation of the M4 network trust model (ADR-016).
+
+Selects EVERY pod in the release namespace (empty podSelector) and permits NO
+ingress (empty `ingress:` rule list with policyType Ingress). Every explicit
+allow policy in templates/netpol/*.yaml is ADDITIVE on top of this: a connection
+is allowed only if some allow policy permits it, so a pod with no matching allow
+policy is unreachable. This replaces ADR-009 §4's topological "closed network"
+with an enforced default-deny.
+
+Egress is deliberately NOT denied here: a blanket egress deny would also block
+DNS and every dependency dial, and the dependency pods' exact labels are owned by
+the sibling stateful-layer builder. Targeted egress (DNS for all, connector-hub
+external egress) is added by the per-concern policies and gated behind
+networkPolicy.restrictEgress. See ADR-016 "what is enforced now vs prod-config".
+
+Gated on networkPolicy.enabled (default true). namespaceSelector is implicit:
+NetworkPolicy is always namespace-scoped to the release namespace.
+*/ -}}
+{{- if (include "asker.netpol.enabled" .) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" . }}-default-deny-ingress
+  labels:
+    {{- include "asker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  # Empty podSelector => applies to every pod in the namespace.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  # No `ingress:` rules => deny all ingress. Allow policies re-open specific paths.
+{{- end }}

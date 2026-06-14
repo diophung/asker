@@ -1,0 +1,44 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/me/chats", "query": "$expand=members"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"value\":[{\"id\":\"19:group-a\",\"topic\":\"Project Apollo\",\"chatType\":\"group\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:group-a\",\"members\":[{\"id\":\"m1\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m2\",\"displayName\":\"Bob Roe\",\"userId\":\"u-bob\",\"email\":\"bob@example.com\"}]},{\"id\":\"19:group-c\",\"topic\":\"New Initiative\",\"chatType\":\"group\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:group-c\",\"members\":[{\"id\":\"m5\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m6\",\"displayName\":\"Dave Doe\",\"userId\":\"u-dave\",\"email\":\"dave@example.com\"}]},{\"id\":\"19:oneone-b\",\"topic\":\"\",\"chatType\":\"oneOnOne\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:oneone-b\",\"members\":[{\"id\":\"m3\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m4\",\"displayName\":\"Carol Coe\",\"userId\":\"u-carol\",\"email\":\"carol@example.com\"}]}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-a/messages/delta", "query": "$deltatoken=DELTA-A-1"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:group-a/messages/delta?$deltatoken=DELTA-A-2\",\"value\":[{\"id\":\"1001\",\"etag\":\"1700000000099\",\"messageType\":\"message\",\"createdDateTime\":\"2024-01-02T10:00:00Z\",\"lastModifiedDateTime\":\"2024-01-04T09:00:00Z\",\"importance\":\"normal\",\"webUrl\":\"https://teams.microsoft.com/l/message/19:group-a/1001\",\"from\":{\"user\":{\"id\":\"u-alice\",\"displayName\":\"Alice Doe\"}},\"body\":{\"contentType\":\"html\",\"content\":\"<div><p>Kickoff moved to <b>1pm</b>.</p></div>\"}},{\"id\":\"1002\",\"deletedDateTime\":\"2024-01-04T09:05:00Z\",\"@removed\":{\"reason\":\"deleted\"}}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-c/messages"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"value\":[{\"id\":\"3001\",\"etag\":\"1700000000300\",\"messageType\":\"message\",\"createdDateTime\":\"2024-01-05T12:00:00Z\",\"lastModifiedDateTime\":\"2024-01-05T12:00:00Z\",\"importance\":\"normal\",\"webUrl\":\"https://teams.microsoft.com/l/message/19:group-c/3001\",\"from\":{\"user\":{\"id\":\"u-dave\",\"displayName\":\"Dave Doe\"}},\"body\":{\"contentType\":\"text\",\"content\":\"Spinning up the new initiative channel.\"}}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-c/messages/delta"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:group-c/messages/delta?$deltatoken=DELTA-C-1\",\"value\":[]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:oneone-b/messages/delta", "query": "$deltatoken=DELTA-B-1"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/chats/19:oneone-b/messages/delta?$deltatoken=DELTA-B-2\",\"value\":[]}"
+      }
+    }
+  ]
+}

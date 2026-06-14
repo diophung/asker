@@ -24,6 +24,18 @@ type queryConfig struct {
 	// EmbedTimeout bounds the TEI /embed call; on expiry HYBRID degrades to
 	// keyword-only (spec §2.6 ladder).
 	EmbedTimeout time.Duration `env:"QUERY_EMBED_TIMEOUT" envDefault:"2s"`
+	// ClipURL is the CLIP model service (ADR-013), analogous to TEI: it embeds
+	// the query text into CLIP space for the text->image retrieval arm.
+	ClipURL string `env:"CLIP_URL" envDefault:"http://clip:9800"`
+	// ClipDim is the CLIP query-vector dimensionality (ViT-B/32 => 512); it
+	// must equal the served CLIP model AND the deployed Vespa clip_embedding
+	// tensor. Like EMBEDDING_DIM it is deploy-time config, validated > 0 below,
+	// and a CLIP response of any other length is rejected.
+	ClipDim int `env:"CLIP_DIM" envDefault:"512"`
+	// ClipTimeout bounds the CLIP /embed/text call; on expiry the CLIP arm is
+	// dropped (degraded="clip-unavailable") — text retrieval is unaffected
+	// (ADR-006: never fail closed).
+	ClipTimeout time.Duration `env:"QUERY_CLIP_TIMEOUT" envDefault:"2s"`
 	// Empty endpoint means telemetry is a no-op.
 	OTLPEndpoint string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:""`
 }
@@ -38,6 +50,12 @@ func loadConfig() (queryConfig, error) {
 	}
 	if cfg.EmbedTimeout <= 0 {
 		return queryConfig{}, fmt.Errorf("config: QUERY_EMBED_TIMEOUT must be > 0, got %s", cfg.EmbedTimeout)
+	}
+	if cfg.ClipDim <= 0 {
+		return queryConfig{}, fmt.Errorf("config: CLIP_DIM must be > 0, got %d", cfg.ClipDim)
+	}
+	if cfg.ClipTimeout <= 0 {
+		return queryConfig{}, fmt.Errorf("config: QUERY_CLIP_TIMEOUT must be > 0, got %s", cfg.ClipTimeout)
 	}
 	return cfg, nil
 }

@@ -1,0 +1,117 @@
+# ==============================================================================
+# Asker — OPT-IN observability overlay (M5). Prometheus + Grafana.
+# DEV-ONLY credentials throughout — never reuse in production.
+#
+# This is a SEPARATE compose file, NOT started by `make dev-up`. The default
+# stack already barely fits the 8GB dev VM (PROGRESS.md), so observability is
+# opt-in and memory-capped (Prometheus 256M, Grafana 192M).
+#
+# Bring up alongside the main stack (both files, so the services share the
+# `asker` project + its `default` network and Prometheus can scrape them by their
+# compose DNS names — gateway:8080, query:9201, ingest:9501, index-writer:9701):
+#
+#   docker compose \
+#     -f deploy/compose/docker-compose.yml \
+#     -f deploy/compose/docker-compose.observability.yml up -d prometheus grafana
+#
+# (Proposed Makefile helpers `make obs-up` / `make obs-down` wrap this — see the
+# integrator issue.) Validate it merges + parses without starting anything:
+#
+#   docker compose -f deploy/compose/docker-compose.yml \
+#                  -f deploy/compose/docker-compose.observability.yml config -q
+#
+# Both files declare `name: asker`, so these services join the SAME project and
+# its implicit `default` network (asker_default) — DNS resolution of the app
+# services Just Works, no explicit network block needed.
+#
+# Host ports (127.0.0.1 only — never expose beyond the local machine):
+#   Prometheus  http://127.0.0.1:19090
+#   Grafana     http://127.0.0.1:13000   (admin / admin — DEV-ONLY)
+# ==============================================================================
+name: asker
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    # Point Prometheus at the mounted config; keep a small local TSDB (the soak
+    # test is ~2h, retention well above that but bounded so the dev VM disk is safe).
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=24h"
+      - "--storage.tsdb.retention.size=2GB"
+      - "--web.enable-lifecycle"
+    ports:
+      - "127.0.0.1:19090:9090"
+    volumes:
+      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Alert rules live in the chart (single source of truth, also embedded by the
+      # Helm chart via .Files.Glob); mount them here for compose.
+      - ../helm/asker/files/observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    # Memory-capped for the shared 8GB dev VM. Prometheus sizes its head block to
+    # the active series; the Asker metric set is low-cardinality (no per-tenant
+    # labels), so 256M is comfortable for a dev/soak run.
+    mem_limit: 256m
+    mem_reservation: 128m
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:9090/-/healthy",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    ports:
+      - "127.0.0.1:13000:3000"
+    environment:
+      # DEV-ONLY admin credentials. Bound to 127.0.0.1; never expose.
+      GF_SECURITY_ADMIN_USER: "admin" # dev-only
+      GF_SECURITY_ADMIN_PASSWORD: "admin" # dev-only
+      # No anonymous access; no external network calls (offline-friendly dev).
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      # Provisioning path (matches the read-only mount below).
+      GF_PATHS_PROVISIONING: "/etc/grafana/provisioning"
+    volumes:
+      # Datasource (uid "prometheus") + dashboard provider, read-only.
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Dashboard JSON the provider loads. Lives in the chart (single source of
+      # truth, also embedded by the Helm chart via .Files.Glob).
+      - ../helm/asker/files/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    mem_limit: 192m
+    mem_reservation: 96m
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:3000/api/health",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  prometheus-data:
+  grafana-data:

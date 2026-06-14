@@ -1,0 +1,99 @@
+{{- /*
+============================================================================
+  DEV-MODE Vault Transit init Job — NON-PRODUCTION.
+============================================================================
+A Helm post-install/post-upgrade hook that, against the dev Vault, (1) enables
+the `transit` secrets engine, and (2) creates the wrapping key
+(vault.keyName, default "asker-kek") as a DERIVED (convergent) key. Derived keys
+are the load-bearing detail: the Go vaultKEK (platform/crypto/vault.go) sends
+the tenant ID as the Transit "context", and a derived key produces a distinct
+per-context key — so a DEK wrapped for tenant A cannot be unwrapped under tenant
+B. This is the Vault equivalent of the M1 file-KEK AAD binding (ADR-015).
+
+The Job is idempotent: `transit/keys/<name>` with derived=true is a no-op if the
+key exists, and enabling an already-enabled engine returns a tolerated 400.
+
+PRODUCTION: the transit engine + key are provisioned out-of-band as part of
+Vault bootstrap (Terraform / vault CLI / config-as-code), NOT by this chart.
+This Job exists only for the self-contained dev/CI stack. Rendered only when
+vault.deploy is true.
+*/ -}}
+{{- if eq (include "asker.vault.enabled" .) "true" }}
+{{- $cfg := include "asker.vault.config" . | fromYaml }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-vault-init" (include "asker.fullname" .) }}
+  labels:
+    {{- include "asker.vault.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    asker.dev/warning: "DEV-MODE Vault Transit bootstrap. In production, provision transit + the asker-kek derived key out-of-band. See ADR-015."
+spec:
+  backoffLimit: 6
+  # Reap the Job's pods after it finishes (best-effort; ignored by old clusters).
+  ttlSecondsAfterFinished: 120
+  template:
+    metadata:
+      labels:
+        {{- include "asker.vault.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $cfg.serviceAccountName }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vault-init
+          image: {{ $cfg.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: VAULT_ADDR
+              value: {{ $cfg.addr }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cfg.tokenSecretName }}
+                  key: VAULT_TOKEN
+            - name: KEY_NAME
+              value: {{ $cfg.keyName }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "Waiting for Vault at ${VAULT_ADDR} ..."
+              i=0
+              until vault status >/dev/null 2>&1; do
+                i=$((i+1))
+                if [ "$i" -ge 60 ]; then
+                  echo "Vault not ready after 60 attempts" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+              echo "Enabling transit engine (idempotent) ..."
+              vault secrets enable transit 2>/dev/null || echo "transit already enabled"
+              echo "Creating derived (per-tenant context) wrapping key ${KEY_NAME} ..."
+              # derived=true => the Go vaultKEK tenant 'context' yields a
+              # per-tenant key (ADR-015). aes256-gcm96 is the Transit default.
+              vault write -f "transit/keys/${KEY_NAME}" derived=true type=aes256-gcm96
+              echo "Vault Transit KEK ready: ${KEY_NAME}"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+{{- end }}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,24 +25,48 @@ type retrievalKind int
 const (
 	// retrieveKeyword: userQuery() with the keyword profile.
 	retrieveKeyword retrievalKind = iota
-	// retrieveHybrid: userQuery() OR nearestNeighbor with the hybrid profile.
+	// retrieveHybrid: rank(userQuery(), nearestNeighbor) with the hybrid
+	// profile. Only the FIRST argument of rank() determines which documents
+	// match, so the keyword terms set the match set (a rare term returns only
+	// the documents containing it — precision preserved). The second argument,
+	// the nearestNeighbor operator, matches nothing on its own but makes the
+	// per-document vector distance available so closeness(field, embedding) in
+	// the hybrid profile actually contributes to ranking. OR-ing the
+	// nearestNeighbor into the match set instead would make every document
+	// match (in streaming mode targetHits:100 returns the whole small group),
+	// destroying keyword precision; dropping it entirely leaves closeness with
+	// no distance to read, so the vector signal silently goes to zero. Pure-
+	// vector recall of documents that share NO keywords is out of scope for M1
+	// (RRF / dense retrieval, deferred to M5 — ADR-006).
 	retrieveHybrid
-	// retrieveVector: nearestNeighbor alone with the hybrid profile
-	// (closeness ranks; without userQuery() no keyword terms match, so the
-	// nativeRank component contributes 0).
+	// retrieveVector: nearestNeighbor alone with the hybrid profile — there is
+	// no keyword text to match on, so the vector arm IS the match set and
+	// closeness ranks; nativeRank contributes 0.
 	retrieveVector
 	// retrieveFilterOnly: 'true' clause — empty residual text with filters
 	// present matches everything in the tenant group, filtered and ranked by
 	// the keyword profile.
 	retrieveFilterOnly
+	// retrieveCLIP: the text->image arm (ADR-013). nearestNeighbor over the
+	// CLIP-space clip_embedding tensor with the 'clip' ranking profile; the
+	// query vector comes from the clip service's text encoder, scoped to the
+	// SAME tenant streaming group. It runs ALONGSIDE the text/hybrid arm and
+	// is merged by doc_id (server.go), so a purely-visual match still appears.
+	// Only chunks carrying a CLIP vector (image / keyframe chunks) match.
+	retrieveCLIP
 )
 
-// profile maps the retrieval kind to the ranking profile (vespa/README.md).
+// profile maps the retrieval kind to the ranking profile (vespa/README.md,
+// ADR-013).
 func (k retrievalKind) profile() string {
-	if k == retrieveHybrid || k == retrieveVector {
+	switch k {
+	case retrieveHybrid, retrieveVector:
 		return "hybrid"
+	case retrieveCLIP:
+		return "clip"
+	default:
+		return "keyword"
 	}
-	return "keyword"
 }
 
 const (
@@ -54,6 +79,10 @@ const (
 	// scan is exact, so 100 is a recall floor for the vector arm, not an
 	// approximation knob (vespa/README.md).
 	nearestNeighborClause = "({targetHits:100}nearestNeighbor(embedding,q))"
+	// clipNearestNeighborClause: the CLIP-space text->image arm (ADR-013).
+	// Same exact-scan recall floor; matches only chunks that carry a CLIP
+	// vector. The query tensor arrives as input.query(qclip).
+	clipNearestNeighborClause = "({targetHits:100}nearestNeighbor(clip_embedding,qclip))"
 	// maxVespaResponseBytes bounds response reads (≤100 hits of summary
 	// fields fits comfortably).
 	maxVespaResponseBytes = 8 << 20
@@ -76,6 +105,9 @@ type vespaQuery struct {
 	// so quotes/backslashes in user text cannot inject YQL.
 	Text   string
 	Vector []float32
+	// ClipVector is the CLIP-space query vector for retrieveCLIP; passed via
+	// input.query(qclip).
+	ClipVector []float32
 
 	DocTypes    []askerv1.DocType
 	From, To    time.Time
@@ -128,9 +160,16 @@ func buildYQL(q vespaQuery) (string, error) {
 	case retrieveKeyword:
 		clauses = append(clauses, "userQuery()")
 	case retrieveHybrid:
-		clauses = append(clauses, "(userQuery() or "+nearestNeighborClause+")")
+		// rank(): match on userQuery() (keyword precision); the
+		// nearestNeighbor second arg is rank-only, so closeness() in the
+		// hybrid profile gets a real per-document distance to blend.
+		clauses = append(clauses, "rank(userQuery(), "+nearestNeighborClause+")")
 	case retrieveVector:
 		clauses = append(clauses, nearestNeighborClause)
+	case retrieveCLIP:
+		// text->image: the CLIP nearestNeighbor IS the match set (no keyword
+		// text in this space); the 'clip' profile ranks by closeness.
+		clauses = append(clauses, clipNearestNeighborClause)
 	}
 
 	if len(q.DocTypes) > 0 {
@@ -203,11 +242,16 @@ func (c *vespaClient) Search(ctx context.Context, q vespaQuery) (vespaResult, er
 		"presentation.summary": "search",
 		"timeout":              vespaQueryTimeout,
 	}
-	if q.Text != "" && q.Kind != retrieveVector {
+	// The free-text query= drives userQuery(); the CLIP arm has no userQuery()
+	// clause, so it must not carry it.
+	if q.Text != "" && q.Kind != retrieveVector && q.Kind != retrieveCLIP {
 		body["query"] = q.Text
 	}
 	if len(q.Vector) > 0 && (q.Kind == retrieveHybrid || q.Kind == retrieveVector) {
 		body["input.query(q)"] = q.Vector
+	}
+	if q.Kind == retrieveCLIP && len(q.ClipVector) > 0 {
+		body["input.query(qclip)"] = q.ClipVector
 	}
 
 	payload, err := json.Marshal(body)
@@ -236,7 +280,7 @@ func (c *vespaClient) Search(ctx context.Context, q vespaQuery) (vespaResult, er
 	if resp.StatusCode != http.StatusOK {
 		return vespaResult{}, fmt.Errorf("vespa: status %d: %s", resp.StatusCode, truncateForError(raw))
 	}
-	return parseVespaResponse(raw)
+	return parseVespaResponse(raw, q.Kind)
 }
 
 // vespaSearchResponse mirrors the slice of the Vespa default JSON renderer
@@ -259,7 +303,11 @@ type vespaSearchResponse struct {
 }
 
 // vespaHitFields are the "search" document-summary fields (vespa/README.md):
-// lean result-card fields plus the dynamic snippet/chunk_snippets fragments.
+// lean result-card fields plus the dynamic snippet/chunk_snippets fragments,
+// plus the M3 media fields (ADR-013): the parallel chunk_starts_ms/
+// chunk_ends_ms/chunk_modalities arrays (same index order as chunks) and the
+// doc-level media attributes. summaryfeatures carries the matched-chunk index
+// for the CLIP arm (closest(clip_embedding)).
 type vespaHitFields struct {
 	DocID         string   `json:"doc_id"`
 	ConnectorID   string   `json:"connector_id"`
@@ -270,9 +318,19 @@ type vespaHitFields struct {
 	MetadataJSON  string   `json:"metadata_json"`
 	CreatedAt     int64    `json:"created_at"`
 	ModifiedAt    int64    `json:"modified_at"`
+
+	// M3 media fields (ADR-013); omitted/zero for text documents.
+	ChunkStartsMs   []int64  `json:"chunk_starts_ms"`
+	ChunkEndsMs     []int64  `json:"chunk_ends_ms"`
+	ChunkModalities []string `json:"chunk_modalities"`
+	ThumbnailKey    string   `json:"thumbnail_key"`
+
+	// summaryfeatures exposes rank features in the result; closest(clip_embedding)
+	// names the matched chunk for the CLIP arm.
+	SummaryFeatures map[string]json.RawMessage `json:"summaryfeatures"`
 }
 
-func parseVespaResponse(raw []byte) (vespaResult, error) {
+func parseVespaResponse(raw []byte, kind retrievalKind) (vespaResult, error) {
 	var vr vespaSearchResponse
 	if err := json.Unmarshal(raw, &vr); err != nil {
 		return vespaResult{}, fmt.Errorf("vespa: decode response: %w", err)
@@ -306,9 +364,136 @@ func parseVespaResponse(raw []byte) (vespaResult, error) {
 		if f.ModifiedAt > 0 {
 			hit.Modified = timestamppb.New(time.Unix(f.ModifiedAt, 0).UTC())
 		}
+		populateMediaFields(hit, f, kind)
 		out.Hits = append(out.Hits, hit)
 	}
 	return out, nil
+}
+
+// populateMediaFields fills the M3 deep-link fields (ADR-013) from the matched
+// chunk's parallel arrays. thumbnail_key is doc-level and always set when
+// present. The matched chunk index source depends on the arm:
+//
+//   - CLIP arm: the closest(clip_embedding) summary feature names the chunk
+//     whose visual vector matched.
+//   - text/ASR arm (keyword/hybrid/vector): the first chunk_snippets element
+//     carrying a <hi> highlight is the matched chunk; absent any highlight
+//     (e.g. a pure vector match), no chunk offset is attributed.
+//
+// The index writer labels every chunk's modality, including plain text chunks
+// of EMAIL/FILE docs ("text"). The Hit contract (query.proto) reserves the
+// start_ms/end_ms/modality fields for IMAGE/AUDIO/VIDEO hits and pins them to
+// zero "for the whole-document / non-media case". So a matched chunk whose
+// modality is "text" (or unlabeled) is treated as that non-media case:
+// modality and offsets stay at their zero values. Only genuine media chunks
+// (ocr / asr / caption) populate them. thumbnail_key is still propagated
+// regardless — an image surfaced only by its OCR text can legitimately carry a
+// poster, and a pure text doc has none anyway.
+//
+// All reads are defensive: a doc that is not media (no parallel arrays) or a
+// matched index out of range simply leaves the offset/modality at zero — the
+// whole-document / text case the proto documents.
+func populateMediaFields(hit *queryv1.Hit, f vespaHitFields, kind retrievalKind) {
+	hit.ThumbnailKey = f.ThumbnailKey
+
+	var idx int
+	if kind == retrieveCLIP {
+		idx = matchedClipChunkIndex(f.SummaryFeatures)
+	} else {
+		idx = matchedTextChunkIndex(f.ChunkSnippets)
+		// A media hit matched by the text arm should anchor to a transcript
+		// segment even when Vespa's dynamic summary did not highlight the term
+		// in a returned snippet, so the timestamp deep-link is reliable rather
+		// than dependent on snippet highlighting. Fall back to the first
+		// timestamped media chunk (asr/ocr); a pure-text doc has none and stays
+		// at the whole-document/non-media case.
+		if idx < 0 {
+			idx = firstTimedMediaChunkIndex(f.ChunkModalities)
+		}
+	}
+	if idx < 0 || idx >= len(f.ChunkModalities) {
+		return
+	}
+	// "text" (or empty) marks a non-media chunk: leave the media fields zero.
+	modality := f.ChunkModalities[idx]
+	if modality == "" || modality == "text" {
+		return
+	}
+	hit.Modality = modality
+	if idx < len(f.ChunkStartsMs) {
+		hit.StartMs = f.ChunkStartsMs[idx]
+	}
+	if idx < len(f.ChunkEndsMs) {
+		hit.EndMs = f.ChunkEndsMs[idx]
+	}
+}
+
+// matchedTextChunkIndex returns the index of the first chunk_snippets element
+// carrying a <hi> highlight (the matched chunk for the text/ASR arm), or -1.
+func matchedTextChunkIndex(chunkSnippets []string) int {
+	const hi = "<hi>"
+	for i, cs := range chunkSnippets {
+		if strings.Contains(cs, hi) {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstTimedMediaChunkIndex returns the index of the first asr/ocr chunk (a
+// timestamped media segment), or -1 when there is none. It anchors a media
+// hit's deep-link to its first transcript segment when the exact matched chunk
+// could not be pinpointed from the snippet highlights.
+func firstTimedMediaChunkIndex(modalities []string) int {
+	for i, m := range modalities {
+		if m == "asr" || m == "ocr" {
+			return i
+		}
+	}
+	return -1
+}
+
+// matchedClipChunkIndex reads the matched chunk index for the CLIP arm from
+// the closest(clip_embedding) summary feature. Vespa renders closest() as a
+// mapped tensor with a single cell whose label is the chunk index, e.g.
+// {"type":"tensor(chunk{})","cells":{"3":1.0}}. Older/!verbose renderings may
+// emit a plain {"3":1.0} map. Both shapes are handled; anything unexpected
+// yields -1 (no offset attributed).
+func matchedClipChunkIndex(features map[string]json.RawMessage) int {
+	raw, ok := features["closest(clip_embedding)"]
+	if !ok {
+		return -1
+	}
+	// Shape 1: {"type":...,"cells":{"<idx>":<v>}}.
+	var tensor struct {
+		Cells map[string]float64 `json:"cells"`
+	}
+	if err := json.Unmarshal(raw, &tensor); err == nil && len(tensor.Cells) > 0 {
+		return firstTensorLabel(tensor.Cells)
+	}
+	// Shape 2: a bare {"<idx>":<v>} map.
+	var cells map[string]float64
+	if err := json.Unmarshal(raw, &cells); err == nil && len(cells) > 0 {
+		return firstTensorLabel(cells)
+	}
+	return -1
+}
+
+// firstTensorLabel parses the (single) cell label of a closest() tensor as the
+// chunk index. closest() returns exactly one cell; if more ever appear, the
+// numerically smallest label is chosen for determinism.
+func firstTensorLabel(cells map[string]float64) int {
+	best := -1
+	for label := range cells {
+		idx, err := strconv.Atoi(label)
+		if err != nil || idx < 0 {
+			continue
+		}
+		if best < 0 || idx < best {
+			best = idx
+		}
+	}
+	return best
 }
 
 // chooseSnippet assembles the REST snippet: prefer fragments that actually

@@ -1,0 +1,10 @@
+{{/*
+control-plane — tenant/connector registry + token vault (gRPC). Compose:
+CONTROL_PLANE_ADDR :9100 (gRPC, dialed as dns:///control-plane:9100),
+CONTROL_PLANE_HEALTH_ADDR :9101 (/healthz + /readyz). So the Service object is
+named "control-plane". Owns the Postgres-backed token vault and mounts the shared
+KEK at /keys (KEK_FILE=/keys/kek.bin). Talks to Postgres (DATABASE_URL). NOT
+HPA-scaled in wave 0 (stateful-ish registry; single-writer semantics), but gets a
+PDB. ADR-009 (internal gRPC trust boundary).
+*/}}
+{{- include "asker.workload.all" (list . "control-plane") }}

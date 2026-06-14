@@ -20,7 +20,9 @@ import (
 )
 
 // fakeRedis is a minimal RESP2 server speaking just enough protocol for the
-// GET / SET ... EX commands the cache issues.
+// GET / SET ... EX commands the cache issues. Handshake commands go-redis
+// sends on connect (HELLO, CLIENT SETINFO) fall through to the -ERR branch,
+// which the client tolerates by design (RESP2 fallback).
 type fakeRedis struct {
 	lis net.Listener
 
@@ -189,11 +191,10 @@ func TestRedisCacheServerErrorSurfaces(t *testing.T) {
 	c := newRedisCache(f.addr())
 	defer c.Close()
 
-	// The fake rejects SET without EX-style shape only; force an -ERR via an
-	// unknown command path by corrupting through Set with a zero TTL is still
-	// valid, so instead call do directly.
-	if _, err := c.do(context.Background(), []byte("FLUSHALL")); err == nil {
-		t.Fatal("unknown command must surface a redis server error")
+	// A zero TTL makes go-redis send a plain SET, which the fake rejects with
+	// -ERR; the server error must surface so the caller can skip the cache.
+	if err := c.Set(context.Background(), "k", []byte("v"), 0); err == nil {
+		t.Fatal("server error reply must surface from Set")
 	}
 
 	// The connection survives a protocol-level error and is reused.
@@ -231,19 +232,25 @@ func TestCacheKey(t *testing.T) {
 		})
 	}
 
-	k1 := cacheKey("tenant-a", base())
+	k1 := cacheKey("tenant-a", base(), true)
 	if !strings.HasPrefix(k1, "q:tenant-a:") {
 		t.Errorf("key = %q, want q:tenant-a: prefix", k1)
 	}
-	if k2 := cacheKey("tenant-a", base()); k2 != k1 {
+	if k2 := cacheKey("tenant-a", base(), true); k2 != k1 {
 		t.Errorf("identical requests produced different keys: %q vs %q", k1, k2)
 	}
 
 	// Doc-type order must not matter.
 	reordered := base()
 	reordered.DocTypes = []askerv1.DocType{askerv1.DocType_FILE, askerv1.DocType_EMAIL}
-	if k := cacheKey("tenant-a", reordered); k != k1 {
+	if k := cacheKey("tenant-a", reordered, true); k != k1 {
 		t.Error("doc-type order changed the cache key")
+	}
+
+	// Whether the CLIP arm ran must change the key: a CLIP-less result must
+	// never be served for a request that now plans the CLIP arm.
+	if k := cacheKey("tenant-a", base(), false); k == k1 {
+		t.Error("the CLIP-arm flag did not change the cache key")
 	}
 
 	// Every dimension must change the key.
@@ -273,13 +280,13 @@ func TestCacheKey(t *testing.T) {
 	v.Mode = queryv1.SearchMode_KEYWORD
 	variants["mode"] = v
 	for name, req := range variants {
-		if k := cacheKey("tenant-a", req); k == k1 {
+		if k := cacheKey("tenant-a", req, true); k == k1 {
 			t.Errorf("changing %s did not change the cache key", name)
 		}
 	}
 
 	// Different tenants never share keys, even for identical requests.
-	if k := cacheKey("tenant-b", base()); k == k1 {
+	if k := cacheKey("tenant-b", base(), true); k == k1 {
 		t.Error("different tenants share a cache key")
 	}
 }

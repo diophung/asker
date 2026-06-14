@@ -10,8 +10,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/asker/asker/platform/oauth"
 	controlplanev1 "github.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1"
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
+	"github.com/asker/asker/platform/safehttp"
 	"github.com/asker/asker/platform/tenancy/tenancygrpc"
 )
 
@@ -20,13 +22,36 @@ import (
 type deps struct {
 	query   queryv1.QueryServiceClient
 	control controlplanev1.ControlPlaneServiceClient
+	admin   controlplanev1.AdminServiceClient
 	// hubURL is the connector-hub base URL (no trailing slash).
 	hubURL    string
 	hubClient *http.Client
+	// mediaClient is dedicated to GET /v1/media: a shorter timeout than the
+	// upload client (thumbnails/keyframes are small).
+	mediaClient *http.Client
 	// counter backs the per-tenant rate limiter (Redis in production).
 	counter        rateCounter
 	maxUploadBytes int64
-	logger         *slog.Logger
+	maxMediaBytes  int64
+	// oidcAudience is the token audience; admin client-role claims live under
+	// resource_access.<oidcAudience>.roles.
+	oidcAudience string
+	// maxQueryChars caps the /v1/search q= length; <= 0 disables the cap.
+	maxQueryChars int
+	logger        *slog.Logger
+
+	// OAuth connector flow (wave 1). oauth drives the authorization-code
+	// exchange; oauthState persists the single-use, server-side flow state the
+	// public callback consumes; oauthCfg answers "is this provider configured".
+	// All three are nil when no provider creds are set, in which case the OAuth
+	// routes degrade to a clear 501 rather than half-working.
+	oauth      oauthService
+	oauthState oauthStateStore
+	oauthCfg   oauth.Config
+	// gatewayPublicURL builds the redirect_uri; webAppURL is the FIXED
+	// post-callback redirect target. Both are trimmed of any trailing slash.
+	gatewayPublicURL string
+	webAppURL        string
 }
 
 // newDeps builds the production dependency set. Both gRPC clients use lazy,
@@ -48,18 +73,46 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 		_ = queryConn.Close()
 		return nil, nil, fmt.Errorf("create control-plane client: %w", err)
 	}
+	counter := newRedisCounter(cfg.RedisAddr)
 	cleanup := func() {
 		_ = queryConn.Close()
 		_ = controlConn.Close()
+		_ = counter.Close()
 	}
+
+	// OAuth (wave 1). The token-endpoint client is SSRF-/timeout-bounded via
+	// safehttp; real provider token endpoints are public hosts safehttp allows.
+	// For DEV (fake provider on a private compose host) the operator sets
+	// ASKER_SAFEHTTP_ALLOW_PRIVATE so safehttp permits the loopback/cluster dial.
+	oauthCfg := oauth.LoadConfig()
+	oauthHTTP := safehttp.NewClientOrDefault(safehttp.WithTimeout(oauthHTTPTimeout))
+	oauthSvc := oauth.New(oauthCfg, oauthHTTP)
+
 	return &deps{
 		query:   queryv1.NewQueryServiceClient(queryConn),
 		control: controlplanev1.NewControlPlaneServiceClient(controlConn),
-		hubURL:  strings.TrimRight(cfg.HubHTTPURL, "/"),
+		// AdminService shares the control-plane connection (same target). Admin
+		// authorization is enforced at the gateway BEFORE these RPCs are dialed.
+		admin:  controlplanev1.NewAdminServiceClient(controlConn),
+		hubURL: strings.TrimRight(cfg.HubHTTPURL, "/"),
 		// Generous timeout: uploads stream through this client.
-		hubClient:      &http.Client{Timeout: 2 * time.Minute},
-		counter:        newRedisCounter(cfg.RedisAddr),
-		maxUploadBytes: cfg.MaxUploadMB << 20,
-		logger:         logger,
+		hubClient: &http.Client{Timeout: 2 * time.Minute},
+		// Media fetches are small (thumbnails/keyframes): a tighter timeout.
+		mediaClient:      &http.Client{Timeout: 30 * time.Second},
+		counter:          counter,
+		maxUploadBytes:   cfg.MaxUploadMB << 20,
+		maxMediaBytes:    cfg.MaxMediaMB << 20,
+		oidcAudience:     cfg.OIDCAudience,
+		maxQueryChars:    cfg.MaxQueryChars,
+		logger:           logger,
+		oauth:            oauthSvc,
+		oauthState:       counter,
+		oauthCfg:         oauthCfg,
+		gatewayPublicURL: strings.TrimRight(cfg.GatewayPublicURL, "/"),
+		webAppURL:        strings.TrimRight(cfg.WebAppURL, "/"),
 	}, cleanup, nil
 }
+
+// oauthHTTPTimeout bounds every OAuth token-endpoint call (exchange/refresh) so
+// a slow or hostile provider cannot pin a request goroutine.
+const oauthHTTPTimeout = 15 * time.Second

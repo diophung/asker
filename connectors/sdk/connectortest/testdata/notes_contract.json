@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/notes", "query": "page=1"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"notes\":[{\"id\":\"n-1\",\"title\":\"first\",\"body\":\"hello\",\"etag\":\"e1\"},{\"id\":\"n-2\",\"title\":\"second\",\"body\":\"world\",\"etag\":\"e2\"}],\"next_page\":\"2\"}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/notes", "query": "page=2"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"notes\":[{\"id\":\"n-3\",\"title\":\"third\",\"body\":\"again\",\"etag\":\"e3\"}],\"next_page\":\"\"}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/notes/changes", "query": "since=cur-3"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"changed\":[{\"id\":\"n-2\",\"title\":\"second-edited\",\"body\":\"world!\",\"etag\":\"e2b\"}],\"deleted\":[\"n-1\"],\"cursor\":\"cur-9\"}"
+      }
+    }
+  ]
+}

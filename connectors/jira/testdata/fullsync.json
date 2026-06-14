@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search",
+        "body": "{\"jql\":\"order by updated asc\",\"startAt\":0,\"maxResults\":50,\"fields\":[\"summary\",\"description\",\"status\",\"issuetype\",\"priority\",\"project\",\"reporter\",\"assignee\",\"creator\",\"created\",\"updated\",\"comment\"]}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"startAt\":0,\"maxResults\":50,\"total\":3,\"issues\":[{\"id\":\"10001\",\"key\":\"DEMO-1\",\"fields\":{\"summary\":\"Login button misaligned on mobile\",\"description\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"On small screens the \"},{\"type\":\"text\",\"text\":\"Sign in\",\"marks\":[{\"type\":\"strong\"}]},{\"type\":\"text\",\"text\":\" button overflows its container.\"}]},{\"type\":\"bulletList\",\"content\":[{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Reproduces on iOS Safari\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Does not reproduce on desktop\"}]}]}]}]},\"status\":{\"name\":\"To Do\",\"statusCategory\":{\"key\":\"new\"}},\"issuetype\":{\"name\":\"Bug\"},\"priority\":{\"name\":\"High\"},\"project\":{\"key\":\"DEMO\",\"name\":\"Demo Project\"},\"reporter\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"assignee\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"creator\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"created\":\"2026-06-09T07:30:00.000+0000\",\"updated\":\"2026-06-09T08:00:00.000+0000\",\"comment\":{\"comments\":[]}}},{\"id\":\"10002\",\"key\":\"DEMO-2\",\"fields\":{\"summary\":\"Add dark mode toggle\",\"description\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Users want a dark theme. See \"},{\"type\":\"inlineCard\",\"attrs\":{\"url\":\"https://example.com/design/dark\"}},{\"type\":\"text\",\"text\":\" for the mockups.\"}]}]},\"status\":{\"name\":\"In Progress\",\"statusCategory\":{\"key\":\"indeterminate\"}},\"issuetype\":{\"name\":\"Story\"},\"priority\":{\"name\":\"Medium\"},\"project\":{\"key\":\"DEMO\",\"name\":\"Demo Project\"},\"reporter\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"assignee\":null,\"creator\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"created\":\"2026-06-10T09:15:00.000+0000\",\"updated\":\"2026-06-10T10:30:00.000+0000\",\"comment\":{\"comments\":[{\"id\":\"30001\",\"author\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\"},\"body\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"I can take the CSS work.\"}]}]}}]}}}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search",
+        "body": "{\"jql\":\"order by updated asc\",\"startAt\":2,\"maxResults\":50,\"fields\":[\"summary\",\"description\",\"status\",\"issuetype\",\"priority\",\"project\",\"reporter\",\"assignee\",\"creator\",\"created\",\"updated\",\"comment\"]}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"startAt\":2,\"maxResults\":50,\"total\":3,\"issues\":[{\"id\":\"10003\",\"key\":\"DEMO-3\",\"fields\":{\"summary\":\"Investigate flaky checkout test\",\"description\":\"The checkout integration test fails intermittently in CI.\",\"status\":{\"name\":\"To Do\",\"statusCategory\":{\"key\":\"new\"}},\"issuetype\":{\"name\":\"Task\"},\"priority\":{\"name\":\"Low\"},\"project\":{\"key\":\"DEMO\",\"name\":\"Demo Project\"},\"reporter\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"assignee\":{\"accountId\":\"acc-ben\",\"displayName\":\"Ben Carter\",\"emailAddress\":\"ben@example.com\"},\"creator\":{\"accountId\":\"acc-aria\",\"displayName\":\"Aria Lopez\",\"emailAddress\":\"aria@example.com\"},\"created\":\"2026-06-11T14:00:00.000+0000\",\"updated\":\"2026-06-11T14:45:00.000+0000\",\"comment\":{\"comments\":[]}}}]}"
+      }
+    }
+  ]
+}

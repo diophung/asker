@@ -14,6 +14,7 @@ package hub
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/asker/asker/platform/config"
@@ -43,12 +44,30 @@ type Config struct {
 	// connector wiring that needs envelope encryption (blob store).
 	KEKFile string `env:"KEK_FILE" envDefault:"/keys/kek.bin"`
 
-	// MinIO settings are consumed by the upload connector's blob store,
-	// wired in package main; the hub only loads and forwards them.
+	// Vault KEK selection (ADR-015 §3), MUST match the control plane's choice
+	// and key name so wrapped DEKs interoperate. VAULT_ADDR set -> Vault Transit;
+	// else the dev file KEK. In production (ASKER_ENV=production) an empty
+	// VAULT_ADDR fails closed at startup (never an ephemeral dev KEK).
+	VaultAddr       string `env:"VAULT_ADDR" envDefault:""`
+	VaultToken      string `env:"VAULT_TOKEN" envDefault:""`
+	VaultKEKKeyName string `env:"VAULT_KEK_KEY_NAME" envDefault:"asker-kek"`
+	// Env is the deployment marker (the KEK prod fail-closed guard).
+	Env string `env:"ASKER_ENV" envDefault:""`
+
+	// MaxInstancesPerTenant bounds how many sync workers (goroutines) one tenant
+	// can occupy in the scheduler — defense in depth alongside the control
+	// plane's per-tenant connector-instance create cap, in case stale rows or a
+	// misconfigured cap let a tenant accumulate instances. <= 0 disables the cap.
+	MaxInstancesPerTenant int `env:"HUB_MAX_INSTANCES_PER_TENANT" envDefault:"50"`
+
+	// MinIO settings are consumed by the upload connector's blob store
+	// (platform/blob), wired in package main; the hub only loads and
+	// forwards them. The env names match platform/blob.Config so either
+	// loading path sees the same configuration.
 	MinIOEndpoint  string `env:"MINIO_ENDPOINT" envDefault:"minio:9000"`
 	MinIOAccessKey string `env:"MINIO_ACCESS_KEY" envDefault:"asker-minio"`
 	MinIOSecretKey string `env:"MINIO_SECRET_KEY" envDefault:"asker-minio-secret"`
-	MinIOBucket    string `env:"MINIO_BUCKET" envDefault:"asker-blobs"`
+	MinIOBucket    string `env:"BLOB_BUCKET" envDefault:"asker-blobs"`
 	MinIOUseSSL    bool   `env:"MINIO_USE_SSL" envDefault:"false"`
 
 	// Kafka carries KAFKA_BROKERS / KAFKA_CLIENT_ID.
@@ -80,4 +99,19 @@ func (c Config) validate() error {
 		return errors.New("hub: HUB_WEBHOOK_BASE must not be empty")
 	}
 	return nil
+}
+
+// IsProd reports whether the deployment is marked production (the KEK
+// fail-closed guard, ADR-015). The marker is NORMALIZED (trim + lowercase)
+// before comparison so a casing/whitespace typo ("Production", "prod ") cannot
+// silently disable the guard (finding M6-#9); the recognized production markers
+// are {prod, production, staging}, identical to the control plane's isProdEnv so
+// the two services make the same KEK choice.
+func (c Config) IsProd() bool {
+	switch strings.ToLower(strings.TrimSpace(c.Env)) {
+	case "prod", "production", "staging":
+		return true
+	default:
+		return false
+	}
 }

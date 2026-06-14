@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=250&syncToken=SYNCTOKEN-AFTER-BACKFILL"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"kind\":\"calendar#events\",\"summary\":\"alice@example.com\",\"accessRole\":\"owner\",\"nextPageToken\":\"DELTA-page2\",\"items\":[{\"kind\":\"calendar#event\",\"etag\":\"\\\"4001\\\"\",\"id\":\"evt-alpha\",\"status\":\"confirmed\",\"htmlLink\":\"https://www.google.com/calendar/event?eid=evt-alpha\",\"created\":\"2026-06-08T08:00:00Z\",\"updated\":\"2026-06-08T08:30:00Z\",\"summary\":\"Alpha review\",\"start\":{\"dateTime\":\"2026-06-09T10:00:00-07:00\"},\"end\":{\"dateTime\":\"2026-06-09T11:00:00-07:00\"},\"organizer\":{\"email\":\"alice@example.com\",\"self\":true}}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/calendars/primary/events",
+        "query": "singleEvents=true&maxResults=250&pageToken=DELTA-page2"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json; charset=UTF-8"]},
+        "body": "{\"kind\":\"calendar#events\",\"summary\":\"alice@example.com\",\"accessRole\":\"owner\",\"nextSyncToken\":\"SYNCTOKEN-PAGED\",\"items\":[{\"kind\":\"calendar#event\",\"etag\":\"\\\"4002\\\"\",\"id\":\"evt-beta\",\"status\":\"confirmed\",\"htmlLink\":\"https://www.google.com/calendar/event?eid=evt-beta\",\"created\":\"2026-06-08T09:00:00Z\",\"updated\":\"2026-06-08T09:30:00Z\",\"summary\":\"Beta sync\",\"start\":{\"dateTime\":\"2026-06-09T13:00:00-07:00\"},\"end\":{\"dateTime\":\"2026-06-09T14:00:00-07:00\"},\"organizer\":{\"email\":\"alice@example.com\",\"self\":true}}]}"
+      }
+    }
+  ]
+}

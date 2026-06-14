@@ -22,10 +22,38 @@ type gatewayConfig struct {
 	RedisAddr            string `env:"REDIS_ADDR" envDefault:"redis:6379"`
 	// Per-tenant fixed-window limit; <= 0 disables limiting entirely.
 	RateLimitPerMinute int `env:"RATE_LIMIT_PER_MINUTE" envDefault:"600"`
+
+	// Pre-auth throttle (M6 DoS hardening): a per-source-IP limit plus a global
+	// ceiling that run IN FRONT of JWT verification, so unauthenticated floods
+	// cannot hammer JWKS/crypto. <= 0 disables that dimension.
+	PreAuthPerIPPerMinute int `env:"PREAUTH_PER_IP_PER_MINUTE" envDefault:"120"`
+	PreAuthGlobalPerSec   int `env:"PREAUTH_GLOBAL_PER_SEC" envDefault:"500"`
+	PreAuthGlobalBurst    int `env:"PREAUTH_GLOBAL_BURST" envDefault:"1000"`
+	// TrustProxyHeaders uses X-Forwarded-For for the client IP. Only enable
+	// behind a trusted proxy that sets it (otherwise a client spoofs its IP).
+	TrustProxyHeaders bool `env:"TRUST_PROXY_HEADERS" envDefault:"false"`
+
+	// MaxQueryChars caps the /v1/search q= length so a giant query string
+	// cannot drive disproportionate downstream work. <= 0 disables the cap.
+	MaxQueryChars int `env:"MAX_QUERY_CHARS" envDefault:"1024"`
 	// Comma-separated exact-match origins. Never "*": the allowed origin is
 	// echoed back verbatim.
 	CORSAllowedOrigins string `env:"CORS_ALLOWED_ORIGINS" envDefault:"http://localhost:3000"`
 	MaxUploadMB        int64  `env:"MAX_UPLOAD_MB" envDefault:"32"`
+	// Cap on the bytes streamed back from the hub for GET /v1/media — these
+	// are thumbnails/keyframes, so the default is small.
+	MaxMediaMB int64 `env:"MAX_MEDIA_MB" envDefault:"25"`
+
+	// GatewayPublicURL is the externally reachable base URL of the gateway. It
+	// builds the OAuth redirect_uri (<base>/v1/oauth/callback) that the provider
+	// redirects the browser back to, so it MUST match what the OAuth client is
+	// registered with at the provider. No trailing slash.
+	GatewayPublicURL string `env:"GATEWAY_PUBLIC_URL" envDefault:"http://localhost:8080"`
+	// WebAppURL is the FIXED, configured front-end base the OAuth callback
+	// redirects the browser to after the flow (…/connectors?oauth=connected|error).
+	// It is never derived from request input, so the callback cannot be turned
+	// into an open redirect.
+	WebAppURL string `env:"WEB_APP_URL" envDefault:"http://localhost:13001"`
 }
 
 func loadConfig() (gatewayConfig, error) {

@@ -1,0 +1,9 @@
+{{/*
+clip — CLIP model service (Python, HTTP), ADR-013. Compose: CLIP_PORT :9800,
+GET /health (returns 503 during model load, so it doubles as the readiness gate),
+POST /embed/text + /embed/image. Dialed as http://clip:9800 by query and enrich,
+so the Service object is named "clip". Loads the open_clip model on boot, so
+probes get a generous initialDelay/startupProbe (see values). Scalable (HPA) is
+left enabled-by-values but defaults conservative; gets a PDB.
+*/}}
+{{- include "asker.workload.all" (list . "clip") }}

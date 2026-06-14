@@ -102,11 +102,38 @@ class EmbedderLike(Protocol):
     async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
+class MediaHandlerLike(Protocol):
+    """Enriches a media Document in place, returning its serialized bytes.
+
+    Injected so the worker stays decoupled from the heavy media collaborators
+    (CLIP/whisper/ffmpeg/OCR) — and so tests inject a fake (ADR-007). A failure
+    raises and flows through the same retry/dead-letter loop as the text path.
+    """
+
+    async def enrich(self, doc: document_pb2.Document) -> bytes: ...
+
+
+def is_media_doc(doc: document_pb2.Document) -> bool:
+    """Report whether doc takes the media path (IMAGE/AUDIO/VIDEO, ADR-013).
+
+    Lazily imports the media module so unit tests of the text path never pull in
+    the media collaborators. Routing prefers Document.type, falling back to
+    original.content_type.
+    """
+    from .media import is_media
+
+    return is_media(doc)
+
+
 class Worker:
     """Consumes docs.chunked, embeds chunk texts via TEI, produces docs.enriched.
 
     The Kafka consumer/producer and the embedder are injected so tests run
-    against fakes — no live Kafka or TEI required (ADR-007).
+    against fakes — no live Kafka or TEI required (ADR-007). A media handler may
+    also be injected (ADR-013): when a record is an IMAGE/AUDIO/VIDEO document it
+    is routed there (OCR/CLIP/whisper/ffmpeg) instead of the text-embedding path.
+    Without one, media docs fall back to the text path (which is a no-op pass-
+    through for a media doc, since it carries no text chunks).
     """
 
     def __init__(
@@ -115,6 +142,7 @@ class Worker:
         producer: ProducerLike,
         embedder: EmbedderLike,
         *,
+        media_handler: MediaHandlerLike | None = None,
         backoff: Sequence[float] = HANDLER_BACKOFF,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         poll_timeout_ms: int = 1000,
@@ -123,6 +151,7 @@ class Worker:
         self._consumer = consumer
         self._producer = producer
         self._embedder = embedder
+        self._media_handler = media_handler
         self._backoff = tuple(backoff) or HANDLER_BACKOFF
         self._sleep = sleep
         self._poll_timeout_ms = poll_timeout_ms
@@ -179,44 +208,56 @@ class Worker:
                 f"tenant header {tenant!r} does not match document tenant {doc.tenant_id!r}",
             )
 
-        # Tombstones and zero-chunk documents pass through to docs.enriched
-        # byte-for-byte unchanged, same key and headers.
-        if doc.tombstone.deleted or not doc.chunks:
-            await self._producer.send_and_wait(
-                cfg.TOPIC_DOCS_ENRICHED, value=value, key=record.key, headers=headers
-            )
-            await self._commit(record)
-            log.info(
-                "passed through unchanged",
-                extra={
-                    "doc_id": doc.doc_id,
-                    "tenant_id": doc.tenant_id,
-                    "tombstone": doc.tombstone.deleted,
-                    "chunks": len(doc.chunks),
-                },
-            )
-            return Outcome.PASSED_THROUGH
+        # Routing (all three branches produce-then-commit through the SAME retry
+        # / dead-letter loop — kafkautil parity; a transient error must not crash
+        # the worker, least of all on a delete tombstone):
+        #  - tombstones pass through byte-for-byte unchanged;
+        #  - IMAGE/AUDIO/VIDEO docs go to the media handler (OCR/CLIP/whisper/
+        #    ffmpeg), which produces their chunks + MediaInfo — even a media doc
+        #    that yields zero chunks still produces, so it stays searchable by
+        #    metadata (ADR-013); a media-handler failure retries then dead-letters;
+        #  - text docs with chunks get bge-m3 embeddings; remaining zero-chunk
+        #    text docs pass through unchanged.
+        media_handler = (
+            self._media_handler
+            if not doc.tombstone.deleted and self._media_handler is not None and is_media_doc(doc)
+            else None
+        )
+        passthrough = media_handler is None and (doc.tombstone.deleted or not doc.chunks)
+
+        async def build() -> bytes:
+            if media_handler is not None:
+                return await media_handler.enrich(doc)
+            return value if passthrough else await self._enrich(doc)
 
         last_err: Exception | None = None
         for attempt in range(1, MAX_HANDLER_ATTEMPTS + 1):
             if attempt > 1:
                 await self._sleep(self._backoff[min(attempt - 2, len(self._backoff) - 1)])
             try:
-                enriched = await self._enrich(doc)
+                out = await build()
                 await self._producer.send_and_wait(
-                    cfg.TOPIC_DOCS_ENRICHED, value=enriched, key=record.key, headers=headers
+                    cfg.TOPIC_DOCS_ENRICHED, value=out, key=record.key, headers=headers
                 )
                 await self._commit(record)
+                if media_handler is not None:
+                    message = "media document enriched"
+                elif passthrough:
+                    message = "passed through unchanged"
+                else:
+                    message = "document enriched"
                 log.info(
-                    "document enriched",
+                    message,
                     extra={
                         "doc_id": doc.doc_id,
                         "tenant_id": doc.tenant_id,
+                        "tombstone": doc.tombstone.deleted,
                         "chunks": len(doc.chunks),
+                        "media": media_handler is not None,
                         "attempt": attempt,
                     },
                 )
-                return Outcome.ENRICHED
+                return Outcome.PASSED_THROUGH if passthrough else Outcome.ENRICHED
             except Exception as exc:  # any handler error retries, then dead-letters
                 last_err = exc
                 log.warning(
@@ -319,16 +360,24 @@ async def ensure_topics(
 ) -> None:
     """Idempotently create the pipeline topics (EnsureTopics parity).
 
-    Topics that already exist are left untouched. Uses the broker-default
-    replication factor.
+    Topics that already exist are left untouched. Unlike the Go kadm client,
+    aiokafka's NewTopic rejects replication_factor=-1 ("broker default"), so
+    the factor comes from ENRICH_TOPIC_REPLICATION (default 1 — single-broker
+    dev; production overrides via env, ADR-004).
     """
+    import os
+
     from aiokafka.admin import AIOKafkaAdminClient, NewTopic
     from aiokafka.errors import TopicAlreadyExistsError, for_code
 
+    replication = int(os.environ.get("ENRICH_TOPIC_REPLICATION", "1"))
     admin = AIOKafkaAdminClient(bootstrap_servers=list(brokers))
     await admin.start()
     try:
-        new = [NewTopic(name=t, num_partitions=partitions, replication_factor=-1) for t in topics]
+        new = [
+            NewTopic(name=t, num_partitions=partitions, replication_factor=replication)
+            for t in topics
+        ]
         try:
             response = await admin.create_topics(new)
         except TopicAlreadyExistsError:

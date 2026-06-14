@@ -1,0 +1,15 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/calendar; charset=utf-8"]},
+        "body": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp//Asker Test//EN\r\nX-WR-CALNAME:changed-to-bust-the-hash\r\nBEGIN:VEVENT\r\nUID:evt-stable@example.com\r\nDTSTAMP:20260601T090000Z\r\nSEQUENCE:0\r\nSTATUS:CONFIRMED\r\nSUMMARY:Stable meeting\r\nDTSTART;TZID=America/Los_Angeles:20260603T093000\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:evt-moved@example.com\r\nDTSTAMP:20260606T090000Z\r\nSEQUENCE:4\r\nSTATUS:CONFIRMED\r\nSUMMARY:Moved meeting\r\nDTSTART;TZID=America/Los_Angeles:20260604T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    }
+  ]
+}

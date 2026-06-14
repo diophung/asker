@@ -1,0 +1,23 @@
+{{- /*
+Gateway Service. ClusterIP — public exposure is via the Ingress
+(templates/edge/ingress.yaml), not a cloud LoadBalancer, to stay cloud-agnostic.
+metadata.name is the bare key "gateway" (asker.serviceName) so the compose DNS
+contract holds (the Ingress backend and any internal caller dial "gateway").
+*/ -}}
+{{- $svc := "gateway" -}}
+{{- $cfg := .Values.services.gateway -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "asker.serviceName" (list . $svc) }}
+  labels:
+    {{- include "asker.serviceLabels" (list . $svc) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "asker.serviceSelectorLabels" (list . $svc) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $cfg.port }}
+      targetPort: http
+      protocol: TCP

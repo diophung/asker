@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/content",
+        "query": "type=page&limit=1&spaceKey=DEV"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"results\":[{\"id\":\"100\",\"type\":\"page\",\"status\":\"current\",\"title\":\"Onboarding Guide\"}],\"start\":0,\"limit\":1,\"size\":1,\"_links\":{\"base\":\"https://acme.atlassian.net/wiki\"}}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/content",
+        "query": "type=page&limit=1&spaceKey=DEV"
+      },
+      "response": {
+        "status": 401,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"statusCode\":401,\"message\":\"Unauthorized; scope does not match\"}"
+      }
+    }
+  ]
+}

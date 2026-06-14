@@ -23,7 +23,7 @@ const testWait = 30 * time.Second
 
 // TestEndToEndKafkaToVespa drives the real service loop: run() consumes
 // docs.enriched from an in-memory kfake cluster and feeds an httptest Vespa
-// stub — upsert PUT, dimension-mismatch quarantine to docs.deadletter, and
+// stub — upsert POST, dimension-mismatch quarantine to docs.deadletter, and
 // tombstone DELETE, then a clean drain on context cancellation.
 func TestEndToEndKafkaToVespa(t *testing.T) {
 	cluster, err := kfake.NewCluster(kfake.NumBrokers(1))
@@ -60,7 +60,7 @@ func TestEndToEndKafkaToVespa(t *testing.T) {
 	t.Cleanup(p.Close)
 	tctx := tenantCtx(t, "tenant-a")
 
-	// 1) A rich enriched document becomes the exact upsert PUT.
+	// 1) A rich enriched document becomes the exact upsert POST.
 	if err := p.ProduceDocument(tctx, kafkautil.TopicDocsEnriched, richDoc()); err != nil {
 		t.Fatalf("ProduceDocument(rich): %v", err)
 	}
@@ -68,8 +68,8 @@ func TestEndToEndKafkaToVespa(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("vespa saw %d requests, want 1", len(reqs))
 	}
-	if reqs[0].method != http.MethodPut {
-		t.Errorf("method = %s, want PUT", reqs[0].method)
+	if reqs[0].method != http.MethodPost {
+		t.Errorf("method = %s, want POST", reqs[0].method)
 	}
 	if want := "/document/v1/asker/doc/group/tenant-a/doc-rich-1"; reqs[0].path != want {
 		t.Errorf("path = %q, want %q", reqs[0].path, want)

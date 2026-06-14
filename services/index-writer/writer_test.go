@@ -90,9 +90,14 @@ func (s *vespaStub) waitRequests(n int, timeout time.Duration) []capturedRequest
 	}
 }
 
+// testCLIPDim is the CLIP_DIM used across writer tests. It is deliberately
+// different from the EMBEDDING_DIM (4) the tests pass so the two vector spaces
+// are distinguishable by length, mirroring the dev config (384 vs 512).
+const testCLIPDim = 6
+
 func newTestWriter(t *testing.T, vespaURL string, dim int) *writer {
 	t.Helper()
-	w, err := newWriter(vespaURL, dim, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	w, err := newWriter(vespaURL, dim, testCLIPDim, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("newWriter: %v", err)
 	}
@@ -161,6 +166,9 @@ const goldenRichFeed = `{
         "1": [0.0625, 2, -0.25, 0.5]
       }
     },
+    "chunk_starts_ms": [0, 0],
+    "chunk_ends_ms": [0, 0],
+    "chunk_modalities": ["text", "text"],
     "participants": [
       "Alice Smith <alice@example.com>",
       "U123BOB",
@@ -185,7 +193,8 @@ func asJSONValue(t *testing.T, raw []byte) any {
 	return v
 }
 
-// feedFields unmarshals a captured PUT body and returns its "fields" object.
+// feedFields unmarshals a captured feed POST body and returns its "fields"
+// object.
 func feedFields(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	doc, ok := asJSONValue(t, body).(map[string]any)
@@ -213,8 +222,9 @@ func TestHandleFeedsRichDocumentGolden(t *testing.T) {
 		t.Fatalf("vespa saw %d requests, want 1", len(reqs))
 	}
 	req := reqs[0]
-	if req.method != http.MethodPut {
-		t.Errorf("method = %s, want PUT", req.method)
+	// document/v1 full puts are POST; PUT would be parsed as a partial update.
+	if req.method != http.MethodPost {
+		t.Errorf("method = %s, want POST", req.method)
 	}
 	if want := "/document/v1/asker/doc/group/tenant-a/doc-rich-1"; req.path != want {
 		t.Errorf("path = %q, want %q", req.path, want)
@@ -591,18 +601,316 @@ func TestParticipantStrings(t *testing.T) {
 
 func TestNewWriterValidation(t *testing.T) {
 	t.Parallel()
-	if _, err := newWriter("", 4, nil); err == nil {
+	if _, err := newWriter("", 4, 6, nil); err == nil {
 		t.Error("newWriter with empty url: want error, got nil")
 	}
-	if _, err := newWriter("http://vespa:8080", 0, nil); err == nil {
+	if _, err := newWriter("http://vespa:8080", 0, 6, nil); err == nil {
 		t.Error("newWriter with dim 0: want error, got nil")
 	}
-	w, err := newWriter("http://vespa:8080/", 384, nil)
+	if _, err := newWriter("http://vespa:8080", 4, 0, nil); err == nil {
+		t.Error("newWriter with clip dim 0: want error, got nil")
+	}
+	if _, err := newWriter("http://vespa:8080", 4, 4, nil); err == nil {
+		t.Error("newWriter with clip dim == embedding dim: want error, got nil")
+	}
+	w, err := newWriter("http://vespa:8080/", 384, 512, nil)
 	if err != nil {
 		t.Fatalf("newWriter: %v", err)
 	}
 	// Trailing slash is trimmed so the document path never doubles it.
 	if got, want := w.documentURL("t1", "d1"), "http://vespa:8080/document/v1/asker/doc/group/t1/d1"; got != want {
 		t.Errorf("documentURL = %q, want %q", got, want)
+	}
+}
+
+// --- M3 media feed (ADR-013) ----------------------------------------------
+
+// audioDoc is an AUDIO document whose ASR transcript produced two time-anchored
+// chunks. Their vectors are bge-m3 (EMBEDDING_DIM=4) — speech transcript text
+// lives in the unified text space, not the CLIP space — so they feed the
+// `embedding` tensor with parallel chunk_starts_ms/ends_ms/modalities arrays.
+func audioDoc() *askerv1.Document {
+	return &askerv1.Document{
+		TenantId:    "tenant-a",
+		DocId:       "doc-audio-1",
+		ConnectorId: "upload",
+		Type:        askerv1.DocType_AUDIO,
+		Title:       "standup recording",
+		Chunks: []*askerv1.Chunk{
+			{ChunkId: "doc-audio-1#0", Text: "Good morning team.", StartMs: 0, EndMs: 1500,
+				Modality: "asr", Embedding: []float32{0.5, -0.25, 0.125, 1}},
+			{ChunkId: "doc-audio-1#1", Text: "Let us review the roadmap.", StartMs: 1500, EndMs: 4200,
+				Modality: "asr", Embedding: []float32{-0.5, 0.0625, 2, 0.25}},
+		},
+		Ts:    &askerv1.Timestamps{Created: timestamppb.New(time.Unix(1718000000, 0))},
+		Media: &askerv1.MediaInfo{DurationMs: 4200, TranscriptLang: "en"},
+	}
+}
+
+const goldenAudioFeed = `{
+  "fields": {
+    "doc_id": "doc-audio-1",
+    "connector_id": "upload",
+    "type": "AUDIO",
+    "title": "standup recording",
+    "body": "",
+    "chunks": ["Good morning team.", "Let us review the roadmap."],
+    "embedding": {
+      "blocks": {
+        "0": [0.5, -0.25, 0.125, 1],
+        "1": [-0.5, 0.0625, 2, 0.25]
+      }
+    },
+    "chunk_starts_ms": [0, 1500],
+    "chunk_ends_ms": [1500, 4200],
+    "chunk_modalities": ["asr", "asr"],
+    "metadata_json": "{}",
+    "created_at": 1718000000,
+    "modified_at": 1718000000,
+    "version_etag": "",
+    "media_duration_ms": 4200,
+    "transcript_lang": "en"
+  }
+}`
+
+func TestHandleFeedsAudioDocumentGolden(t *testing.T) {
+	t.Parallel()
+	stub := newVespaStub(t, nil)
+	w := newTestWriter(t, stub.srv.URL, 4)
+
+	if err := w.Handle(tenantCtx(t, "tenant-a"), audioDoc()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	reqs := stub.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("vespa saw %d requests, want 1", len(reqs))
+	}
+	got := asJSONValue(t, reqs[0].body)
+	want := asJSONValue(t, []byte(goldenAudioFeed))
+	if !reflect.DeepEqual(got, want) {
+		gotPretty, _ := json.MarshalIndent(got, "", "  ")
+		wantPretty, _ := json.MarshalIndent(want, "", "  ")
+		t.Errorf("audio feed JSON mismatch\ngot:\n%s\nwant:\n%s", gotPretty, wantPretty)
+	}
+}
+
+// videoDoc is a VIDEO document carrying BOTH an ASR transcript chunk (bge-m3,
+// EMBEDDING_DIM=4, modality "asr") and a keyframe chunk whose CLIP image vector
+// (CLIP_DIM=6, modality "caption") feeds clip_embedding. Media dims + thumbnail
+// poster come from MediaInfo. This exercises the two-space routing on one doc.
+func videoDoc() *askerv1.Document {
+	return &askerv1.Document{
+		TenantId:    "tenant-a",
+		DocId:       "doc-video-1",
+		ConnectorId: "upload",
+		Type:        askerv1.DocType_VIDEO,
+		Title:       "demo clip",
+		Chunks: []*askerv1.Chunk{
+			{ChunkId: "doc-video-1#0", Text: "Welcome to the demo.", StartMs: 0, EndMs: 2000,
+				Modality: "asr", Embedding: []float32{0.25, -0.5, 0.125, 1}},
+			// Keyframe chunk: CLIP image vector, no transcript text.
+			{ChunkId: "doc-video-1#1", StartMs: 5000, EndMs: 5000, Modality: "caption",
+				Embedding: []float32{0.5, -0.25, 0.125, 1, -0.0625, 2}},
+		},
+		Ts: &askerv1.Timestamps{Created: timestamppb.New(time.Unix(1718000000, 0))},
+		Media: &askerv1.MediaInfo{
+			DurationMs:     12000,
+			Width:          1920,
+			Height:         1080,
+			Thumbnail:      &askerv1.BlobRef{Bucket: "media", Key: "thumb/doc-video-1.jpg"},
+			TranscriptLang: "en",
+			Keyframes: []*askerv1.Keyframe{
+				{TsMs: 5000, ChunkId: "doc-video-1#1"},
+			},
+		},
+	}
+}
+
+// goldenVideoFeed: the ASR chunk's bge-m3 vector lands in `embedding` (block
+// "0"); the keyframe chunk's CLIP vector lands in `clip_embedding` (block "1");
+// `embedding` is NOT omitted even though chunk 1 lacks a bge-m3 vector, because
+// chunk 1 is a CLIP-only chunk and excluded from the bge-m3 completeness gate.
+const goldenVideoFeed = `{
+  "fields": {
+    "doc_id": "doc-video-1",
+    "connector_id": "upload",
+    "type": "VIDEO",
+    "title": "demo clip",
+    "body": "",
+    "chunks": ["Welcome to the demo.", ""],
+    "embedding": {
+      "blocks": {
+        "0": [0.25, -0.5, 0.125, 1]
+      }
+    },
+    "clip_embedding": {
+      "blocks": {
+        "1": [0.5, -0.25, 0.125, 1, -0.0625, 2]
+      }
+    },
+    "chunk_starts_ms": [0, 5000],
+    "chunk_ends_ms": [2000, 5000],
+    "chunk_modalities": ["asr", "caption"],
+    "metadata_json": "{}",
+    "created_at": 1718000000,
+    "modified_at": 1718000000,
+    "version_etag": "",
+    "media_duration_ms": 12000,
+    "media_width": 1920,
+    "media_height": 1080,
+    "thumbnail_key": "thumb/doc-video-1.jpg",
+    "transcript_lang": "en"
+  }
+}`
+
+func TestHandleFeedsVideoDocumentGolden(t *testing.T) {
+	t.Parallel()
+	stub := newVespaStub(t, nil)
+	w := newTestWriter(t, stub.srv.URL, 4)
+
+	if err := w.Handle(tenantCtx(t, "tenant-a"), videoDoc()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	reqs := stub.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("vespa saw %d requests, want 1", len(reqs))
+	}
+	got := asJSONValue(t, reqs[0].body)
+	want := asJSONValue(t, []byte(goldenVideoFeed))
+	if !reflect.DeepEqual(got, want) {
+		gotPretty, _ := json.MarshalIndent(got, "", "  ")
+		wantPretty, _ := json.MarshalIndent(want, "", "  ")
+		t.Errorf("video feed JSON mismatch\ngot:\n%s\nwant:\n%s", gotPretty, wantPretty)
+	}
+}
+
+// imageDoc is an IMAGE document: an OCR text chunk (bge-m3) plus a CLIP image
+// chunk, with width/height/thumbnail in MediaInfo and no duration.
+func imageDoc() *askerv1.Document {
+	return &askerv1.Document{
+		TenantId:    "tenant-a",
+		DocId:       "doc-image-1",
+		ConnectorId: "upload",
+		Type:        askerv1.DocType_IMAGE,
+		Title:       "scanned receipt",
+		Chunks: []*askerv1.Chunk{
+			{ChunkId: "doc-image-1#0", Text: "TOTAL $42.00", Modality: "ocr",
+				Embedding: []float32{0.125, 0.25, -0.5, 1}},
+			{ChunkId: "doc-image-1#1", Modality: "caption",
+				Embedding: []float32{1, 0.5, 0.25, 0.125, 0.0625, -2}},
+		},
+		Media: &askerv1.MediaInfo{
+			Width:     800,
+			Height:    600,
+			Thumbnail: &askerv1.BlobRef{Bucket: "media", Key: "thumb/doc-image-1.png"},
+		},
+	}
+}
+
+func TestHandleImageDocClipBlockAndDims(t *testing.T) {
+	t.Parallel()
+	stub := newVespaStub(t, nil)
+	w := newTestWriter(t, stub.srv.URL, 4)
+
+	if err := w.Handle(tenantCtx(t, "tenant-a"), imageDoc()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	fields := feedFields(t, stub.requests()[0].body)
+
+	// bge-m3 OCR vector -> embedding block "0"; CLIP vector -> clip_embedding "1".
+	emb, ok := fields["embedding"].(map[string]any)
+	if !ok {
+		t.Fatalf("embedding missing/not an object: %v", fields["embedding"])
+	}
+	if blocks, _ := emb["blocks"].(map[string]any); len(blocks) != 1 || blocks["0"] == nil {
+		t.Errorf("embedding blocks = %v, want only block \"0\"", emb["blocks"])
+	}
+	clip, ok := fields["clip_embedding"].(map[string]any)
+	if !ok {
+		t.Fatalf("clip_embedding missing/not an object: %v", fields["clip_embedding"])
+	}
+	blocks, _ := clip["blocks"].(map[string]any)
+	if len(blocks) != 1 || blocks["1"] == nil {
+		t.Fatalf("clip_embedding blocks = %v, want only block \"1\"", clip["blocks"])
+	}
+	if vec, _ := blocks["1"].([]any); len(vec) != testCLIPDim {
+		t.Errorf("clip vector length = %d, want CLIP_DIM=%d", len(vec), testCLIPDim)
+	}
+	if got := fields["media_width"]; got != float64(800) {
+		t.Errorf("media_width = %v, want 800", got)
+	}
+	if got := fields["media_height"]; got != float64(600) {
+		t.Errorf("media_height = %v, want 600", got)
+	}
+	if got := fields["thumbnail_key"]; got != "thumb/doc-image-1.png" {
+		t.Errorf("thumbnail_key = %v, want thumb/doc-image-1.png", got)
+	}
+	// No audio: media_duration_ms is zero and omitted.
+	if _, present := fields["media_duration_ms"]; present {
+		t.Errorf("media_duration_ms present for an image, want omitted")
+	}
+	if got, _ := fields["chunk_modalities"].([]any); len(got) != 2 || got[0] != "ocr" || got[1] != "caption" {
+		t.Errorf("chunk_modalities = %v, want [ocr caption]", fields["chunk_modalities"])
+	}
+}
+
+// A CLIP-dim vector is accepted (routes to clip_embedding); a vector whose
+// length is NEITHER EMBEDDING_DIM nor CLIP_DIM is rejected before any feed, so
+// a dimension mismatch dead-letters instead of silently indexing.
+func TestHandleClipDimRoutingAndRejection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clip dim accepted", func(t *testing.T) {
+		t.Parallel()
+		stub := newVespaStub(t, nil)
+		w := newTestWriter(t, stub.srv.URL, 4)
+		doc := imageDoc()
+		if err := w.Handle(tenantCtx(t, "tenant-a"), doc); err != nil {
+			t.Fatalf("Handle with a CLIP_DIM vector: %v", err)
+		}
+		if got := len(stub.requests()); got != 1 {
+			t.Fatalf("vespa saw %d requests, want 1", got)
+		}
+	})
+
+	t.Run("neither dim rejected", func(t *testing.T) {
+		t.Parallel()
+		stub := newVespaStub(t, nil)
+		w := newTestWriter(t, stub.srv.URL, 4) // EMBEDDING_DIM=4, CLIP_DIM=6
+		doc := imageDoc()
+		doc.Chunks[1].Embedding = []float32{0.1, 0.2, 0.3, 0.4, 0.5} // 5: neither 4 nor 6
+
+		err := w.Handle(tenantCtx(t, "tenant-a"), doc)
+		if err == nil {
+			t.Fatal("Handle with a non-dim vector: want error, got nil")
+		}
+		if !strings.Contains(err.Error(), "EMBEDDING_DIM=4") || !strings.Contains(err.Error(), "CLIP_DIM=6") {
+			t.Errorf("error = %v, want mention of both EMBEDDING_DIM=4 and CLIP_DIM=6", err)
+		}
+		// A misconfigured dimension must never reach Vespa.
+		if got := len(stub.requests()); got != 0 {
+			t.Errorf("vespa saw %d requests, want 0", got)
+		}
+	})
+}
+
+// A text document carries no media: clip_embedding and every media_* field are
+// omitted, while the parallel chunk arrays still carry 0/0/"text".
+func TestHandleTextDocOmitsMediaFields(t *testing.T) {
+	t.Parallel()
+	stub := newVespaStub(t, nil)
+	w := newTestWriter(t, stub.srv.URL, 4)
+
+	if err := w.Handle(tenantCtx(t, "tenant-a"), richDoc()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	fields := feedFields(t, stub.requests()[0].body)
+	for _, k := range []string{"clip_embedding", "media_duration_ms", "media_width", "media_height", "thumbnail_key", "transcript_lang"} {
+		if _, present := fields[k]; present {
+			t.Errorf("field %q present for a text doc, want omitted", k)
+		}
+	}
+	if got, _ := fields["chunk_modalities"].([]any); len(got) != 2 || got[0] != "text" || got[1] != "text" {
+		t.Errorf("chunk_modalities = %v, want [text text]", fields["chunk_modalities"])
 	}
 }

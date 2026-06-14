@@ -35,7 +35,7 @@ func main() {
 		os.Exit(hub.RunHealthcheck(cfg.HealthAddr))
 	}
 
-	deps, err := buildDeps(context.Background(), cfg)
+	deps, err := buildDeps(context.Background(), cfg, logger)
 	if err != nil {
 		logger.Error("failed to wire connectors", "error", err)
 		os.Exit(1)

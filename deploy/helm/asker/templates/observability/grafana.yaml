@@ -1,0 +1,244 @@
+{{- /*
+================================================================================
+Grafana — OPT-IN (M5). Gated on observability.enabled (DEFAULT FALSE): when off
+this file renders NOTHING and the default chart output is unchanged.
+
+Renders a small, memory-capped Grafana:
+  - ConfigMap "<fullname>-grafana-provisioning": the datasource (uid "prometheus"
+    -> http://prometheus:9090, matching the in-cluster Service this chart renders)
+    and the file dashboard provider (loads /var/lib/grafana/dashboards). These are
+    byte-equivalent to deploy/observability/grafana/provisioning/** so dashboards
+    import unchanged across compose and the chart.
+  - ConfigMap "<fullname>-grafana-dashboards": dashboard JSON. The committed SLO
+    dashboards live IN the chart at files/observability/grafana/dashboards/*.json
+    and are embedded via .Files.Glob (single source of truth — the compose overlay
+    mounts the same files). Any operator-supplied .Values.observability.grafana.
+    dashboards map is merged on top.
+  - Deployment (1 replica) + ClusterIP Service "grafana":3000.
+
+DEV-ONLY admin credentials by default; set grafana.adminPasswordSecret for prod.
+================================================================================
+*/ -}}
+{{- if eq (include "asker.obs.enabled" .) "true" }}
+{{- $root := . -}}
+{{- $g := .Values.observability.grafana | default dict -}}
+{{- $img := $g.image | default dict -}}
+{{- $persistence := $g.persistence | default dict -}}
+{{- $adminSecret := $g.adminPasswordSecret | default "" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "grafana-provisioning") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "grafana") | nindent 4 }}
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+      - name: prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: {{ $root.Values.observability.prometheus.scrapeInterval | default "15s" }}
+          httpMethod: POST
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: asker-dashboards
+        orgId: 1
+        folder: Asker
+        type: file
+        disableDeletion: false
+        allowUiUpdates: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "grafana-dashboards") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "grafana") | nindent 4 }}
+data:
+  # Dashboards ship WITH the chart: every JSON under
+  # files/observability/grafana/dashboards/ is embedded here (the committed SLO
+  # dashboards), and any operator-supplied observability.grafana.dashboards map
+  # is merged on top (operator wins on a filename clash).
+  {{- range $path, $_ := $root.Files.Glob "files/observability/grafana/dashboards/*.json" }}
+  {{ base $path }}: |
+    {{- $root.Files.Get $path | nindent 4 }}
+  {{- end }}
+  {{- range $fname, $json := ($g.dashboards | default dict) }}
+  {{ $fname }}: |
+    {{- $json | nindent 4 }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "grafana") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "grafana") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "asker.obs.selectorLabels" (list $root "grafana") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.obs.labels" (list $root "grafana") | nindent 8 }}
+      annotations:
+        # Roll the pod when provisioning / dashboards change. Hash the driving
+        # values (a self-include of this template would recurse).
+        checksum/config: {{ printf "%v|%v|%s|%s" ($root.Files.Glob "files/observability/grafana/dashboards/*.json") ($g.dashboards | default dict) ($root.Values.observability.prometheus.scrapeInterval | default "15s") $adminSecret | sha256sum }}
+    spec:
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: {{ printf "%s:%s" ($img.repository | default "grafana/grafana") ($img.tag | default "11.4.0") | quote }}
+          imagePullPolicy: {{ $img.pullPolicy | default $root.Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_NEWS_NEWS_FEED_ENABLED
+              value: "false"
+            - name: GF_SECURITY_ADMIN_USER
+            {{- if $adminSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecret | quote }}
+                  key: admin-user
+            {{- else }}
+              value: {{ $g.adminUser | default "admin" | quote }}
+            {{- end }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+            {{- if $adminSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecret | quote }}
+                  key: admin-password
+            {{- else }}
+              value: {{ $g.adminPassword | default "admin" | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml ($g.resources | default (dict "requests" (dict "cpu" "50m" "memory" "96Mi") "limits" (dict "cpu" "500m" "memory" "256Mi"))) | nindent 12 }}
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yml
+              subPath: datasources.yml
+              readOnly: true
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+              subPath: dashboards.yml
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: provisioning-datasources
+          configMap:
+            name: {{ include "asker.obs.fullname" (list $root "grafana-provisioning") }}
+            items:
+              - key: datasources.yml
+                path: datasources.yml
+        - name: provisioning-dashboards
+          configMap:
+            name: {{ include "asker.obs.fullname" (list $root "grafana-provisioning") }}
+            items:
+              - key: dashboards.yml
+                path: dashboards.yml
+        - name: dashboards
+          configMap:
+            name: {{ include "asker.obs.fullname" (list $root "grafana-dashboards") }}
+        - name: data
+        {{- if $persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "asker.obs.fullname" (list $root "grafana") }}
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
+{{- if $persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "asker.obs.fullname" (list $root "grafana") }}
+  labels:
+    {{- include "asker.obs.labels" (list $root "grafana") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "asker.obs.storageClass" (list $root $persistence) | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ $persistence.size | default "2Gi" | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    {{- include "asker.obs.labels" (list $root "grafana") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "asker.obs.selectorLabels" (list $root "grafana") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+{{- end }}

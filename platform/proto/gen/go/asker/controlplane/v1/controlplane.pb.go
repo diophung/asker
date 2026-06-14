@@ -1244,6 +1244,213 @@ func (*DeleteTokenResponse) Descriptor() ([]byte, []int) {
 	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{22}
 }
 
+type DeleteTenantRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// confirm MUST equal the caller's own tenant id (the value /v1/me reports).
+	// It is a typo/accident guard ONLY — the tenant being deleted is ALWAYS the
+	// verified caller context, never this field. A mismatch is InvalidArgument.
+	Confirm       string `protobuf:"bytes,1,opt,name=confirm,proto3" json:"confirm,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTenantRequest) Reset() {
+	*x = DeleteTenantRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTenantRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTenantRequest) ProtoMessage() {}
+
+func (x *DeleteTenantRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTenantRequest.ProtoReflect.Descriptor instead.
+func (*DeleteTenantRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *DeleteTenantRequest) GetConfirm() string {
+	if x != nil {
+		return x.Confirm
+	}
+	return ""
+}
+
+// DeleteReport is the per-store erasure tally returned by a delete cascade and
+// reused by the admin path. Counts are best-effort observability, not a
+// correctness contract; the cascade additionally runs a verification pass that
+// re-reads every store and fails the RPC if anything residual remains.
+type DeleteReport struct {
+	state                     protoimpl.MessageState `protogen:"open.v1"`
+	TenantId                  string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	ConnectorInstancesDeleted int64                  `protobuf:"varint,2,opt,name=connector_instances_deleted,json=connectorInstancesDeleted,proto3" json:"connector_instances_deleted,omitempty"`
+	TokensDeleted             int64                  `protobuf:"varint,3,opt,name=tokens_deleted,json=tokensDeleted,proto3" json:"tokens_deleted,omitempty"`
+	DekDestroyed              bool                   `protobuf:"varint,4,opt,name=dek_destroyed,json=dekDestroyed,proto3" json:"dek_destroyed,omitempty"`
+	VespaGroupPurged          bool                   `protobuf:"varint,5,opt,name=vespa_group_purged,json=vespaGroupPurged,proto3" json:"vespa_group_purged,omitempty"`
+	BlobsDeleted              int64                  `protobuf:"varint,6,opt,name=blobs_deleted,json=blobsDeleted,proto3" json:"blobs_deleted,omitempty"`
+	RedisPurged               bool                   `protobuf:"varint,7,opt,name=redis_purged,json=redisPurged,proto3" json:"redis_purged,omitempty"`
+	VerifiedEmpty             bool                   `protobuf:"varint,8,opt,name=verified_empty,json=verifiedEmpty,proto3" json:"verified_empty,omitempty"`
+	// actor attributes the erasure for the audit trail: "self" for a self-serve
+	// DeleteTenant, or "admin:<subject>" where <subject> is the VERIFIED operator
+	// identity the gateway forwarded for an AdminDeleteTenant (finding M6-#6).
+	// Never a token.
+	Actor         string `protobuf:"bytes,9,opt,name=actor,proto3" json:"actor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteReport) Reset() {
+	*x = DeleteReport{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteReport) ProtoMessage() {}
+
+func (x *DeleteReport) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteReport.ProtoReflect.Descriptor instead.
+func (*DeleteReport) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *DeleteReport) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *DeleteReport) GetConnectorInstancesDeleted() int64 {
+	if x != nil {
+		return x.ConnectorInstancesDeleted
+	}
+	return 0
+}
+
+func (x *DeleteReport) GetTokensDeleted() int64 {
+	if x != nil {
+		return x.TokensDeleted
+	}
+	return 0
+}
+
+func (x *DeleteReport) GetDekDestroyed() bool {
+	if x != nil {
+		return x.DekDestroyed
+	}
+	return false
+}
+
+func (x *DeleteReport) GetVespaGroupPurged() bool {
+	if x != nil {
+		return x.VespaGroupPurged
+	}
+	return false
+}
+
+func (x *DeleteReport) GetBlobsDeleted() int64 {
+	if x != nil {
+		return x.BlobsDeleted
+	}
+	return 0
+}
+
+func (x *DeleteReport) GetRedisPurged() bool {
+	if x != nil {
+		return x.RedisPurged
+	}
+	return false
+}
+
+func (x *DeleteReport) GetVerifiedEmpty() bool {
+	if x != nil {
+		return x.VerifiedEmpty
+	}
+	return false
+}
+
+func (x *DeleteReport) GetActor() string {
+	if x != nil {
+		return x.Actor
+	}
+	return ""
+}
+
+type DeleteTenantResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Report        *DeleteReport          `protobuf:"bytes,1,opt,name=report,proto3" json:"report,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteTenantResponse) Reset() {
+	*x = DeleteTenantResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteTenantResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteTenantResponse) ProtoMessage() {}
+
+func (x *DeleteTenantResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteTenantResponse.ProtoReflect.Descriptor instead.
+func (*DeleteTenantResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *DeleteTenantResponse) GetReport() *DeleteReport {
+	if x != nil {
+		return x.Report
+	}
+	return nil
+}
+
 type ListAllInstancesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1252,7 +1459,7 @@ type ListAllInstancesRequest struct {
 
 func (x *ListAllInstancesRequest) Reset() {
 	*x = ListAllInstancesRequest{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1264,7 +1471,7 @@ func (x *ListAllInstancesRequest) String() string {
 func (*ListAllInstancesRequest) ProtoMessage() {}
 
 func (x *ListAllInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1277,7 +1484,7 @@ func (x *ListAllInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAllInstancesRequest.ProtoReflect.Descriptor instead.
 func (*ListAllInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{23}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{26}
 }
 
 type ListAllInstancesResponse struct {
@@ -1289,7 +1496,7 @@ type ListAllInstancesResponse struct {
 
 func (x *ListAllInstancesResponse) Reset() {
 	*x = ListAllInstancesResponse{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1301,7 +1508,7 @@ func (x *ListAllInstancesResponse) String() string {
 func (*ListAllInstancesResponse) ProtoMessage() {}
 
 func (x *ListAllInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1314,7 +1521,7 @@ func (x *ListAllInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAllInstancesResponse.ProtoReflect.Descriptor instead.
 func (*ListAllInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{24}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListAllInstancesResponse) GetInstances() []*TenantInstance {
@@ -1337,7 +1544,7 @@ type TenantInstance struct {
 
 func (x *TenantInstance) Reset() {
 	*x = TenantInstance{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1349,7 +1556,7 @@ func (x *TenantInstance) String() string {
 func (*TenantInstance) ProtoMessage() {}
 
 func (x *TenantInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1362,7 +1569,7 @@ func (x *TenantInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantInstance.ProtoReflect.Descriptor instead.
 func (*TenantInstance) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{25}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TenantInstance) GetTenantId() string {
@@ -1375,6 +1582,465 @@ func (x *TenantInstance) GetTenantId() string {
 func (x *TenantInstance) GetInstance() *ConnectorInstance {
 	if x != nil {
 		return x.Instance
+	}
+	return nil
+}
+
+// TenantUsage is one tenant's resource footprint, for quota/abuse triage.
+type TenantUsage struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TenantId           string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Created            *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=created,proto3" json:"created,omitempty"`
+	ConnectorInstances int64                  `protobuf:"varint,3,opt,name=connector_instances,json=connectorInstances,proto3" json:"connector_instances,omitempty"`
+	// Sum of docs_emitted across the tenant's connector instances (a proxy for
+	// indexed document volume; the authoritative count lives in Vespa).
+	DocsEmitted   int64 `protobuf:"varint,4,opt,name=docs_emitted,json=docsEmitted,proto3" json:"docs_emitted,omitempty"`
+	Suspended     bool  `protobuf:"varint,5,opt,name=suspended,proto3" json:"suspended,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TenantUsage) Reset() {
+	*x = TenantUsage{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TenantUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TenantUsage) ProtoMessage() {}
+
+func (x *TenantUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TenantUsage.ProtoReflect.Descriptor instead.
+func (*TenantUsage) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *TenantUsage) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *TenantUsage) GetCreated() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Created
+	}
+	return nil
+}
+
+func (x *TenantUsage) GetConnectorInstances() int64 {
+	if x != nil {
+		return x.ConnectorInstances
+	}
+	return 0
+}
+
+func (x *TenantUsage) GetDocsEmitted() int64 {
+	if x != nil {
+		return x.DocsEmitted
+	}
+	return 0
+}
+
+func (x *TenantUsage) GetSuspended() bool {
+	if x != nil {
+		return x.Suspended
+	}
+	return false
+}
+
+type ListTenantsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Page size; server clamps to a sane maximum. 0 means the server default.
+	Limit int32 `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
+	// Opaque page cursor (the last tenant_id of the previous page); empty starts.
+	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTenantsRequest) Reset() {
+	*x = ListTenantsRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTenantsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTenantsRequest) ProtoMessage() {}
+
+func (x *ListTenantsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTenantsRequest.ProtoReflect.Descriptor instead.
+func (*ListTenantsRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ListTenantsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ListTenantsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListTenantsResponse struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Tenants []*TenantUsage         `protobuf:"bytes,1,rep,name=tenants,proto3" json:"tenants,omitempty"`
+	// Empty when there are no further pages.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTenantsResponse) Reset() {
+	*x = ListTenantsResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTenantsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTenantsResponse) ProtoMessage() {}
+
+func (x *ListTenantsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTenantsResponse.ProtoReflect.Descriptor instead.
+func (*ListTenantsResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ListTenantsResponse) GetTenants() []*TenantUsage {
+	if x != nil {
+		return x.Tenants
+	}
+	return nil
+}
+
+func (x *ListTenantsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+type GetTenantUsageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTenantUsageRequest) Reset() {
+	*x = GetTenantUsageRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTenantUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTenantUsageRequest) ProtoMessage() {}
+
+func (x *GetTenantUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTenantUsageRequest.ProtoReflect.Descriptor instead.
+func (*GetTenantUsageRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *GetTenantUsageRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+type GetTenantUsageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Usage         *TenantUsage           `protobuf:"bytes,1,opt,name=usage,proto3" json:"usage,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTenantUsageResponse) Reset() {
+	*x = GetTenantUsageResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTenantUsageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTenantUsageResponse) ProtoMessage() {}
+
+func (x *GetTenantUsageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTenantUsageResponse.ProtoReflect.Descriptor instead.
+func (*GetTenantUsageResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *GetTenantUsageResponse) GetUsage() *TenantUsage {
+	if x != nil {
+		return x.Usage
+	}
+	return nil
+}
+
+type SuspendTenantRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// true suspends (PAUSE all instances); false resumes (ACTIVE).
+	Suspended     bool `protobuf:"varint,2,opt,name=suspended,proto3" json:"suspended,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SuspendTenantRequest) Reset() {
+	*x = SuspendTenantRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SuspendTenantRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SuspendTenantRequest) ProtoMessage() {}
+
+func (x *SuspendTenantRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SuspendTenantRequest.ProtoReflect.Descriptor instead.
+func (*SuspendTenantRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *SuspendTenantRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *SuspendTenantRequest) GetSuspended() bool {
+	if x != nil {
+		return x.Suspended
+	}
+	return false
+}
+
+type SuspendTenantResponse struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	InstancesChanged int64                  `protobuf:"varint,1,opt,name=instances_changed,json=instancesChanged,proto3" json:"instances_changed,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SuspendTenantResponse) Reset() {
+	*x = SuspendTenantResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SuspendTenantResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SuspendTenantResponse) ProtoMessage() {}
+
+func (x *SuspendTenantResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SuspendTenantResponse.ProtoReflect.Descriptor instead.
+func (*SuspendTenantResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *SuspendTenantResponse) GetInstancesChanged() int64 {
+	if x != nil {
+		return x.InstancesChanged
+	}
+	return 0
+}
+
+type AdminDeleteTenantRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminDeleteTenantRequest) Reset() {
+	*x = AdminDeleteTenantRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminDeleteTenantRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminDeleteTenantRequest) ProtoMessage() {}
+
+func (x *AdminDeleteTenantRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminDeleteTenantRequest.ProtoReflect.Descriptor instead.
+func (*AdminDeleteTenantRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *AdminDeleteTenantRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+type AdminDeleteTenantResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Report        *DeleteReport          `protobuf:"bytes,1,opt,name=report,proto3" json:"report,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminDeleteTenantResponse) Reset() {
+	*x = AdminDeleteTenantResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminDeleteTenantResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminDeleteTenantResponse) ProtoMessage() {}
+
+func (x *AdminDeleteTenantResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminDeleteTenantResponse.ProtoReflect.Descriptor instead.
+func (*AdminDeleteTenantResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *AdminDeleteTenantResponse) GetReport() *DeleteReport {
+	if x != nil {
+		return x.Report
 	}
 	return nil
 }
@@ -1443,13 +2109,53 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\x05token\x18\x01 \x01(\fR\x05token\"H\n" +
 	"\x12DeleteTokenRequest\x122\n" +
 	"\x15connector_instance_id\x18\x01 \x01(\tR\x13connectorInstanceId\"\x15\n" +
-	"\x13DeleteTokenResponse\"\x19\n" +
+	"\x13DeleteTokenResponse\"/\n" +
+	"\x13DeleteTenantRequest\x12\x18\n" +
+	"\aconfirm\x18\x01 \x01(\tR\aconfirm\"\xea\x02\n" +
+	"\fDeleteReport\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12>\n" +
+	"\x1bconnector_instances_deleted\x18\x02 \x01(\x03R\x19connectorInstancesDeleted\x12%\n" +
+	"\x0etokens_deleted\x18\x03 \x01(\x03R\rtokensDeleted\x12#\n" +
+	"\rdek_destroyed\x18\x04 \x01(\bR\fdekDestroyed\x12,\n" +
+	"\x12vespa_group_purged\x18\x05 \x01(\bR\x10vespaGroupPurged\x12#\n" +
+	"\rblobs_deleted\x18\x06 \x01(\x03R\fblobsDeleted\x12!\n" +
+	"\fredis_purged\x18\a \x01(\bR\vredisPurged\x12%\n" +
+	"\x0everified_empty\x18\b \x01(\bR\rverifiedEmpty\x12\x14\n" +
+	"\x05actor\x18\t \x01(\tR\x05actor\"S\n" +
+	"\x14DeleteTenantResponse\x12;\n" +
+	"\x06report\x18\x01 \x01(\v2#.asker.controlplane.v1.DeleteReportR\x06report\"\x19\n" +
 	"\x17ListAllInstancesRequest\"_\n" +
 	"\x18ListAllInstancesResponse\x12C\n" +
 	"\tinstances\x18\x01 \x03(\v2%.asker.controlplane.v1.TenantInstanceR\tinstances\"s\n" +
 	"\x0eTenantInstance\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12D\n" +
-	"\binstance\x18\x02 \x01(\v2(.asker.controlplane.v1.ConnectorInstanceR\binstance*V\n" +
+	"\binstance\x18\x02 \x01(\v2(.asker.controlplane.v1.ConnectorInstanceR\binstance\"\xd2\x01\n" +
+	"\vTenantUsage\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x124\n" +
+	"\acreated\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x12/\n" +
+	"\x13connector_instances\x18\x03 \x01(\x03R\x12connectorInstances\x12!\n" +
+	"\fdocs_emitted\x18\x04 \x01(\x03R\vdocsEmitted\x12\x1c\n" +
+	"\tsuspended\x18\x05 \x01(\bR\tsuspended\"I\n" +
+	"\x12ListTenantsRequest\x12\x14\n" +
+	"\x05limit\x18\x01 \x01(\x05R\x05limit\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\"{\n" +
+	"\x13ListTenantsResponse\x12<\n" +
+	"\atenants\x18\x01 \x03(\v2\".asker.controlplane.v1.TenantUsageR\atenants\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"4\n" +
+	"\x15GetTenantUsageRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"R\n" +
+	"\x16GetTenantUsageResponse\x128\n" +
+	"\x05usage\x18\x01 \x01(\v2\".asker.controlplane.v1.TenantUsageR\x05usage\"Q\n" +
+	"\x14SuspendTenantRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1c\n" +
+	"\tsuspended\x18\x02 \x01(\bR\tsuspended\"D\n" +
+	"\x15SuspendTenantResponse\x12+\n" +
+	"\x11instances_changed\x18\x01 \x01(\x03R\x10instancesChanged\"7\n" +
+	"\x18AdminDeleteTenantRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"X\n" +
+	"\x19AdminDeleteTenantResponse\x12;\n" +
+	"\x06report\x18\x01 \x01(\v2#.asker.controlplane.v1.DeleteReportR\x06report*V\n" +
 	"\x0fConnectorStatus\x12 \n" +
 	"\x1cCONNECTOR_STATUS_UNSPECIFIED\x10\x00\x12\n" +
 	"\n" +
@@ -1463,7 +2169,7 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\tFULL_SYNC\x10\x02\x12\x0f\n" +
 	"\vINCREMENTAL\x10\x03\x12\n" +
 	"\n" +
-	"\x06FAILED\x10\x042\x8f\t\n" +
+	"\x06FAILED\x10\x042\xf8\t\n" +
 	"\x13ControlPlaneService\x12g\n" +
 	"\fEnsureTenant\x12*.asker.controlplane.v1.EnsureTenantRequest\x1a+.asker.controlplane.v1.EnsureTenantResponse\x12\x88\x01\n" +
 	"\x17CreateConnectorInstance\x125.asker.controlplane.v1.CreateConnectorInstanceRequest\x1a6.asker.controlplane.v1.CreateConnectorInstanceResponse\x12\x85\x01\n" +
@@ -1474,9 +2180,15 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\fSetSyncState\x12*.asker.controlplane.v1.SetSyncStateRequest\x1a+.asker.controlplane.v1.SetSyncStateResponse\x12[\n" +
 	"\bPutToken\x12&.asker.controlplane.v1.PutTokenRequest\x1a'.asker.controlplane.v1.PutTokenResponse\x12[\n" +
 	"\bGetToken\x12&.asker.controlplane.v1.GetTokenRequest\x1a'.asker.controlplane.v1.GetTokenResponse\x12d\n" +
-	"\vDeleteToken\x12).asker.controlplane.v1.DeleteTokenRequest\x1a*.asker.controlplane.v1.DeleteTokenResponse2\x87\x01\n" +
+	"\vDeleteToken\x12).asker.controlplane.v1.DeleteTokenRequest\x1a*.asker.controlplane.v1.DeleteTokenResponse\x12g\n" +
+	"\fDeleteTenant\x12*.asker.controlplane.v1.DeleteTenantRequest\x1a+.asker.controlplane.v1.DeleteTenantResponse2\x87\x01\n" +
 	"\x10SchedulerService\x12s\n" +
-	"\x10ListAllInstances\x12..asker.controlplane.v1.ListAllInstancesRequest\x1a/.asker.controlplane.v1.ListAllInstancesResponseBSZQgithub.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1;controlplanev1b\x06proto3"
+	"\x10ListAllInstances\x12..asker.controlplane.v1.ListAllInstancesRequest\x1a/.asker.controlplane.v1.ListAllInstancesResponse2\xc7\x03\n" +
+	"\fAdminService\x12d\n" +
+	"\vListTenants\x12).asker.controlplane.v1.ListTenantsRequest\x1a*.asker.controlplane.v1.ListTenantsResponse\x12m\n" +
+	"\x0eGetTenantUsage\x12,.asker.controlplane.v1.GetTenantUsageRequest\x1a-.asker.controlplane.v1.GetTenantUsageResponse\x12j\n" +
+	"\rSuspendTenant\x12+.asker.controlplane.v1.SuspendTenantRequest\x1a,.asker.controlplane.v1.SuspendTenantResponse\x12v\n" +
+	"\x11AdminDeleteTenant\x12/.asker.controlplane.v1.AdminDeleteTenantRequest\x1a0.asker.controlplane.v1.AdminDeleteTenantResponseBSZQgithub.com/asker/asker/platform/proto/gen/go/asker/controlplane/v1;controlplanev1b\x06proto3"
 
 var (
 	file_asker_controlplane_v1_controlplane_proto_rawDescOnce sync.Once
@@ -1491,7 +2203,7 @@ func file_asker_controlplane_v1_controlplane_proto_rawDescGZIP() []byte {
 }
 
 var file_asker_controlplane_v1_controlplane_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_asker_controlplane_v1_controlplane_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_asker_controlplane_v1_controlplane_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_asker_controlplane_v1_controlplane_proto_goTypes = []any{
 	(ConnectorStatus)(0),                    // 0: asker.controlplane.v1.ConnectorStatus
 	(SyncPhase)(0),                          // 1: asker.controlplane.v1.SyncPhase
@@ -1518,55 +2230,82 @@ var file_asker_controlplane_v1_controlplane_proto_goTypes = []any{
 	(*GetTokenResponse)(nil),                // 22: asker.controlplane.v1.GetTokenResponse
 	(*DeleteTokenRequest)(nil),              // 23: asker.controlplane.v1.DeleteTokenRequest
 	(*DeleteTokenResponse)(nil),             // 24: asker.controlplane.v1.DeleteTokenResponse
-	(*ListAllInstancesRequest)(nil),         // 25: asker.controlplane.v1.ListAllInstancesRequest
-	(*ListAllInstancesResponse)(nil),        // 26: asker.controlplane.v1.ListAllInstancesResponse
-	(*TenantInstance)(nil),                  // 27: asker.controlplane.v1.TenantInstance
-	(*timestamppb.Timestamp)(nil),           // 28: google.protobuf.Timestamp
+	(*DeleteTenantRequest)(nil),             // 25: asker.controlplane.v1.DeleteTenantRequest
+	(*DeleteReport)(nil),                    // 26: asker.controlplane.v1.DeleteReport
+	(*DeleteTenantResponse)(nil),            // 27: asker.controlplane.v1.DeleteTenantResponse
+	(*ListAllInstancesRequest)(nil),         // 28: asker.controlplane.v1.ListAllInstancesRequest
+	(*ListAllInstancesResponse)(nil),        // 29: asker.controlplane.v1.ListAllInstancesResponse
+	(*TenantInstance)(nil),                  // 30: asker.controlplane.v1.TenantInstance
+	(*TenantUsage)(nil),                     // 31: asker.controlplane.v1.TenantUsage
+	(*ListTenantsRequest)(nil),              // 32: asker.controlplane.v1.ListTenantsRequest
+	(*ListTenantsResponse)(nil),             // 33: asker.controlplane.v1.ListTenantsResponse
+	(*GetTenantUsageRequest)(nil),           // 34: asker.controlplane.v1.GetTenantUsageRequest
+	(*GetTenantUsageResponse)(nil),          // 35: asker.controlplane.v1.GetTenantUsageResponse
+	(*SuspendTenantRequest)(nil),            // 36: asker.controlplane.v1.SuspendTenantRequest
+	(*SuspendTenantResponse)(nil),           // 37: asker.controlplane.v1.SuspendTenantResponse
+	(*AdminDeleteTenantRequest)(nil),        // 38: asker.controlplane.v1.AdminDeleteTenantRequest
+	(*AdminDeleteTenantResponse)(nil),       // 39: asker.controlplane.v1.AdminDeleteTenantResponse
+	(*timestamppb.Timestamp)(nil),           // 40: google.protobuf.Timestamp
 }
 var file_asker_controlplane_v1_controlplane_proto_depIdxs = []int32{
-	28, // 0: asker.controlplane.v1.Tenant.created:type_name -> google.protobuf.Timestamp
+	40, // 0: asker.controlplane.v1.Tenant.created:type_name -> google.protobuf.Timestamp
 	2,  // 1: asker.controlplane.v1.EnsureTenantResponse.tenant:type_name -> asker.controlplane.v1.Tenant
 	0,  // 2: asker.controlplane.v1.ConnectorInstance.status:type_name -> asker.controlplane.v1.ConnectorStatus
-	28, // 3: asker.controlplane.v1.ConnectorInstance.created:type_name -> google.protobuf.Timestamp
-	28, // 4: asker.controlplane.v1.ConnectorInstance.updated:type_name -> google.protobuf.Timestamp
+	40, // 3: asker.controlplane.v1.ConnectorInstance.created:type_name -> google.protobuf.Timestamp
+	40, // 4: asker.controlplane.v1.ConnectorInstance.updated:type_name -> google.protobuf.Timestamp
 	5,  // 5: asker.controlplane.v1.CreateConnectorInstanceResponse.instance:type_name -> asker.controlplane.v1.ConnectorInstance
 	5,  // 6: asker.controlplane.v1.ListConnectorInstancesResponse.instances:type_name -> asker.controlplane.v1.ConnectorInstance
 	5,  // 7: asker.controlplane.v1.GetConnectorInstanceResponse.instance:type_name -> asker.controlplane.v1.ConnectorInstance
 	1,  // 8: asker.controlplane.v1.SyncState.phase:type_name -> asker.controlplane.v1.SyncPhase
-	28, // 9: asker.controlplane.v1.SyncState.last_sync_started:type_name -> google.protobuf.Timestamp
-	28, // 10: asker.controlplane.v1.SyncState.last_sync_completed:type_name -> google.protobuf.Timestamp
+	40, // 9: asker.controlplane.v1.SyncState.last_sync_started:type_name -> google.protobuf.Timestamp
+	40, // 10: asker.controlplane.v1.SyncState.last_sync_completed:type_name -> google.protobuf.Timestamp
 	14, // 11: asker.controlplane.v1.GetSyncStateResponse.state:type_name -> asker.controlplane.v1.SyncState
 	14, // 12: asker.controlplane.v1.SetSyncStateRequest.state:type_name -> asker.controlplane.v1.SyncState
 	14, // 13: asker.controlplane.v1.SetSyncStateResponse.state:type_name -> asker.controlplane.v1.SyncState
-	27, // 14: asker.controlplane.v1.ListAllInstancesResponse.instances:type_name -> asker.controlplane.v1.TenantInstance
-	5,  // 15: asker.controlplane.v1.TenantInstance.instance:type_name -> asker.controlplane.v1.ConnectorInstance
-	3,  // 16: asker.controlplane.v1.ControlPlaneService.EnsureTenant:input_type -> asker.controlplane.v1.EnsureTenantRequest
-	6,  // 17: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:input_type -> asker.controlplane.v1.CreateConnectorInstanceRequest
-	8,  // 18: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:input_type -> asker.controlplane.v1.ListConnectorInstancesRequest
-	10, // 19: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:input_type -> asker.controlplane.v1.GetConnectorInstanceRequest
-	12, // 20: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:input_type -> asker.controlplane.v1.DeleteConnectorInstanceRequest
-	15, // 21: asker.controlplane.v1.ControlPlaneService.GetSyncState:input_type -> asker.controlplane.v1.GetSyncStateRequest
-	17, // 22: asker.controlplane.v1.ControlPlaneService.SetSyncState:input_type -> asker.controlplane.v1.SetSyncStateRequest
-	19, // 23: asker.controlplane.v1.ControlPlaneService.PutToken:input_type -> asker.controlplane.v1.PutTokenRequest
-	21, // 24: asker.controlplane.v1.ControlPlaneService.GetToken:input_type -> asker.controlplane.v1.GetTokenRequest
-	23, // 25: asker.controlplane.v1.ControlPlaneService.DeleteToken:input_type -> asker.controlplane.v1.DeleteTokenRequest
-	25, // 26: asker.controlplane.v1.SchedulerService.ListAllInstances:input_type -> asker.controlplane.v1.ListAllInstancesRequest
-	4,  // 27: asker.controlplane.v1.ControlPlaneService.EnsureTenant:output_type -> asker.controlplane.v1.EnsureTenantResponse
-	7,  // 28: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:output_type -> asker.controlplane.v1.CreateConnectorInstanceResponse
-	9,  // 29: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:output_type -> asker.controlplane.v1.ListConnectorInstancesResponse
-	11, // 30: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:output_type -> asker.controlplane.v1.GetConnectorInstanceResponse
-	13, // 31: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:output_type -> asker.controlplane.v1.DeleteConnectorInstanceResponse
-	16, // 32: asker.controlplane.v1.ControlPlaneService.GetSyncState:output_type -> asker.controlplane.v1.GetSyncStateResponse
-	18, // 33: asker.controlplane.v1.ControlPlaneService.SetSyncState:output_type -> asker.controlplane.v1.SetSyncStateResponse
-	20, // 34: asker.controlplane.v1.ControlPlaneService.PutToken:output_type -> asker.controlplane.v1.PutTokenResponse
-	22, // 35: asker.controlplane.v1.ControlPlaneService.GetToken:output_type -> asker.controlplane.v1.GetTokenResponse
-	24, // 36: asker.controlplane.v1.ControlPlaneService.DeleteToken:output_type -> asker.controlplane.v1.DeleteTokenResponse
-	26, // 37: asker.controlplane.v1.SchedulerService.ListAllInstances:output_type -> asker.controlplane.v1.ListAllInstancesResponse
-	27, // [27:38] is the sub-list for method output_type
-	16, // [16:27] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	26, // 14: asker.controlplane.v1.DeleteTenantResponse.report:type_name -> asker.controlplane.v1.DeleteReport
+	30, // 15: asker.controlplane.v1.ListAllInstancesResponse.instances:type_name -> asker.controlplane.v1.TenantInstance
+	5,  // 16: asker.controlplane.v1.TenantInstance.instance:type_name -> asker.controlplane.v1.ConnectorInstance
+	40, // 17: asker.controlplane.v1.TenantUsage.created:type_name -> google.protobuf.Timestamp
+	31, // 18: asker.controlplane.v1.ListTenantsResponse.tenants:type_name -> asker.controlplane.v1.TenantUsage
+	31, // 19: asker.controlplane.v1.GetTenantUsageResponse.usage:type_name -> asker.controlplane.v1.TenantUsage
+	26, // 20: asker.controlplane.v1.AdminDeleteTenantResponse.report:type_name -> asker.controlplane.v1.DeleteReport
+	3,  // 21: asker.controlplane.v1.ControlPlaneService.EnsureTenant:input_type -> asker.controlplane.v1.EnsureTenantRequest
+	6,  // 22: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:input_type -> asker.controlplane.v1.CreateConnectorInstanceRequest
+	8,  // 23: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:input_type -> asker.controlplane.v1.ListConnectorInstancesRequest
+	10, // 24: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:input_type -> asker.controlplane.v1.GetConnectorInstanceRequest
+	12, // 25: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:input_type -> asker.controlplane.v1.DeleteConnectorInstanceRequest
+	15, // 26: asker.controlplane.v1.ControlPlaneService.GetSyncState:input_type -> asker.controlplane.v1.GetSyncStateRequest
+	17, // 27: asker.controlplane.v1.ControlPlaneService.SetSyncState:input_type -> asker.controlplane.v1.SetSyncStateRequest
+	19, // 28: asker.controlplane.v1.ControlPlaneService.PutToken:input_type -> asker.controlplane.v1.PutTokenRequest
+	21, // 29: asker.controlplane.v1.ControlPlaneService.GetToken:input_type -> asker.controlplane.v1.GetTokenRequest
+	23, // 30: asker.controlplane.v1.ControlPlaneService.DeleteToken:input_type -> asker.controlplane.v1.DeleteTokenRequest
+	25, // 31: asker.controlplane.v1.ControlPlaneService.DeleteTenant:input_type -> asker.controlplane.v1.DeleteTenantRequest
+	28, // 32: asker.controlplane.v1.SchedulerService.ListAllInstances:input_type -> asker.controlplane.v1.ListAllInstancesRequest
+	32, // 33: asker.controlplane.v1.AdminService.ListTenants:input_type -> asker.controlplane.v1.ListTenantsRequest
+	34, // 34: asker.controlplane.v1.AdminService.GetTenantUsage:input_type -> asker.controlplane.v1.GetTenantUsageRequest
+	36, // 35: asker.controlplane.v1.AdminService.SuspendTenant:input_type -> asker.controlplane.v1.SuspendTenantRequest
+	38, // 36: asker.controlplane.v1.AdminService.AdminDeleteTenant:input_type -> asker.controlplane.v1.AdminDeleteTenantRequest
+	4,  // 37: asker.controlplane.v1.ControlPlaneService.EnsureTenant:output_type -> asker.controlplane.v1.EnsureTenantResponse
+	7,  // 38: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:output_type -> asker.controlplane.v1.CreateConnectorInstanceResponse
+	9,  // 39: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:output_type -> asker.controlplane.v1.ListConnectorInstancesResponse
+	11, // 40: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:output_type -> asker.controlplane.v1.GetConnectorInstanceResponse
+	13, // 41: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:output_type -> asker.controlplane.v1.DeleteConnectorInstanceResponse
+	16, // 42: asker.controlplane.v1.ControlPlaneService.GetSyncState:output_type -> asker.controlplane.v1.GetSyncStateResponse
+	18, // 43: asker.controlplane.v1.ControlPlaneService.SetSyncState:output_type -> asker.controlplane.v1.SetSyncStateResponse
+	20, // 44: asker.controlplane.v1.ControlPlaneService.PutToken:output_type -> asker.controlplane.v1.PutTokenResponse
+	22, // 45: asker.controlplane.v1.ControlPlaneService.GetToken:output_type -> asker.controlplane.v1.GetTokenResponse
+	24, // 46: asker.controlplane.v1.ControlPlaneService.DeleteToken:output_type -> asker.controlplane.v1.DeleteTokenResponse
+	27, // 47: asker.controlplane.v1.ControlPlaneService.DeleteTenant:output_type -> asker.controlplane.v1.DeleteTenantResponse
+	29, // 48: asker.controlplane.v1.SchedulerService.ListAllInstances:output_type -> asker.controlplane.v1.ListAllInstancesResponse
+	33, // 49: asker.controlplane.v1.AdminService.ListTenants:output_type -> asker.controlplane.v1.ListTenantsResponse
+	35, // 50: asker.controlplane.v1.AdminService.GetTenantUsage:output_type -> asker.controlplane.v1.GetTenantUsageResponse
+	37, // 51: asker.controlplane.v1.AdminService.SuspendTenant:output_type -> asker.controlplane.v1.SuspendTenantResponse
+	39, // 52: asker.controlplane.v1.AdminService.AdminDeleteTenant:output_type -> asker.controlplane.v1.AdminDeleteTenantResponse
+	37, // [37:53] is the sub-list for method output_type
+	21, // [21:37] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_asker_controlplane_v1_controlplane_proto_init() }
@@ -1580,9 +2319,9 @@ func file_asker_controlplane_v1_controlplane_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_asker_controlplane_v1_controlplane_proto_rawDesc), len(file_asker_controlplane_v1_controlplane_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   26,
+			NumMessages:   38,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_asker_controlplane_v1_controlplane_proto_goTypes,
 		DependencyIndexes: file_asker_controlplane_v1_controlplane_proto_depIdxs,

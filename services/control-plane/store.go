@@ -14,10 +14,34 @@ import (
 // the control plane as a cross-tenant existence oracle.
 var ErrNotFound = errors.New("control-plane: not found")
 
+// ErrQuotaExceeded is returned by CreateConnectorInstance when the per-tenant
+// connector-instance cap would be exceeded. The cap is enforced ATOMICALLY in
+// the insert (an INSERT .. SELECT gated on the current count) so concurrent
+// creates cannot race past it (the check-then-insert TOCTOU, finding M6-#8).
+// The gRPC layer maps it to codes.ResourceExhausted.
+var ErrQuotaExceeded = errors.New("control-plane: connector instance quota exceeded")
+
 // Tenant is a registered tenant.
 type Tenant struct {
 	ID        tenancy.TenantID
 	CreatedAt time.Time
+}
+
+// PurgeCounts is the Postgres arm of the GDPR delete cascade's tally: how many
+// rows the tenant erasure removed from each table. The DEK row is shredded by
+// the separate crypto.DEKStore.Delete path, not counted here.
+type PurgeCounts struct {
+	ConnectorInstances int64
+	Tokens             int64
+}
+
+// TenantUsage is one tenant's resource footprint for the admin/quota surface.
+type TenantUsage struct {
+	TenantID           tenancy.TenantID
+	CreatedAt          time.Time
+	ConnectorInstances int64
+	DocsEmitted        int64
+	Suspended          bool
 }
 
 // ConnectorInstance is one tenant's configured connection to one source.
@@ -62,7 +86,14 @@ type Store interface {
 	// returns it with ID and timestamps assigned. It implicitly ensures the
 	// tenant row exists (the tenant identity always originates from a
 	// verified JWT, so registering it here is exactly EnsureTenant).
-	CreateConnectorInstance(ctx context.Context, inst ConnectorInstance) (ConnectorInstance, error)
+	//
+	// maxInstances ATOMICALLY caps how many instances the tenant may hold: when
+	// > 0, the insert proceeds only if the tenant currently has fewer than
+	// maxInstances instances, evaluated in the SAME transaction/critical section
+	// as the insert so concurrent creates cannot exceed the cap (finding M6-#8).
+	// At or over the cap it returns ErrQuotaExceeded and writes nothing. A
+	// maxInstances <= 0 disables the cap.
+	CreateConnectorInstance(ctx context.Context, inst ConnectorInstance, maxInstances int) (ConnectorInstance, error)
 
 	// ListConnectorInstances returns the tenant's instances ordered by
 	// creation time (then ID, for a stable order).
@@ -102,4 +133,41 @@ type Store interface {
 	// cross-tenant enumeration surface (see scheduler.go for the trust
 	// model). No other caller may use it.
 	ListAll(ctx context.Context) ([]ConnectorInstance, error)
+
+	// CountConnectorInstances returns how many connector instances the tenant
+	// currently has. It backs the per-tenant connector-instance quota cap in
+	// CreateConnectorInstance.
+	CountConnectorInstances(ctx context.Context, tenantID tenancy.TenantID) (int64, error)
+
+	// PurgeTenant removes ALL of the tenant's Postgres rows (tenant row +
+	// connector_instances + sync_states + tokens, the latter three by cascade)
+	// and returns the per-table counts. It does NOT touch tenant_deks — the
+	// caller crypto-shreds the DEK via crypto.DEKStore.Delete. Idempotent: an
+	// already-absent tenant yields zero counts and no error, so a retried
+	// erasure converges. This is the Postgres arm of the GDPR DeleteTenant
+	// cascade and is the only Store method that erases a whole tenant.
+	PurgeTenant(ctx context.Context, tenantID tenancy.TenantID) (PurgeCounts, error)
+
+	// TenantResidue reports whether ANY tenant-owned row survives in Postgres
+	// (tenants, connector_instances, sync_states, tokens). The DeleteTenant
+	// verification pass calls it after PurgeTenant + the DEK shred; a non-empty
+	// result fails the erasure closed. tenant_deks is checked separately via the
+	// DEK store.
+	TenantResidue(ctx context.Context, tenantID tenancy.TenantID) (empty bool, err error)
+
+	// ListTenants enumerates registered tenants with summary usage, ordered by
+	// tenant_id, starting AFTER afterTenantID (empty = from the start) and
+	// returning at most limit rows. It backs AdminService.ListTenants and is
+	// DELIBERATELY cross-tenant (admin-only; see scheduler.go's trust model).
+	ListTenants(ctx context.Context, afterTenantID string, limit int) ([]TenantUsage, error)
+
+	// GetTenantUsage returns one tenant's usage, or ErrNotFound when the tenant
+	// is unregistered. Admin-only, cross-tenant by design.
+	GetTenantUsage(ctx context.Context, tenantID tenancy.TenantID) (TenantUsage, error)
+
+	// SetTenantConnectorStatus flips EVERY one of the tenant's connector
+	// instances to status (e.g. PAUSED to suspend, ACTIVE to resume) and returns
+	// the number changed. Admin-only, cross-tenant by design; the reversible
+	// abuse control behind AdminService.SuspendTenant.
+	SetTenantConnectorStatus(ctx context.Context, tenantID tenancy.TenantID, status string) (int64, error)
 }

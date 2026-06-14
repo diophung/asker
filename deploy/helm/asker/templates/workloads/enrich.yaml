@@ -1,0 +1,9 @@
+{{/*
+enrich — Python ML worker (docs.chunked -> TEI embeddings, CLIP/OCR/ASR ->
+docs.enriched). No inbound RPC; ENRICH_HEALTH_ADDR :9601 GET /healthz (liveness)
+and /readyz (readiness; requires TEI healthy, CLIP-down does not fail it). Loads
+whisper-tiny weights on boot, so probes get a generous initialDelay/startupProbe
+(see values). Consumes Kafka, calls TEI, clip, and the hub media endpoint.
+Scalable (HPA). ADR-007 (Python), ADR-013 (media pipeline).
+*/}}
+{{- include "asker.workload.all" (list . "enrich") }}

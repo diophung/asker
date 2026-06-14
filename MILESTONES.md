@@ -7,12 +7,12 @@ passing tests before the next begins. Source of truth for scope:
 | Milestone | Name | Status |
 | :--- | :--- | :--- |
 | M0 | Foundations (skeleton that runs) | **Complete** (2026-06-12) |
-| M1 | Vertical slice | **In progress** |
-| M2 | Connector framework + breadth | Not started |
-| M3 | Media pipeline | Not started |
-| M4 | Production deployment | Not started |
-| M5 | Scale & SLO verification | Not started |
-| M6 | Hardening | Not started |
+| M1 | Vertical slice | **Functionally complete** (2026-06-13; full-scale e2e runs in CI — see PROGRESS.md) |
+| M2 | Connector framework + breadth | **Complete** (2026-06-13; connector OAuth connect flow — auth-code + PKCE + refresh for Google/Microsoft/Slack/Atlassian — landed post-V1; live webhook *push* still deferred — see PROGRESS.md) |
+| M3 | Media pipeline | **Complete** (2026-06-13; e2e green locally — spoken phrase → video@timestamp + text→image) |
+| M4 | Production deployment | **Complete** (2026-06-13; chart deploys + kind chaos exit criterion runs in CI — see PROGRESS.md) |
+| M5 | Scale & SLO verification | **Complete** (2026-06-13; SLO metrics + Grafana dashboards/alerts + k6 load/soak tooling; full-scale load + 2h soak run in CI — see PROGRESS.md) |
+| M6 | Hardening | **Complete** (2026-06-13; security review executed, SSRF guard + GDPR delete + quotas + Vault-KEK + admin API; ship-review signed off — see docs/ship-review.md) |
 
 ## M0 — Foundations (skeleton that runs)
 

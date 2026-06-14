@@ -65,4 +65,13 @@ message Hit {
   google.protobuf.Timestamp created = 7;
   google.protobuf.Timestamp modified = 8;
   map<string, string> metadata = 9;
+  // Media fields (M3), set for IMAGE/AUDIO/VIDEO hits. For audio/video, the
+  // matched transcript chunk's offset so the UI deep-links to the moment;
+  // zero for the whole-document / non-media case.
+  int64 start_ms = 10;
+  int64 end_ms = 11;
+  // Which arm matched this chunk: "text" | "ocr" | "asr" | "caption".
+  string modality = 12;
+  // Blob key of a thumbnail / poster frame to render (empty if none).
+  string thumbnail_key = 13;
 }

@@ -9,14 +9,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/asker/asker/connectors/sdk"
@@ -45,22 +43,20 @@ type seedResult struct {
 	HistoryID uint64 `json:"historyId"`
 }
 
-// profileShim adds the users.getProfile route the in-repo fake lacks, so
-// tests can exercise the connector's canonical getProfile path as well as
-// its fallback. The test sets historyID from admin responses.
-type profileShim struct {
-	email     string
-	historyID atomic.Uint64
-}
-
-func (p *profileShim) wrap(next http.Handler) http.Handler {
+// withoutProfile wraps the fake and 404s users.getProfile in Google's error
+// shape. The in-repo fake now implements users.getProfile natively, so this
+// shim recreates a source WITHOUT the endpoint to keep the connector's
+// history.list fallback path under test.
+func withoutProfile(next http.Handler) http.Handler {
+	const notFound = `{"error":{"code":404,"message":"users.getProfile is disabled in this fixture",` +
+		`"errors":[{"message":"users.getProfile is disabled in this fixture","reason":"notFound"}],"status":"NOT_FOUND"}}`
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet &&
 			strings.HasPrefix(r.URL.Path, "/gmail/v1/users/") &&
 			strings.HasSuffix(r.URL.Path, "/profile") {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			_, _ = fmt.Fprintf(w, `{"emailAddress":%q,"messagesTotal":0,"historyId":"%d"}`,
-				p.email, p.historyID.Load())
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, notFound)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -69,29 +65,31 @@ func (p *profileShim) wrap(next http.Handler) http.Handler {
 
 // fixture is one running fake-Gmail instance plus admin helpers.
 type fixture struct {
-	t       *testing.T
-	ts      *httptest.Server
-	profile *profileShim // nil when the raw fake (no getProfile) is used
+	t  *testing.T
+	ts *httptest.Server
 }
 
-func newFixture(t *testing.T) *fixture            { return newFixtureHandler(t, false) }
-func newFixtureWithProfile(t *testing.T) *fixture { return newFixtureHandler(t, true) }
+// newFixture serves the raw fake, which implements users.getProfile (the
+// connector's canonical current-history-id path).
+func newFixture(t *testing.T) *fixture { return newFixtureHandler(t, false) }
 
-func newFixtureHandler(t *testing.T, withProfile bool) *fixture {
+// newFixtureWithoutProfile serves the fake behind a shim that 404s
+// users.getProfile, for tests of the connector's fallback path.
+func newFixtureWithoutProfile(t *testing.T) *fixture { return newFixtureHandler(t, true) }
+
+func newFixtureHandler(t *testing.T, disableProfile bool) *fixture {
 	t.Helper()
 	fake := server.New(server.WithLogger(slog.New(slog.DiscardHandler)))
 	var handler http.Handler = fake
-	var shim *profileShim
-	if withProfile {
-		shim = &profileShim{email: testEmail}
-		handler = shim.wrap(fake)
+	if disableProfile {
+		handler = withoutProfile(fake)
 	}
 	ts := httptest.NewServer(handler)
 	t.Cleanup(func() {
 		ts.Close()
 		fake.Close()
 	})
-	return &fixture{t: t, ts: ts, profile: shim}
+	return &fixture{t: t, ts: ts}
 }
 
 // do issues one HTTP request against the fixture and decodes the JSON
@@ -137,7 +135,6 @@ func (f *fixture) seed(count int, seed int64) seedResult {
 		map[string]any{"count": count, "seed": seed}, &res); code != http.StatusOK {
 		f.t.Fatalf("seed: status %d", code)
 	}
-	f.syncProfile(res.HistoryID)
 	return res
 }
 
@@ -148,7 +145,6 @@ func (f *fixture) addMessage(from, to, subject, body string) adminMessage {
 		map[string]any{"from": from, "to": to, "subject": subject, "body": body}, &msg); code != http.StatusCreated {
 		f.t.Fatalf("addMessage: status %d", code)
 	}
-	f.syncProfile(msg.HistoryID)
 	return msg
 }
 
@@ -159,7 +155,6 @@ func (f *fixture) editMessage(id, subject, body string) adminMessage {
 		map[string]any{"subject": subject, "body": body}, &msg); code != http.StatusOK {
 		f.t.Fatalf("editMessage: status %d", code)
 	}
-	f.syncProfile(msg.HistoryID)
 	return msg
 }
 
@@ -167,13 +162,6 @@ func (f *fixture) deleteMessage(id string) {
 	f.t.Helper()
 	if code := f.do(http.MethodDelete, "/admin/users/"+testEmail+"/messages/"+id, "", nil, nil); code != http.StatusNoContent {
 		f.t.Fatalf("deleteMessage: status %d", code)
-	}
-}
-
-// syncProfile keeps the optional getProfile shim's history id current.
-func (f *fixture) syncProfile(historyID uint64) {
-	if f.profile != nil && historyID > f.profile.historyID.Load() {
-		f.profile.historyID.Store(historyID)
 	}
 }
 

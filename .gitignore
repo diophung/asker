@@ -9,11 +9,21 @@ coverage.out
 /web/dist/
 vespa/app.zip
 
-# Compiled service binaries built at repo root
+# Compiled Go binaries built at repo root by `go build ./...`/`go run` (artifacts;
+# the real binaries live in the service images). Covers every main package.
 /control-plane
 /gateway
 /index-writer
+/ingest
+/query
+/connector-hub
+/enrich
+/synthgen
+/fake-gmail
 
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Throwaway multi-agent workflow scripts (scratch; not part of the build)
+.claude/wf-*.js

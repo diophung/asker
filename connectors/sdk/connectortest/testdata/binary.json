@@ -1,0 +1,12 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/blob"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["image/png"]},
+        "body_base64": "iVBORw0KGgoA//4="
+      }
+    }
+  ]
+}

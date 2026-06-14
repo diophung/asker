@@ -92,25 +92,66 @@ func run(ctx context.Context, cfg controlPlaneConfig, logger *slog.Logger) error
 	}
 	defer pool.Close()
 
-	kek, err := crypto.NewFileKEK(cfg.KEKFile)
+	// KEK selection (ADR-015 §3): Vault Transit when VAULT_ADDR is set, else the
+	// dev file KEK — fail closed in production with no Vault. The connector hub
+	// makes the identical choice (registry.go) so wrapped DEKs interoperate.
+	kek, err := crypto.SelectKEK(crypto.KEKSelection{
+		VaultAddr:    cfg.VaultAddr,
+		VaultToken:   cfg.VaultToken,
+		VaultKeyName: cfg.VaultKEKKeyName,
+		KEKFile:      cfg.KEKFile,
+		IsProd:       cfg.isProd(),
+	})
 	if err != nil {
-		return fmt.Errorf("load KEK %s: %w", cfg.KEKFile, err)
+		return fmt.Errorf("select KEK: %w", err)
 	}
-	cipher := crypto.NewTenantCipher(kek, newPGDEKStore(pool))
+	if cfg.VaultAddr != "" {
+		logger.Info("KEK provider: Vault Transit", "vault_addr", cfg.VaultAddr, "key_name", cfg.VaultKEKKeyName)
+	} else {
+		logger.Warn("KEK provider: DEV file KEK (no VAULT_ADDR) — not for production", "kek_file", cfg.KEKFile)
+	}
+
+	dekStore := newPGDEKStore(pool)
+	cipher := crypto.NewTenantCipher(kek, dekStore)
 
 	store := newPGStore(pool)
-	srv := newServer(store, cipher, logger)
 
-	// SchedulerService.ListAllInstances is the single cross-tenant RPC and is
-	// exempted from the tenant-metadata requirement by exact method name; all
-	// ControlPlaneService RPCs keep the fail-closed tenancy interceptor.
+	// GDPR delete-cascade purgers (M6). Each is optional: a nil purger skips
+	// that store, but Postgres + the DEK crypto-shred always run.
+	purgeCfg, cachePurge, err := buildPurgers(ctx, cfg, cipher, logger)
+	if err != nil {
+		return fmt.Errorf("build delete-cascade purgers: %w", err)
+	}
+	if cachePurge != nil {
+		defer func() { _ = cachePurge.Close() }()
+	}
+
+	srv := newServerWithConfig(store, cipher, serverConfig{
+		maxConnectorInstances: cfg.MaxConnectorInstancesPerTenant,
+		dek:                   dekStore,
+		vespa:                 purgeCfg.vespa,
+		blobs:                 purgeCfg.blobs,
+		cache:                 purgeCfg.cache,
+	}, logger)
+	adminSrv := newAdminServer(store, srv, logger)
+
+	// SchedulerService.ListAllInstances and the AdminService RPCs are the
+	// cross-tenant surfaces, exempted from the per-tenant metadata requirement
+	// by EXACT method name; all ControlPlaneService RPCs keep the fail-closed
+	// tenancy interceptor. The AdminService is additionally gated at the gateway
+	// by a distinct admin-role claim (see services/gateway).
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(tenantInterceptorSkipping(
 			controlplanev1.SchedulerService_ListAllInstances_FullMethodName,
+			controlplanev1.AdminService_ListTenants_FullMethodName,
+			controlplanev1.AdminService_GetTenantUsage_FullMethodName,
+			controlplanev1.AdminService_SuspendTenant_FullMethodName,
+			controlplanev1.AdminService_AdminDeleteTenant_FullMethodName,
 		)),
 	)
 	controlplanev1.RegisterControlPlaneServiceServer(grpcServer, srv)
 	controlplanev1.RegisterSchedulerServiceServer(grpcServer, newSchedulerServer(store, logger))
+	controlplanev1.RegisterAdminServiceServer(grpcServer, adminSrv)
 
 	lis, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {

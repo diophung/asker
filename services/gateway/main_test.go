@@ -380,26 +380,42 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("HUB_HTTP_URL", "http://hub.test:3")
 	t.Setenv("REDIS_ADDR", "redis.test:4")
 	t.Setenv("RATE_LIMIT_PER_MINUTE", "42")
+	t.Setenv("PREAUTH_PER_IP_PER_MINUTE", "33")
+	t.Setenv("PREAUTH_GLOBAL_PER_SEC", "44")
+	t.Setenv("PREAUTH_GLOBAL_BURST", "55")
+	t.Setenv("TRUST_PROXY_HEADERS", "true")
+	t.Setenv("MAX_QUERY_CHARS", "256")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "http://a.test,http://b.test")
 	t.Setenv("MAX_UPLOAD_MB", "7")
+	t.Setenv("MAX_MEDIA_MB", "9")
+	t.Setenv("GATEWAY_PUBLIC_URL", "https://gw.test")
+	t.Setenv("WEB_APP_URL", "https://web.test")
 
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	want := gatewayConfig{
-		Addr:                 ":9999",
-		OIDCIssuer:           "http://issuer.test/realms/x",
-		OIDCJWKSURL:          "http://jwks.test/certs",
-		OIDCAudience:         "aud-x",
-		OTLPEndpoint:         "otel:4317",
-		QueryGRPCAddr:        "dns:///q.test:1",
-		ControlPlaneGRPCAddr: "dns:///cp.test:2",
-		HubHTTPURL:           "http://hub.test:3",
-		RedisAddr:            "redis.test:4",
-		RateLimitPerMinute:   42,
-		CORSAllowedOrigins:   "http://a.test,http://b.test",
-		MaxUploadMB:          7,
+		Addr:                  ":9999",
+		OIDCIssuer:            "http://issuer.test/realms/x",
+		OIDCJWKSURL:           "http://jwks.test/certs",
+		OIDCAudience:          "aud-x",
+		OTLPEndpoint:          "otel:4317",
+		QueryGRPCAddr:         "dns:///q.test:1",
+		ControlPlaneGRPCAddr:  "dns:///cp.test:2",
+		HubHTTPURL:            "http://hub.test:3",
+		RedisAddr:             "redis.test:4",
+		RateLimitPerMinute:    42,
+		PreAuthPerIPPerMinute: 33,
+		PreAuthGlobalPerSec:   44,
+		PreAuthGlobalBurst:    55,
+		TrustProxyHeaders:     true,
+		MaxQueryChars:         256,
+		CORSAllowedOrigins:    "http://a.test,http://b.test",
+		MaxUploadMB:           7,
+		MaxMediaMB:            9,
+		GatewayPublicURL:      "https://gw.test",
+		WebAppURL:             "https://web.test",
 	}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
@@ -431,6 +447,15 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.MaxUploadMB != 32 {
 		t.Errorf("MaxUploadMB default = %d", cfg.MaxUploadMB)
+	}
+	if cfg.MaxMediaMB != 25 {
+		t.Errorf("MaxMediaMB default = %d", cfg.MaxMediaMB)
+	}
+	if cfg.GatewayPublicURL != "http://localhost:8080" {
+		t.Errorf("GatewayPublicURL default = %q", cfg.GatewayPublicURL)
+	}
+	if cfg.WebAppURL != "http://localhost:13001" {
+		t.Errorf("WebAppURL default = %q", cfg.WebAppURL)
 	}
 }
 

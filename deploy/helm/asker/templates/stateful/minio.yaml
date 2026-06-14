@@ -1,0 +1,146 @@
+{{- /*
+================================================================================
+minio — self-hosted StatefulSet (S3-compatible blob store for connector-hub).
+Compose: image minio/minio:RELEASE.2025-09-07T16-13-09Z, command
+`server /data --console-address :9001`, ports 9000 (S3 API) + 9001 (console),
+env MINIO_ROOT_USER/MINIO_ROOT_PASSWORD, volume minio-data:/data, healthcheck
+`mc ready local`. The image is shell-less for HTTP probes via mc, so we use the
+documented HTTP liveness/readiness endpoints instead (GET /minio/health/live and
+/minio/health/ready on the S3 API port).
+
+Service "minio" (compose DNS) resolves config.minioEndpoint ("minio:9000")
+unchanged. The server's MINIO_ROOT_USER/PASSWORD are fed from the EXISTING dev
+Secret keys MINIO_ACCESS_KEY / MINIO_SECRET_KEY (dev defaults
+asker-minio/asker-minio-secret) — the SAME secret keys connector-hub consumes.
+Gated by stateful.minio.deploy (default true); flip false + point
+config.minioEndpoint at managed S3 (endpoint change only, ADR-014 §4).
+================================================================================
+*/ -}}
+{{- $dep := "minio" -}}
+{{- if eq (include "asker.stateful.enabled" (list . $dep)) "true" -}}
+{{- $sf := .Values.stateful | default dict -}}
+{{- $c := index $sf $dep | default dict -}}
+{{- $img := $c.image | default "minio/minio:RELEASE.2025-09-07T16-13-09Z" -}}
+{{- $storage := ($c.storage | default dict).size | default "20Gi" -}}
+{{- $apiPort := 9000 -}}
+{{- $consolePort := 9001 -}}
+{{- $consoleEnabled := ne (((($c.console) | default dict).enabled) | default true | toString) "false" -}}
+{{- $ports := list (dict "name" "s3" "port" $apiPort "appProtocol" "http") -}}
+{{- if $consoleEnabled -}}
+{{- $ports = append $ports (dict "name" "console" "port" $consolePort "appProtocol" "http") -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "asker.stateful.fullname" (list . $dep) }}
+  labels:
+    {{- include "asker.stateful.labels" (list . $dep) | nindent 4 }}
+spec:
+  serviceName: {{ printf "%s-headless" $dep }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.stateful.labels" (list . $dep) | nindent 8 }}
+      {{- with $c.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with ($c.imagePullSecrets | default .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml ($c.podSecurityContext | default (dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault"))) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $c.terminationGracePeriodSeconds | default 30 }}
+      containers:
+        - name: minio
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ $c.imagePullPolicy | default .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "asker.stateful.containerSecurityContext" (list . $dep) | nindent 12 }}
+          args:
+            - server
+            - /data
+            {{- if $consoleEnabled }}
+            - --console-address
+            - {{ printf ":%d" (int $consolePort) | quote }}
+            {{- end }}
+          env:
+            # MinIO server root creds are fed from the shared dev Secret's
+            # MINIO_ACCESS_KEY / MINIO_SECRET_KEY (the same keys connector-hub
+            # consumes), mapped to the server-side MINIO_ROOT_* env names.
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "asker.secretName" . }}
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "asker.secretName" . }}
+                  key: MINIO_SECRET_KEY
+          ports:
+            - name: s3
+              containerPort: {{ $apiPort }}
+              protocol: TCP
+            {{- if $consoleEnabled }}
+            - name: console
+              containerPort: {{ $consolePort }}
+              protocol: TCP
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with ($c.resources | default (dict "requests" (dict "cpu" "100m" "memory" "256Mi") "limits" (dict "cpu" "2" "memory" "1Gi"))) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "asker.stateful.storageClass" (list . $dep) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ $storage | quote }}
+---
+{{ include "asker.stateful.headlessService" (list . $dep $ports) }}
+---
+{{ include "asker.stateful.clusterIPService" (list . $dep $ports) }}
+{{- end -}}

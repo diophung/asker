@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -375,6 +376,58 @@ func TestPausedAndRemovedInstancesStopTheirWorkers(t *testing.T) {
 	}
 }
 
+// TestPauseResumeDoesNotOverlapSyncs is the regression for the concurrent-sync
+// bug: pausing an instance while its FullSync is in flight, then re-activating
+// it, must NOT start a second worker until the first has drained — otherwise
+// two passes run concurrently for one instance (duplicate emits, cursor races).
+func TestPauseResumeDoesNotOverlapSyncs(t *testing.T) {
+	release := make(chan struct{})
+	var inFlight atomic.Int32
+	var maxConcurrent atomic.Int32
+	conn := &fakeConnector{id: "gmail"}
+	conn.fullSyncFn = func(ctx context.Context, _ sdk.Config, _ sdk.Emit) (sdk.Cursor, error) {
+		n := inFlight.Add(1)
+		for {
+			if m := maxConcurrent.Load(); n > m {
+				if maxConcurrent.CompareAndSwap(m, n) {
+					break
+				}
+				continue
+			}
+			break
+		}
+		defer inFlight.Add(-1)
+		select {
+		case <-release:
+			return "full-done", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
+	r := newRig(t, conn, nil)
+	r.cpFake.addInstance(instGmail, tenantA, "gmail", nil, controlplanev1.ConnectorStatus_ACTIVE)
+	r.start(t)
+
+	// First worker starts and blocks inside FullSync.
+	waitFor(t, 5*time.Second, func() bool { return inFlight.Load() == 1 }, "first FullSync in flight")
+
+	// Pause (worker canceled, but its FullSync goroutine is still blocked),
+	// then immediately re-activate — several reconcile ticks pass while the
+	// old worker is still draining.
+	r.cpFake.setStatus(instGmail, controlplanev1.ConnectorStatus_PAUSED)
+	r.cpFake.setStatus(instGmail, controlplanev1.ConnectorStatus_ACTIVE)
+	time.Sleep(6 * r.sch.tick)
+
+	// Release the (canceled) first sync; the replacement may now run.
+	close(release)
+	time.Sleep(8 * r.sch.tick)
+
+	if got := maxConcurrent.Load(); got > 1 {
+		t.Fatalf("max concurrent FullSync passes for one instance = %d, want 1", got)
+	}
+}
+
 func TestRepeatedFailuresRecordFAILEDAndKeepRetrying(t *testing.T) {
 	conn := &fakeConnector{id: "gmail"}
 	conn.fullSyncFn = func(context.Context, sdk.Config, sdk.Emit) (sdk.Cursor, error) {
@@ -423,6 +476,52 @@ func TestReconcileSkipsInvalidTenant(t *testing.T) {
 	}
 	if full, inc, _ := conn.counts(); full != 0 || inc != 0 {
 		t.Errorf("connector ran (%d full, %d inc) for invalid tenant", full, inc)
+	}
+}
+
+func TestPerTenantWorkerCap(t *testing.T) {
+	conn := &fakeConnector{id: "gmail"}
+	r := newRig(t, conn, func(o *schedulerOpts) { o.maxInstancesPerTenant = 2 })
+
+	// One tenant with THREE active instances; cap is 2.
+	ids := []string{
+		"aaaaaaaa-0000-0000-0000-000000000001",
+		"aaaaaaaa-0000-0000-0000-000000000002",
+		"aaaaaaaa-0000-0000-0000-000000000003",
+	}
+	for _, id := range ids {
+		r.cpFake.addInstance(id, "tenant-a", "gmail", nil, controlplanev1.ConnectorStatus_ACTIVE)
+	}
+	// A different tenant with one instance is unaffected by tenant-a's cap.
+	otherID := "bbbbbbbb-0000-0000-0000-000000000001"
+	r.cpFake.addInstance(otherID, "tenant-b", "gmail", nil, controlplanev1.ConnectorStatus_ACTIVE)
+
+	// Reconcile synchronously (no running loop): the cap is applied during it.
+	// Use a cancelable context and stop the spawned workers at cleanup so the
+	// goroutines drain.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		r.sch.stopAll()
+		r.sch.wg.Wait()
+	})
+	r.sch.reconcile(ctx)
+
+	r.sch.mu.Lock()
+	defer r.sch.mu.Unlock()
+	// tenant-a: exactly the two LOWEST ids run (deterministic), the third is dropped.
+	if _, ok := r.sch.workers[ids[0]]; !ok {
+		t.Errorf("instance %s (lowest id) not scheduled", ids[0])
+	}
+	if _, ok := r.sch.workers[ids[1]]; !ok {
+		t.Errorf("instance %s not scheduled", ids[1])
+	}
+	if _, ok := r.sch.workers[ids[2]]; ok {
+		t.Errorf("instance %s (over cap) scheduled despite per-tenant cap", ids[2])
+	}
+	// tenant-b's instance is scheduled (its own cap budget).
+	if _, ok := r.sch.workers[otherID]; !ok {
+		t.Error("tenant-b instance not scheduled (a's cap leaked across tenants)")
 	}
 }
 

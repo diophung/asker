@@ -1,0 +1,524 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Asker M5 ingest/index pipeline health: per-stage records, stage-duration P90, indexed-doc age (freshness) by doc_type, dead-letter by origin topic, and Go/process runtime. Metric names + labels per the M5 wave-1 shared facts (no tenant/doc labels by design).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["asker", "pipeline", "m5"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Pipeline stage",
+        "multi": true,
+        "name": "stage",
+        "options": [],
+        "query": "label_values(asker_pipeline_records_total, stage)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Doc type",
+        "multi": true,
+        "name": "doc_type",
+        "options": [],
+        "query": "label_values(asker_index_doc_age_seconds_bucket, doc_type)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Runtime service (job)",
+        "multi": true,
+        "name": "job",
+        "options": [],
+        "query": "label_values(go_goroutines{job=~\"gateway|query|ingest|index-writer\"}, job)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Asker Pipeline Health",
+  "uid": "asker-pipeline-health",
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "type": "row",
+      "title": "Stage throughput & outcomes",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Records by stage & result",
+      "description": "asker_pipeline_records_total by stage and result (ok|error). result=error is a PER-ATTEMPT handler failure (kafkautil retries 3x), not a dead-letter.",
+      "id": 1,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*error.*" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (stage, result) (rate(asker_pipeline_records_total{stage=~\"$stage\"}[$__rate_interval]))",
+          "legendFormat": "{{stage}} {{result}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Per-stage attempt-failure ratio",
+      "description": "Fraction of asker_pipeline_records_total with result=error, by stage. Sustained > a few percent precedes dead-lettering once retries exhaust.",
+      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (stage) (rate(asker_pipeline_records_total{stage=~\"$stage\",result=\"error\"}[$__rate_interval])) / clamp_min(sum by (stage) (rate(asker_pipeline_records_total{stage=~\"$stage\"}[$__rate_interval])), 0.0001)",
+          "legendFormat": "{{stage}} error ratio"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Stage latency",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 101,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage-duration P90 by stage/topic",
+      "description": "P90 of asker_pipeline_stage_duration_milliseconds by stage and topic — per-record handler processing latency.",
+      "id": 3,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.9, sum by (le, stage, topic) (rate(asker_pipeline_stage_duration_milliseconds_bucket{stage=~\"$stage\"}[$__rate_interval])))",
+          "legendFormat": "{{stage}} / {{topic}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage-duration P50 by stage/topic",
+      "description": "P50 (median) of asker_pipeline_stage_duration_milliseconds by stage and topic.",
+      "id": 4,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le, stage, topic) (rate(asker_pipeline_stage_duration_milliseconds_bucket{stage=~\"$stage\"}[$__rate_interval])))",
+          "legendFormat": "{{stage}} / {{topic}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Freshness (indexed-doc age)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 102,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Indexed-doc age P90 by doc_type vs 30-min SLO",
+      "description": "P90 of asker_index_doc_age_seconds by doc_type (now - Document.created_at at index time). The red 1800 s line is the 30-min freshness SLA (spec §2.7).",
+      "id": 5,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1800 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.9, sum by (le, doc_type) (rate(asker_index_doc_age_seconds_bucket{doc_type=~\"$doc_type\"}[$__rate_interval])))",
+          "legendFormat": "{{doc_type}} P90"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Fraction indexed within 30 min by doc_type",
+      "description": "Per-doc_type share within the freshness SLO: asker_index_doc_age_seconds_bucket{le=\"1800\"} / count. Target ~1.0.",
+      "id": 6,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.9 },
+              { "color": "green", "value": 0.99 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min"] },
+        "tooltip": { "mode": "multi", "sort": "asc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (doc_type) (rate(asker_index_doc_age_seconds_bucket{doc_type=~\"$doc_type\",le=\"1800\"}[$__rate_interval])) / clamp_min(sum by (doc_type) (rate(asker_index_doc_age_seconds_count{doc_type=~\"$doc_type\"}[$__rate_interval])), 0.0001)",
+          "legendFormat": "{{doc_type}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Data loss (dead-letter)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 103,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Dead-letter rate by origin topic (~0 expected)",
+      "description": "asker_pipeline_deadletter_total by origin_topic — the authoritative zero-data-loss signal (records newly quarantined to docs.deadletter). Steady state ~0.",
+      "id": 7,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "decimals": 4,
+          "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 70, "showPoints": "never", "stacking": { "mode": "normal", "group": "A" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.0001 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (origin_topic) (rate(asker_pipeline_deadletter_total[$__rate_interval]))",
+          "legendFormat": "{{origin_topic}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total dead-lettered (window)",
+      "description": "Cumulative records quarantined to docs.deadletter over the dashboard window (increase of asker_pipeline_deadletter_total). Should be 0.",
+      "id": 8,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (origin_topic) (increase(asker_pipeline_deadletter_total[$__range]))",
+          "legendFormat": "{{origin_topic}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Consumer / runtime (go_* / process_*)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 104,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Goroutines by service",
+      "description": "go_goroutines per scrape job — a runaway count flags a stuck consumer or leak.",
+      "id": 9,
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "go_goroutines{job=~\"$job\"}",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Resident memory by service",
+      "description": "process_resident_memory_bytes per scrape job — keep an eye on the 8GB dev-VM budget.",
+      "id": 10,
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "process_resident_memory_bytes{job=~\"$job\"}",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU usage by service",
+      "description": "rate(process_cpu_seconds_total) per scrape job (CPU-seconds per second = cores).",
+      "id": 11,
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "rate(process_cpu_seconds_total{job=~\"$job\"}[$__rate_interval])",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Up / scrape status",
+      "description": "up for the four /metrics-exposing services. 0 = down or unreachable (under default-deny a Prometheus->health-port ingress allow is required, ADR-016).",
+      "id": 12,
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 45 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "showPoints": "never", "spanNulls": false },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["min", "lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "up{job=~\"gateway|query|ingest|index-writer\"}",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    }
+  ]
+}

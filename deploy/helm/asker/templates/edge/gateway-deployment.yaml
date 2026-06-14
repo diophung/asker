@@ -1,0 +1,110 @@
+{{- /*
+Gateway Deployment — the public HTTP edge (OIDC authn, rate limit, CORS, upload
+limits). Mirrors the compose `gateway` service env. Shared dependency addresses
+(QUERY_GRPC_ADDR, CONTROL_PLANE_GRPC_ADDR, HUB_HTTP_URL, REDIS_ADDR, OTEL) come
+from the shared ConfigMap via envFrom; gateway-specific knobs (GATEWAY_ADDR,
+OIDC_*, CORS, rate/upload limits) are set explicitly from edge values because
+OIDC issuer/JWKS and CORS origins differ between dev and prod (ADR-003 §3).
+Health and readiness are served on the same :8080 (services/gateway routes.go:
+/healthz, /readyz).
+*/ -}}
+{{- $svc := "gateway" -}}
+{{- $cfg := .Values.services.gateway -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "asker.serviceFullname" (list . $svc) }}
+  labels:
+    {{- include "asker.serviceLabels" (list . $svc) | nindent 4 }}
+spec:
+  {{- if not $cfg.autoscaling.enabled }}
+  replicas: {{ $cfg.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list . $svc) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.serviceLabels" (list . $svc) | nindent 8 }}
+      annotations:
+        # Roll pods when the shared config or dev secret changes.
+        checksum/config: {{ include (print $.Template.BasePath "/config/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/config/secret.yaml") . | sha256sum }}
+        {{- with $cfg.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "asker.serviceAccountNameFor" (list . $svc) }}
+      {{- with $cfg.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "asker.image" (list . $svc) }}
+          imagePullPolicy: {{ include "asker.imagePullPolicy" (list . $svc) }}
+          {{- with $cfg.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $cfg.port }}
+              protocol: TCP
+          envFrom:
+            # Shared dependency addresses + dims (QUERY_GRPC_ADDR,
+            # CONTROL_PLANE_GRPC_ADDR, HUB_HTTP_URL, REDIS_ADDR, OTEL, ...).
+            - configMapRef:
+                name: {{ include "asker.configMapName" . }}
+          env:
+            # Gateway-specific edge config (values; dev defaults mirror compose).
+            - name: GATEWAY_ADDR
+              value: {{ printf ":%v" $cfg.port | quote }}
+            - name: OIDC_ISSUER
+              value: {{ $cfg.config.oidcIssuer | quote }}
+            - name: OIDC_JWKS_URL
+              value: {{ $cfg.config.oidcJwksUrl | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ $cfg.config.oidcAudience | quote }}
+            - name: RATE_LIMIT_PER_MINUTE
+              value: {{ $cfg.config.rateLimitPerMinute | quote }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ $cfg.config.corsAllowedOrigins | quote }}
+            - name: MAX_UPLOAD_MB
+              value: {{ $cfg.config.maxUploadMb | quote }}
+            - name: MAX_MEDIA_MB
+              value: {{ $cfg.config.maxMediaMb | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            # /readyz checks JWKS reachability (services/gateway routes.go).
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $cfg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,7 @@
+{{/*
+query — gRPC search service. Compose: QUERY_ADDR :9200 (gRPC), QUERY_HEALTH_ADDR
+:9201 (/healthz + /readyz). Dialed by the gateway as dns:///query:9200, so the
+Service object is named "query". Talks to Vespa, TEI, Redis, and (text->image,
+ADR-013) the clip service; degrades gracefully if clip is down. Scalable (HPA).
+*/}}
+{{- include "asker.workload.all" (list . "query") }}

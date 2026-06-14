@@ -273,11 +273,20 @@ type Hit struct {
 	Type        v1.DocType             `protobuf:"varint,3,opt,name=type,proto3,enum=asker.v1.DocType" json:"type,omitempty"`
 	Title       string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
 	// Snippet with query-term highlights wrapped in <hi>...</hi>.
-	Snippet       string                 `protobuf:"bytes,5,opt,name=snippet,proto3" json:"snippet,omitempty"`
-	Score         float64                `protobuf:"fixed64,6,opt,name=score,proto3" json:"score,omitempty"`
-	Created       *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created,proto3" json:"created,omitempty"`
-	Modified      *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=modified,proto3" json:"modified,omitempty"`
-	Metadata      map[string]string      `protobuf:"bytes,9,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Snippet  string                 `protobuf:"bytes,5,opt,name=snippet,proto3" json:"snippet,omitempty"`
+	Score    float64                `protobuf:"fixed64,6,opt,name=score,proto3" json:"score,omitempty"`
+	Created  *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created,proto3" json:"created,omitempty"`
+	Modified *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=modified,proto3" json:"modified,omitempty"`
+	Metadata map[string]string      `protobuf:"bytes,9,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Media fields (M3), set for IMAGE/AUDIO/VIDEO hits. For audio/video, the
+	// matched transcript chunk's offset so the UI deep-links to the moment;
+	// zero for the whole-document / non-media case.
+	StartMs int64 `protobuf:"varint,10,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs   int64 `protobuf:"varint,11,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	// Which arm matched this chunk: "text" | "ocr" | "asr" | "caption".
+	Modality string `protobuf:"bytes,12,opt,name=modality,proto3" json:"modality,omitempty"`
+	// Blob key of a thumbnail / poster frame to render (empty if none).
+	ThumbnailKey  string `protobuf:"bytes,13,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -375,6 +384,34 @@ func (x *Hit) GetMetadata() map[string]string {
 	return nil
 }
 
+func (x *Hit) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *Hit) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
+func (x *Hit) GetModality() string {
+	if x != nil {
+		return x.Modality
+	}
+	return ""
+}
+
+func (x *Hit) GetThumbnailKey() string {
+	if x != nil {
+		return x.ThumbnailKey
+	}
+	return ""
+}
+
 var File_asker_query_v1_query_proto protoreflect.FileDescriptor
 
 const file_asker_query_v1_query_proto_rawDesc = "" +
@@ -394,7 +431,7 @@ const file_asker_query_v1_query_proto_rawDesc = "" +
 	"\x05total\x18\x02 \x01(\x03R\x05total\x12\x1a\n" +
 	"\bdegraded\x18\x03 \x01(\tR\bdegraded\x12\x17\n" +
 	"\atook_ms\x18\x04 \x01(\x03R\x06tookMs\x12\x16\n" +
-	"\x06cached\x18\x05 \x01(\bR\x06cached\"\x96\x03\n" +
+	"\x06cached\x18\x05 \x01(\bR\x06cached\"\x89\x04\n" +
 	"\x03Hit\x12\x15\n" +
 	"\x06doc_id\x18\x01 \x01(\tR\x05docId\x12!\n" +
 	"\fconnector_id\x18\x02 \x01(\tR\vconnectorId\x12%\n" +
@@ -404,7 +441,12 @@ const file_asker_query_v1_query_proto_rawDesc = "" +
 	"\x05score\x18\x06 \x01(\x01R\x05score\x124\n" +
 	"\acreated\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x126\n" +
 	"\bmodified\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\bmodified\x12=\n" +
-	"\bmetadata\x18\t \x03(\v2!.asker.query.v1.Hit.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\t \x03(\v2!.asker.query.v1.Hit.MetadataEntryR\bmetadata\x12\x19\n" +
+	"\bstart_ms\x18\n" +
+	" \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\v \x01(\x03R\x05endMs\x12\x1a\n" +
+	"\bmodality\x18\f \x01(\tR\bmodality\x12#\n" +
+	"\rthumbnail_key\x18\r \x01(\tR\fthumbnailKey\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*N\n" +

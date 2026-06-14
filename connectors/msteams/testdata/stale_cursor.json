@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {"method": "GET", "path": "/me/chats", "query": "$expand=members"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"value\":[{\"id\":\"19:group-a\",\"topic\":\"Project Apollo\",\"chatType\":\"group\",\"webUrl\":\"https://teams.microsoft.com/l/chat/19:group-a\",\"members\":[{\"id\":\"m1\",\"displayName\":\"Alice Doe\",\"userId\":\"u-alice\",\"email\":\"alice@example.com\"},{\"id\":\"m2\",\"displayName\":\"Bob Roe\",\"userId\":\"u-bob\",\"email\":\"bob@example.com\"}]}]}"
+      }
+    },
+    {
+      "request": {"method": "GET", "path": "/chats/19:group-a/messages/delta", "query": "$deltatoken=EXPIRED"},
+      "response": {
+        "status": 410,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"error\":{\"code\":\"resyncRequired\",\"message\":\"The delta token is no longer valid.\"}}"
+      }
+    }
+  ]
+}

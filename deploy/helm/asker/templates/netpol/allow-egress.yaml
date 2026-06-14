@@ -1,0 +1,302 @@
+{{- /*
+================================================================================
+EGRESS policies (ADR-016) — the OPTIONAL least-privilege egress posture.
+
+Wave 1 ships ingress-default-deny as the enforced boundary. A symmetric
+default-deny-EGRESS is more fragile: it must enumerate DNS and every dependency
+dial, and the dependency pods' exact labels are owned by the sibling stateful-
+layer builder, so turning it on before those labels are pinned would break dep
+dials. We therefore gate the whole egress layer behind networkPolicy.restrictEgress
+(default false) and ship it ready to flip on. When on it adds:
+
+  - a default-deny-all-EGRESS for the namespace (empty podSelector, Egress only);
+  - DNS egress (UDP/TCP 53 to kube-dns) for every pod, or all name resolution
+    breaks;
+  - per-app egress to exactly the deps/peers each service dials (the call graph,
+    mirrored from the ingress side);
+  - connector-hub external egress for connector sync — the SSRF caveat (ADR-012):
+    connectors fetch arbitrary tenant-configured URLs, so connector-hub is the
+    one service with broad external egress. By default we open egress to all
+    non-cluster destinations EXCEPT cluster-internal/link-local/metadata ranges
+    (ipBlock except), which is the minimum SSRF hardening at the network layer;
+    application-layer SSRF defenses remain the connector-hub's responsibility.
+
+The dependency-SIDE ingress policies in deps.yaml are the part enforced now;
+this file is the matching, opt-in egress tightening.
+*/ -}}
+{{- if and (include "asker.netpol.enabled" .) (include "asker.netpol.restrictEgress" .) }}
+{{- $root := . -}}
+{{- $np := .Values.networkPolicy | default dict -}}
+{{- $egress := $np.egress | default dict -}}
+# --- default-deny-all-egress: every pod, no egress unless re-opened below -------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-default-deny-egress
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# --- allow DNS egress for ALL pods (kube-dns) ----------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-allow-dns-egress
+  labels:
+    {{- include "asker.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "asker.netpol.dnsEgress" $root | nindent 4 }}
+---
+# --- gateway egress: query (grpc), control-plane (grpc), connector-hub, redis,
+#     keycloak (OIDC JWKS) ------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-gateway-egress
+  labels:
+    {{- include "asker.serviceLabels" (list $root "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "gateway") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "asker.netpol.appPeer" (list $root "query") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+    - to:
+        {{- include "asker.netpol.appPeer" (list $root "control-plane") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9100
+    - to:
+        {{- include "asker.netpol.appPeer" (list $root "connector-hub") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9300
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "redis") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Server-side OIDC JWKS fetch (token verification). Mirrors the keycloak-allow
+    # ingress in deps.yaml — without it, restrictEgress would block JWKS and every
+    # /v1/* request 401s on a JWKS cache miss.
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "keycloak") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# --- query egress: vespa, tei, clip, redis -------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-query-egress
+  labels:
+    {{- include "asker.serviceLabels" (list $root "query") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "query") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "vespa") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "tei") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        {{- include "asker.netpol.appPeer" (list $root "clip") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9800
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "redis") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# --- ingest egress: kafka, redis -----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-ingest-egress
+  labels:
+    {{- include "asker.serviceLabels" (list $root "ingest") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "ingest") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "kafka") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "redis") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# --- enrich egress: kafka, tei, clip, connector-hub (internal media) -----------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-enrich-egress
+  labels:
+    {{- include "asker.serviceLabels" (list $root "enrich") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "enrich") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "kafka") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "tei") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        {{- include "asker.netpol.appPeer" (list $root "clip") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9800
+    - to:
+        {{- include "asker.netpol.appPeer" (list $root "connector-hub") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9300
+---
+# --- index-writer egress: kafka, vespa -----------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-index-writer-egress
+  labels:
+    {{- include "asker.serviceLabels" (list $root "index-writer") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "index-writer") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "kafka") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "vespa") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# --- control-plane egress: postgres, vault -------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-control-plane-egress
+  labels:
+    {{- include "asker.serviceLabels" (list $root "control-plane") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "control-plane") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "postgres") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "vault") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8200
+---
+# --- connector-hub egress: kafka, control-plane, minio, vault, + EXTERNAL -------
+# External egress is the SSRF surface (ADR-012): connectors fetch arbitrary
+# tenant-configured URLs. networkPolicy.egress.connectorHubExternal (default
+# true) opens egress to all destinations EXCEPT the cluster-internal /
+# link-local / cloud-metadata ranges (ipBlock except), the minimum network-layer
+# SSRF guard. Application-layer SSRF defenses remain connector-hub's job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.fullname" $root }}-connector-hub-egress
+  labels:
+    {{- include "asker.serviceLabels" (list $root "connector-hub") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "connector-hub") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "kafka") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+    - to:
+        {{- include "asker.netpol.appPeer" (list $root "control-plane") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9100
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "minio") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9000
+    - to:
+        {{- include "asker.netpol.depPeer" (list $root "vault") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8200
+    {{- if ne (toString (dig "connectorHubExternal" true $egress)) "false" }}
+    # External connector fetches (HTTPS/HTTP). SSRF caveat: ADR-012.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range (dig "externalExcept" (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "169.254.0.0/16") $egress) }}
+              - {{ . | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    {{- end }}
+{{- end }}

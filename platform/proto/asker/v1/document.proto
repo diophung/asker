@@ -40,6 +40,26 @@ message Document {
   BlobRef original = 13;               // pointer into the blob store
   string version_etag = 14;            // for idempotent upserts
   Tombstone tombstone = 15;            // deletions propagate as documents too
+  MediaInfo media = 16;                // image/audio/video metadata (M3); unset for text docs
+}
+
+// MediaInfo carries metadata produced by the media enrich pipeline (M3) for
+// IMAGE/AUDIO/VIDEO documents. Unset for text documents.
+message MediaInfo {
+  int64 duration_ms = 1;     // audio/video length in milliseconds
+  int32 width = 2;           // image/video pixel width
+  int32 height = 3;          // image/video pixel height
+  BlobRef thumbnail = 4;     // generated thumbnail / poster frame in the blob store
+  repeated Keyframe keyframes = 5; // video scene keyframes (CLIP-embedded), empty otherwise
+  string transcript_lang = 6;      // detected ASR language (BCP-47), e.g. "en"
+}
+
+// Keyframe is one extracted video frame anchored at a time offset, with a
+// thumbnail in the blob store. Its CLIP embedding rides on the matching Chunk.
+message Keyframe {
+  int64 ts_ms = 1;       // offset of the frame within the video, milliseconds
+  BlobRef image = 2;     // the extracted frame in the blob store
+  string chunk_id = 3;   // the Chunk (CLIP embedding + any OCR text) for this frame
 }
 
 // Chunk is one retrieval unit cut from body_text.
@@ -47,12 +67,21 @@ message Chunk {
   string chunk_id = 1;      // stable within the document
   string text = 2;          // chunk text
   string embedding_ref = 3; // reference to an externally stored embedding (unused in M1)
-  int64 char_start = 4;     // offset into body_text (inclusive)
-  int64 char_end = 5;       // offset into body_text (exclusive)
+  int64 char_start = 4;     // BYTE offset into body_text (inclusive; UTF-8 safe boundaries)
+  int64 char_end = 5;       // BYTE offset into body_text (exclusive)
   // Embedding vector, filled by the enrich worker on docs.enriched only
   // (empty on docs.raw / docs.chunked). Length must equal EMBEDDING_DIM
   // (ADR-005); the index writer rejects mismatches.
   repeated float embedding = 6;
+  // Media time anchoring (M3): for AUDIO/VIDEO transcript chunks, the start/end
+  // of this segment within the media, in milliseconds, so a search hit can
+  // deep-link to the moment. Zero/zero for non-media (text) chunks.
+  int64 start_ms = 7;
+  int64 end_ms = 8;
+  // Modality of this chunk's text (M3): "text" (default/empty), "ocr" (text
+  // extracted from an image), "asr" (speech transcript), "caption" (generated
+  // image caption). Lets the query path label and rank media hits.
+  string modality = 9;
 }
 
 // Participant is a person attached to the document (sender, attendee, ...).

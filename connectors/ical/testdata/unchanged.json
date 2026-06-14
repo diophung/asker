@@ -1,0 +1,26 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/calendar; charset=utf-8"]},
+        "body": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp//Asker Test//EN\r\nBEGIN:VEVENT\r\nUID:evt-weekly@example.com\r\nDTSTAMP:20260601T090000Z\r\nSEQUENCE:0\r\nSTATUS:CONFIRMED\r\nSUMMARY:Weekly review\r\nDTSTART;TZID=America/Los_Angeles:20260603T093000\r\nDTEND;TZID=America/Los_Angeles:20260603T100000\r\nORGANIZER;CN=Alice Anderson:mailto:alice@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/calendar; charset=utf-8"]},
+        "body": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp//Asker Test//EN\r\nBEGIN:VEVENT\r\nUID:evt-weekly@example.com\r\nDTSTAMP:20260601T090000Z\r\nSEQUENCE:0\r\nSTATUS:CONFIRMED\r\nSUMMARY:Weekly review\r\nDTSTART;TZID=America/Los_Angeles:20260603T093000\r\nDTEND;TZID=America/Los_Angeles:20260603T100000\r\nORGANIZER;CN=Alice Anderson:mailto:alice@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    }
+  ]
+}

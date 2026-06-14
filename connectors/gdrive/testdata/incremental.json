@@ -1,0 +1,40 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/changes",
+        "query": "pageToken=100&pageSize=100&fields=changes(changeType,fileId,removed,time,file(id,name,mimeType,webViewLink,parents,size,version,md5Checksum,createdTime,modifiedTime,trashed,shared,owners(displayName,emailAddress,permissionId))),newStartPageToken,nextPageToken"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"changes\":[{\"changeType\":\"file\",\"fileId\":\"file-doc-1\",\"removed\":false,\"time\":\"2026-06-10T14:00:00.000Z\",\"file\":{\"id\":\"file-doc-1\",\"name\":\"Q3 Strategy (revised)\",\"mimeType\":\"application/vnd.google-apps.document\",\"webViewLink\":\"https://docs.google.com/document/d/file-doc-1/edit\",\"parents\":[\"root-folder\"],\"version\":\"11\",\"createdTime\":\"2026-05-01T10:00:00.000Z\",\"modifiedTime\":\"2026-06-10T13:59:00.000Z\",\"trashed\":false,\"shared\":true,\"owners\":[{\"displayName\":\"Alice Example\",\"emailAddress\":\"alice@example.com\",\"permissionId\":\"alice-pid\"}]}},{\"changeType\":\"file\",\"fileId\":\"file-pdf-3\",\"removed\":true,\"time\":\"2026-06-10T15:00:00.000Z\"}],\"newStartPageToken\":\"205\"}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files/file-doc-1/permissions",
+        "query": "fields=permissions(id,type,role,emailAddress,domain,allowFileDiscovery,deleted),nextPageToken&pageSize=100"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"permissions\":[{\"id\":\"alice-pid\",\"type\":\"user\",\"role\":\"owner\",\"emailAddress\":\"alice@example.com\"},{\"id\":\"perm-bob\",\"type\":\"user\",\"role\":\"writer\",\"emailAddress\":\"bob@example.com\"}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/files/file-doc-1/export",
+        "query": "mimeType=text%2Fplain"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/plain"]},
+        "body": "Q3 Strategy (revised)\n\nGrow revenue, ship Asker M2, and tighten ACLs."
+      }
+    }
+  ]
+}

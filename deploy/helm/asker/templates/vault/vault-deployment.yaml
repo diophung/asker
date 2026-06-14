@@ -1,0 +1,107 @@
+{{- /*
+============================================================================
+  DEV-MODE Vault Deployment — NON-PRODUCTION.
+============================================================================
+This runs Vault in `-dev` mode: a single, AUTO-UNSEALED, in-memory node with a
+fixed root token. It exists so the chart renders a complete, self-contained
+stack for kind/k3d CI (M4 exit criteria) and so the per-tenant Transit envelope
+KEK path (ADR-015) can be exercised end-to-end without an external Vault.
+
+NON-PRODUCTION — DO NOT SHIP. Dev mode has:
+  - NO persistence (in-memory storage; all keys lost on pod restart),
+  - NO unseal / auto-unseal (always unsealed),
+  - NO HA / Raft, a single replica,
+  - a static root token in a chart Secret.
+For production, run Vault out-of-band (HashiCorp Vault Helm chart / operator)
+with Integrated Storage (Raft), HA, auto-unseal (cloud KMS / Transit), audit
+logging, and a least-privilege transit policy; set vault.deploy=false here and
+point vault.addr at that cluster. See ADR-015 "Consequences".
+
+Rendered only when vault.deploy is true.
+*/ -}}
+{{- if eq (include "asker.vault.enabled" .) "true" }}
+{{- $cfg := include "asker.vault.config" . | fromYaml }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-vault" (include "asker.fullname" .) }}
+  labels:
+    {{- include "asker.vault.labels" . | nindent 4 }}
+  annotations:
+    asker.dev/warning: "DEV-MODE Vault (in-memory, auto-unsealed, static root token). NON-PRODUCTION. See ADR-015."
+spec:
+  replicas: 1
+  # Recreate: dev Vault is in-memory; never run two unsealed dev nodes.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "asker.vault.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.vault.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $cfg.serviceAccountName }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100        # vault user in the hashicorp/vault image
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vault
+          image: {{ $cfg.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              # Dev mode mlocks memory off by default (VAULT_DEV is fine without
+              # IPC_LOCK); drop everything.
+              drop: ["ALL"]
+          args:
+            - "server"
+            - "-dev"
+            - "-dev-listen-address=0.0.0.0:{{ $cfg.port }}"
+          env:
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cfg.tokenSecretName }}
+                  key: VAULT_TOKEN
+            # Address the CLI inside the container uses (the init Job dials the
+            # Service, this is just for in-container `vault` invocations).
+            - name: VAULT_ADDR
+              value: {{ printf "http://127.0.0.1:%v" $cfg.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ $cfg.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              # Dev Vault is always unsealed; 200 when ready.
+              path: /v1/sys/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+{{- end }}

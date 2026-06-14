@@ -1,0 +1,7 @@
+{{/*
+index-writer — Kafka consumer (docs.enriched -> Vespa document API). No inbound
+RPC; INDEX_WRITER_HEALTH_ADDR :9701 (/healthz liveness, /readyz pings Vespa).
+EMBEDDING_DIM/CLIP_DIM (ADR-005/013) must match the deployed Vespa schema.
+Consumes Kafka, writes Vespa. Scalable (HPA).
+*/}}
+{{- include "asker.workload.all" (list . "index-writer") }}

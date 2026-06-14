@@ -1,0 +1,146 @@
+{{- /*
+Vespa StatefulSet (ADR-014 §4, spec §2.7) — config server + content nodes for a
+multi-group streaming-mode content cluster. Grown from the compose single-node
+Vespa (vespa/services.xml) into a real cluster:
+
+  replicas = vespa.groups * vespa.nodesPerGroup  (helper asker.vespa.replicas)
+
+Each pod runs the vespaengine/vespa image (config server + services). VESPA_CONFIGSERVERS
+points every node at the config server pod (ordinal 0) via stable headless DNS so
+the cluster forms. Persistent /opt/vespa/var via a volumeClaimTemplate with a
+cloud-agnostic storageClass (default "" => cluster default; NO provider class).
+
+The application package (which declares the actual <group> topology — groups,
+nodesPerGroup, redundancy) is carried in the ConfigMap (vespa-configmap.yaml) and
+deployed by a follow-up Job running the vespa/deploy.sh flow against the config
+server; this StatefulSet stands up the nodes the package then targets. Gated
+behind `vespa.deploy` (default false).
+*/ -}}
+{{- $vespa := .Values.vespa | default dict -}}
+{{- if $vespa.deploy -}}
+{{- $persistence := .Values.persistence | default dict -}}
+{{- $storage := $vespa.storage | default dict -}}
+{{- $storageClass := $storage.storageClass | default $persistence.storageClass | default "" -}}
+{{- $image := $vespa.image | default dict -}}
+{{- $repo := $image.repository | default "vespaengine/vespa" -}}
+{{- $tag := $image.tag | default "8" -}}
+{{- $headless := printf "%s-headless" (include "asker.vespa.name" .) -}}
+{{- $configServer := printf "%s-0.%s" (include "asker.vespa.name" .) $headless -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "asker.vespa.name" . }}
+  labels:
+    {{- include "asker.vespa.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $headless }}
+  replicas: {{ include "asker.vespa.replicas" . }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "asker.vespa.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      # Full chart labels (incl. app.kubernetes.io/part-of: asker) so the
+      # dependency NetworkPolicies (deps.yaml, component: search) select these
+      # pods. spec.selector stays on the version-free selectorLabels (immutable);
+      # pod labels are a superset, which is allowed.
+      labels:
+        {{- include "asker.vespa.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Vespa writes to /opt/vespa/var as the "vespa" user (uid 1000); fsGroup
+      # lets the mounted PVC be group-writable.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: vespa
+          image: {{ printf "%s:%s" $repo $tag | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["configserver,services"]
+          env:
+            # Vespa auto-detects its hostname as the pod FQDN
+            # (<pod>.<headless>.<ns>.svc.cluster.local), which would NOT match the
+            # short names used in VESPA_CONFIGSERVERS and the app package's
+            # hosts.xml — the config-server self-check then panics ("this host
+            # should not run a config server") and the pod CrashLoopBackOffs. Pin
+            # VESPA_HOSTNAME to the same short, in-namespace-resolvable name so
+            # every node identifies itself consistently across all three.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: VESPA_HOSTNAME
+              value: "$(POD_NAME).{{ $headless }}"
+            # Point every node at the ordinal-0 pod's config server (stable
+            # headless DNS). A multi-config-server quorum is a sizing follow-up.
+            - name: VESPA_CONFIGSERVERS
+              value: {{ $configServer | quote }}
+            # Dev clusters share a small VM; allow boot below the 4GB floor. Prod
+            # sizing comes from resources below + capacity math (M5).
+            - name: VESPA_IGNORE_NOT_ENOUGH_MEMORY
+              value: {{ $vespa.ignoreNotEnoughMemory | default "true" | quote }}
+          ports:
+            - name: query
+              containerPort: 8080
+              protocol: TCP
+            - name: config
+              containerPort: 19071
+              protocol: TCP
+            - name: messagebus
+              containerPort: 19092
+              protocol: TCP
+            - name: rpc
+              containerPort: 19070
+              protocol: TCP
+          # Config-server health (:19071) is the readiness gate; the query port
+          # (:8080) only serves after the application package is activated, so it
+          # is NOT used for readiness (mirrors compose, which probes :19071).
+          readinessProbe:
+            httpGet:
+              path: /state/v1/health
+              port: config
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /state/v1/health
+              port: config
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with $vespa.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: vespa-var
+              mountPath: /opt/vespa/var
+            - name: vespa-logs
+              mountPath: /opt/vespa/logs
+      volumes:
+        - name: vespa-logs
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: vespa-var
+        labels:
+          {{- include "asker.vespa.labels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $storageClass }}
+        storageClassName: {{ $storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $storage.size | default "50Gi" | quote }}
+{{- end }}

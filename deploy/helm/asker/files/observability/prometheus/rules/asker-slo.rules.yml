@@ -1,0 +1,283 @@
+# Asker SLO alert rules (Prometheus / promtool-valid).
+#
+# Source of truth for every metric name + label is the M5 wave-1 shared facts
+# (which mirror the OTel instruments in services/{query,ingest,index-writer} and
+# platform/{kafkautil,telemetry}). Labels are deliberately LOW-CARDINALITY: there
+# is NO tenant_id/doc_id/query label anywhere (10M tenants would explode series),
+# so none of these rules reference one.
+#
+# Per-service selection uses the Prometheus `job` label set by the scrape config
+# in deploy/observability/prometheus/prometheus.yml (obs-stack owner). The agreed
+# job names match the compose/K8s service names: gateway, query, ingest,
+# index-writer. If that scrape config uses different job names, update the
+# `job=` selectors below to match (tracked as a cross-owner dependency).
+#
+# SLO references (spec §2.7, docs/architecture.md §5):
+#   - Query latency P90 <= 5000 ms end-to-end (HARD); P50 <= 800 ms (design).
+#   - Ingest freshness: source edit -> searchable <= 1800 s (30 min).
+#   - Zero data loss (soak exit): dead-letter rate is the signal.
+groups:
+  # --------------------------------------------------------------------------
+  - name: asker-query-slo
+    rules:
+      # HARD SLO: end-to-end query P90 must stay <= 5000 ms. Histogram is in
+      # milliseconds (exporter suffix _milliseconds); we read P90 across all
+      # modes/cache/degraded label combinations by summing buckets by `le`.
+      - alert: AskerQueryP90LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.9,
+            sum by (le) (rate(asker_query_search_duration_milliseconds_bucket[5m]))
+          ) > 5000
+        for: 10m
+        labels:
+          severity: critical
+          slo: query-latency
+        annotations:
+          summary: "Query P90 latency breaches the 5s SLO"
+          description: >-
+            End-to-end query P90 latency has been above the hard 5000 ms SLO
+            (spec §2.7) for 10m. Current P90:
+            {{ $value | humanize }} ms. Check Vespa health, the query service,
+            and whether the degradation ladder has engaged
+            (asker_query_degradation_events_total).
+
+      # Design target (P50 <= 800 ms): a soft warning, not the hard SLO.
+      - alert: AskerQueryP50LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.5,
+            sum by (le) (rate(asker_query_search_duration_milliseconds_bucket[5m]))
+          ) > 800
+        for: 15m
+        labels:
+          severity: warning
+          slo: query-latency
+        annotations:
+          summary: "Query P50 latency above the 800ms design target"
+          description: >-
+            Query P50 latency has been above the 800 ms design target
+            (spec §2.7) for 15m (current: {{ $value | humanize }} ms). Not a hard
+            SLO breach, but a sign of degrading interactive performance.
+
+      # Cache hit-rate collapse: result-cache is load-bearing for the latency
+      # SLO. Only fire once there is meaningful query traffic (>0.2 req/s) so an
+      # idle system does not alert on a 0/0 ratio.
+      - alert: AskerQueryCacheHitRateLow
+        expr: |
+          (
+            sum(rate(asker_query_cache_requests_total{result="hit"}[10m]))
+            /
+            sum(rate(asker_query_cache_requests_total[10m]))
+          ) < 0.3
+          and
+          sum(rate(asker_query_cache_requests_total[10m])) > 0.2
+        for: 15m
+        labels:
+          severity: warning
+          slo: query-latency
+        annotations:
+          summary: "Query result-cache hit rate collapsed"
+          description: >-
+            Query cache hit rate has been below 30% for 15m (current:
+            {{ $value | humanizePercentage }}) while serving real traffic. The
+            result cache protects the P90<=5s SLO; a collapse pushes load onto
+            Vespa. Check Redis health/eviction and cache-key churn.
+
+      # Degradation spike: the ladder (keyword-only / clip-unavailable) is a
+      # graceful fallback, never a failure, but a sustained spike means a
+      # dependency (vector backend / CLIP) is unhealthy.
+      - alert: AskerQueryDegradationSpike
+        expr: |
+          sum(rate(asker_query_degradation_events_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          slo: query-availability
+        annotations:
+          summary: "Query degradation-ladder activations elevated"
+          description: >-
+            Query degradation events (asker_query_degradation_events_total) have
+            averaged > 0.5/s for 10m. Queries are still answered (degraded, never
+            fail-closed), but a backend is unhealthy. Break down by rung
+            (keyword-only vs clip-unavailable) to find the failing dependency.
+
+  # --------------------------------------------------------------------------
+  - name: asker-ingest-slo
+    rules:
+      # Freshness SLO: source edit -> searchable <= 30 min (1800 s). Proxy is
+      # asker_index_doc_age_seconds at index time (now - Document.created_at).
+      - alert: AskerIngestFreshnessP90High
+        expr: |
+          histogram_quantile(
+            0.9,
+            sum by (le) (rate(asker_index_doc_age_seconds_bucket[30m]))
+          ) > 1800
+        for: 15m
+        labels:
+          severity: critical
+          slo: ingest-freshness
+        annotations:
+          summary: "Ingest freshness P90 breaches the 30-min SLO"
+          description: >-
+            P90 indexed-document age has been above the 1800 s (30 min) freshness
+            SLO (spec §2.7) for 15m (current: {{ $value | humanize }} s). Newly
+            edited source documents are not becoming searchable in time. Check
+            Kafka consumer lag, enrich (TEI/CLIP) throughput, and index-writer.
+
+      # Fraction-fresh view of the same SLO: the share of indexed docs landing
+      # within 30 min (sum of le<=1800 buckets / total count). Warns earlier
+      # than the P90 alert when the tail starts to fatten.
+      - alert: AskerIngestFreshnessFractionLow
+        expr: |
+          (
+            sum(rate(asker_index_doc_age_seconds_bucket{le="1800"}[30m]))
+            /
+            sum(rate(asker_index_doc_age_seconds_count[30m]))
+          ) < 0.9
+          and
+          sum(rate(asker_index_doc_age_seconds_count[30m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          slo: ingest-freshness
+        annotations:
+          summary: "Fewer than 90% of docs indexed within 30 min"
+          description: >-
+            The fraction of documents indexed within the 30-min freshness SLO
+            (le<=1800s buckets / total) has been below 90% for 15m (current:
+            {{ $value | humanizePercentage }}). The freshness tail is growing;
+            investigate before the P90 breaches 1800 s.
+
+  # --------------------------------------------------------------------------
+  - name: asker-pipeline-data-loss
+    rules:
+      # ZERO DATA LOSS (soak exit criterion). asker_pipeline_deadletter_total
+      # counts records newly quarantined to docs.deadletter — the authoritative
+      # signal. ANY sustained nonzero rate is a critical, page-worthy event.
+      - alert: AskerDeadletterNonZero
+        expr: |
+          sum by (origin_topic) (rate(asker_pipeline_deadletter_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          slo: zero-data-loss
+        annotations:
+          summary: "Records being quarantined to the dead-letter topic"
+          description: >-
+            Records from origin_topic {{ $labels.origin_topic }} are being
+            dead-lettered (asker_pipeline_deadletter_total > 0 over 5m). This is
+            the zero-data-loss SLO (M5 soak exit) — documents are NOT reaching
+            the index. Expected steady-state is ~0. Inspect docs.deadletter for
+            the error headers and the failing stage.
+
+      # Per-attempt handler-failure rate (records_total{result="error"}). NOT a
+      # dead-letter (kafkautil retries 3x), but a sustained high attempt-error
+      # fraction precedes data loss and points at the failing stage.
+      - alert: AskerPipelineAttemptErrorRateHigh
+        expr: |
+          (
+            sum by (stage) (rate(asker_pipeline_records_total{result="error"}[10m]))
+            /
+            sum by (stage) (rate(asker_pipeline_records_total[10m]))
+          ) > 0.05
+          and
+          sum by (stage) (rate(asker_pipeline_records_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          slo: pipeline-health
+        annotations:
+          summary: "Pipeline handler attempt-failure rate elevated"
+          description: >-
+            Stage {{ $labels.stage }} handler attempts are failing at
+            {{ $value | humanizePercentage }} (>5%) over 10m. These are
+            per-attempt failures (kafkautil retries 3x before dead-lettering),
+            not yet data loss — but the retry budget is being consumed. Find the
+            root cause before records exhaust retries and quarantine.
+
+  # --------------------------------------------------------------------------
+  - name: asker-availability
+    rules:
+      # Gateway 5xx error ratio. Only the gateway is the public surface; a high
+      # 5xx ratio is a user-visible availability problem. Guard the ratio with a
+      # minimum traffic floor so an idle system does not alert on 0/0.
+      - alert: AskerGateway5xxRateHigh
+        expr: |
+          (
+            sum(rate(http_server_requests_total{job="gateway",http_response_status_class="5xx"}[5m]))
+            /
+            sum(rate(http_server_requests_total{job="gateway"}[5m]))
+          ) > 0.05
+          and
+          sum(rate(http_server_requests_total{job="gateway"}[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+          slo: query-availability
+        annotations:
+          summary: "Gateway 5xx error ratio high"
+          description: >-
+            The gateway (public API surface) is returning 5xx for
+            {{ $value | humanizePercentage }} of requests (>5%) over 10m. This is
+            a user-visible availability breach. Check the query service, Vespa,
+            and OIDC/JWKS reachability.
+
+      # A scraped service is reporting failures internally on any of the four
+      # /metrics-exposing services (gateway, query, ingest, index-writer).
+      - alert: AskerService5xxRateHigh
+        expr: |
+          (
+            sum by (job) (rate(http_server_requests_total{http_response_status_class="5xx"}[5m]))
+            /
+            sum by (job) (rate(http_server_requests_total[5m]))
+          ) > 0.1
+          and
+          sum by (job) (rate(http_server_requests_total[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          slo: service-health
+        annotations:
+          summary: "Service {{ $labels.job }} 5xx error ratio high"
+          description: >-
+            Service {{ $labels.job }} is returning 5xx for
+            {{ $value | humanizePercentage }} of requests (>10%) over 10m.
+            Investigate that service and its downstream dependencies.
+
+      # Service down / scrape failing. `up == 0` covers a target that is failing
+      # its scrape; an `absent()` companion catches a target that vanished from
+      # service discovery entirely. The job names match the scrape config.
+      - alert: AskerServiceDown
+        expr: up{job=~"gateway|query|ingest|index-writer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          slo: service-health
+        annotations:
+          summary: "Service {{ $labels.job }} is down (scrape failing)"
+          description: >-
+            Prometheus cannot scrape {{ $labels.job }} (instance
+            {{ $labels.instance }}); up==0 for 2m. The service is down or its
+            /metrics health endpoint is unreachable. This service is on the
+            query or ingest critical path.
+
+      - alert: AskerScrapeTargetAbsent
+        expr: |
+          absent(up{job="gateway"}) == 1
+          or absent(up{job="query"}) == 1
+          or absent(up{job="ingest"}) == 1
+          or absent(up{job="index-writer"}) == 1
+        for: 5m
+        labels:
+          severity: critical
+          slo: service-health
+        annotations:
+          summary: "A core Asker scrape target is absent from discovery"
+          description: >-
+            One of the core services (gateway, query, ingest, index-writer) has
+            no `up` series at all for 5m — Prometheus is not discovering the
+            target, not merely failing to scrape it. Check the scrape config and
+            service discovery / Kubernetes Service + NetworkPolicy (a
+            Prometheus->health-port ingress allow is required under default-deny,
+            ADR-016).

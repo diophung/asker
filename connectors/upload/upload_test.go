@@ -127,9 +127,9 @@ func TestHandleUploadBinaryGolden(t *testing.T) {
 		DocId:          sdk.DocID("upload", blobKey),
 		ConnectorId:    "upload",
 		SourceNativeId: blobKey,
-		Type:           askerv1.DocType_FILE,
-		Title:          "pic.png", // falls back to the filename
-		BodyText:       "",        // binary: empty body until M3 extraction
+		Type:           askerv1.DocType_IMAGE, // image/* -> IMAGE so it reaches the media path (M3)
+		Title:          "pic.png",             // falls back to the filename
+		BodyText:       "",                    // binary: empty body; enrich does OCR/CLIP (M3)
 		Metadata: map[string]string{
 			"filename":     "pic.png",
 			"content_type": "image/png",
@@ -149,6 +149,24 @@ func TestHandleUploadBinaryGolden(t *testing.T) {
 		t.Errorf("HandleUpload document mismatch:\n got: %v\nwant: %v", doc, want)
 	}
 	connectortest.ValidateDocument(t, testConfig(t), doc)
+}
+
+func TestClassifyDocType(t *testing.T) {
+	for ct, want := range map[string]askerv1.DocType{
+		"image/png":                 askerv1.DocType_IMAGE,
+		"image/jpeg":                askerv1.DocType_IMAGE,
+		"video/mp4":                 askerv1.DocType_VIDEO,
+		"audio/mpeg":                askerv1.DocType_AUDIO,
+		"audio/wav":                 askerv1.DocType_AUDIO,
+		"text/plain; charset=utf-8": askerv1.DocType_FILE,
+		"application/pdf":           askerv1.DocType_FILE,
+		"application/octet-stream":  askerv1.DocType_FILE,
+		"not a mime type":           askerv1.DocType_FILE,
+	} {
+		if got := classifyDocType(ct); got != want {
+			t.Errorf("classifyDocType(%q) = %v, want %v", ct, got, want)
+		}
+	}
 }
 
 func TestHandleUploadMarkdownByExtension(t *testing.T) {

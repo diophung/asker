@@ -1,0 +1,40 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/messages",
+        "query": "$select=id,subject,body,bodyPreview,from,toRecipients,ccRecipients,webLink,parentFolderId,conversationId,createdDateTime,lastModifiedDateTime&$top=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/messages\",\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/me/messages?$select=id,subject,body,bodyPreview,from,toRecipients,ccRecipients,webLink,parentFolderId,conversationId,createdDateTime,lastModifiedDateTime&$top=50&$skip=50\",\"value\":[{\"@odata.etag\":\"W/\\\"CQAAABYAAACabc1\\\"\",\"id\":\"AAMkADmsg1\",\"changeKey\":\"CQAAABYAAACabc1\",\"subject\":\"Welcome to the team\",\"bodyPreview\":\"Glad to have you aboard.\",\"body\":{\"contentType\":\"html\",\"content\":\"<html><head><style>.x{color:red}</style></head><body><p>Glad to have you aboard.</p><p>See you Monday.</p></body></html>\"},\"from\":{\"emailAddress\":{\"name\":\"Dana Reed\",\"address\":\"dana@contoso.com\"}},\"toRecipients\":[{\"emailAddress\":{\"name\":\"Alice Example\",\"address\":\"alice@contoso.com\"}}],\"ccRecipients\":[{\"emailAddress\":{\"name\":\"HR\",\"address\":\"hr@contoso.com\"}}],\"webLink\":\"https://outlook.office365.com/owa/?ItemID=AAMkADmsg1\",\"parentFolderId\":\"AAMkInbox\",\"conversationId\":\"conv-1\",\"createdDateTime\":\"2026-06-01T09:00:00Z\",\"lastModifiedDateTime\":\"2026-06-01T09:00:00Z\"},{\"@odata.etag\":\"W/\\\"CQAAABYAAACabc2\\\"\",\"id\":\"AAMkADmsg2\",\"changeKey\":\"CQAAABYAAACabc2\",\"subject\":\"Lunch?\",\"bodyPreview\":\"Want to grab lunch today?\",\"body\":{\"contentType\":\"text\",\"content\":\"Want to grab lunch today?\"},\"from\":{\"emailAddress\":{\"name\":\"Ben Ng\",\"address\":\"ben@contoso.com\"}},\"toRecipients\":[{\"emailAddress\":{\"name\":\"Alice Example\",\"address\":\"alice@contoso.com\"}}],\"ccRecipients\":[],\"webLink\":\"https://outlook.office365.com/owa/?ItemID=AAMkADmsg2\",\"parentFolderId\":\"AAMkInbox\",\"conversationId\":\"conv-2\",\"createdDateTime\":\"2026-06-02T12:30:00Z\",\"lastModifiedDateTime\":\"2026-06-02T12:31:00Z\"}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/messages",
+        "query": "$select=id,subject,body,bodyPreview,from,toRecipients,ccRecipients,webLink,parentFolderId,conversationId,createdDateTime,lastModifiedDateTime&$top=50&$skip=50"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/messages\",\"value\":[{\"@odata.etag\":\"W/\\\"CQAAABYAAACabc3\\\"\",\"id\":\"AAMkADmsg3\",\"changeKey\":\"CQAAABYAAACabc3\",\"subject\":\"\",\"bodyPreview\":\"No subject here\",\"body\":{\"contentType\":\"text\",\"content\":\"No subject here\"},\"from\":{\"emailAddress\":{\"name\":\"Cara Liu\",\"address\":\"cara@contoso.com\"}},\"toRecipients\":[{\"emailAddress\":{\"name\":\"Alice Example\",\"address\":\"alice@contoso.com\"}}],\"webLink\":\"https://outlook.office365.com/owa/?ItemID=AAMkADmsg3\",\"parentFolderId\":\"AAMkInbox\",\"conversationId\":\"conv-3\",\"createdDateTime\":\"2026-06-03T08:15:00Z\",\"lastModifiedDateTime\":\"2026-06-03T08:15:00Z\"}]}"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/me/messages/delta",
+        "query": "$select=id,subject,body,bodyPreview,from,toRecipients,ccRecipients,webLink,parentFolderId,conversationId,createdDateTime,lastModifiedDateTime&$deltatoken=latest"
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "{\"@odata.context\":\"https://graph.microsoft.com/v1.0/$metadata#users('me')/messages\",\"@odata.deltaLink\":\"https://graph.microsoft.com/v1.0/me/messages/delta?$deltatoken=DELTA_TOKEN_AFTER_BACKFILL\",\"value\":[]}"
+      }
+    }
+  ]
+}

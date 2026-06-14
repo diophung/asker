@@ -1,0 +1,157 @@
+{{- /*
+================================================================================
+Per-app-service INGRESS allow policies (ADR-016). Each policy protects ONE app
+service (the target podSelector = its wave-0 component label) and lists exactly
+the peers permitted to connect, on exactly the ports they use. Additive on top of
+default-deny-ingress: a pod is reachable only on the paths named here.
+
+Call graph (from deploy/compose/docker-compose.yml, the source of truth; the M4
+brief restates it as caller -> callee:port). Targets handled here are the app
+services that ACCEPT in-cluster traffic:
+
+  gateway        <- ingress-controller            :8080
+  web            <- ingress-controller            :80
+  query          <- gateway                       :9200 (grpc), :9201 (health)
+  control-plane  <- gateway, connector-hub         :9100 (grpc), :9101 (health)
+  connector-hub  <- gateway, enrich (internal media):9300 (http), :9301 (health)
+  clip           <- query, enrich                 :9800 (http)
+
+ingest, enrich, index-writer expose only a health port and are dialled by no app
+peer (Kafka consumers — they initiate, they do not accept app traffic), so they
+get NO allow policy and remain ingress-default-denied except for what a cluster's
+kubelet probe path needs (kubelet probes are node-local and not subject to
+NetworkPolicy). Dependency targets (redis/vespa/tei/postgres/minio/vault/kafka)
+live in templates/netpol/deps.yaml.
+*/ -}}
+{{- if (include "asker.netpol.enabled" .) }}
+{{- $root := . -}}
+# --- gateway: public REST edge; accepts only from the ingress controller -------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.netpol.allowName" (list $root "gateway") }}
+  labels:
+    {{- include "asker.serviceLabels" (list $root "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "gateway") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.ingressControllerPeer" $root | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# --- web: public static UI; accepts only from the ingress controller -----------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.netpol.allowName" (list $root "web") }}
+  labels:
+    {{- include "asker.serviceLabels" (list $root "web") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "web") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.ingressControllerPeer" $root | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 80
+---
+# --- query: hybrid search gRPC; accepts only from gateway ----------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.netpol.allowName" (list $root "query") }}
+  labels:
+    {{- include "asker.serviceLabels" (list $root "query") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "query") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "gateway") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 9201
+---
+# --- control-plane: tenant/token registry gRPC; from gateway + connector-hub ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.netpol.allowName" (list $root "control-plane") }}
+  labels:
+    {{- include "asker.serviceLabels" (list $root "control-plane") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "control-plane") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "gateway") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "connector-hub") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9100
+        - protocol: TCP
+          port: 9101
+---
+# --- connector-hub: orchestration + internal media (decrypt/thumbnail) HTTP -----
+# Accepts from gateway (connector admin/sync API) and enrich (internal media URL,
+# HUB_MEDIA_URL in compose). Its OWN egress to external connectors carries the
+# SSRF caveat (ADR-012) and is handled in templates/netpol/allow-egress.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.netpol.allowName" (list $root "connector-hub") }}
+  labels:
+    {{- include "asker.serviceLabels" (list $root "connector-hub") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "connector-hub") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "gateway") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "enrich") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9300
+---
+# --- clip: CLIP model service HTTP; accepts from query + enrich ----------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "asker.netpol.allowName" (list $root "clip") }}
+  labels:
+    {{- include "asker.serviceLabels" (list $root "clip") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list $root "clip") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "asker.netpol.appPeer" (list $root "query") | nindent 8 }}
+        {{- include "asker.netpol.appPeer" (list $root "enrich") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9800
+{{- end }}

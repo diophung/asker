@@ -28,17 +28,21 @@ var errVespaPermanent = errors.New("vespa rejected the request (4xx, permanent)"
 const feedTimeout = 10 * time.Second
 
 // writer turns canonical Documents from docs.enriched into Vespa document/v1
-// operations: tombstones become DELETEs, everything else a full-fields PUT
-// (plain PUT upserts — ?create=true semantics; see vespa/README.md).
+// operations: tombstones become DELETEs, everything else a full-document POST
+// (document/v1 "put": creates or fully replaces, so replays are idempotent).
+// PUT is reserved by document/v1 for partial updates with
+// {"fields":{"f":{"assign":...}}} syntax — never used here (see
+// vespa/README.md).
 type writer struct {
 	vespaURL string // base URL, no trailing slash
-	dim      int    // EMBEDDING_DIM; every chunk vector must have exactly this length
+	dim      int    // EMBEDDING_DIM; bge-m3 (text/ocr/asr/caption) chunk vectors must have exactly this length
+	clipDim  int    // CLIP_DIM; CLIP image/keyframe chunk vectors must have exactly this length (ADR-013)
 	timeout  time.Duration
 	client   *http.Client
 	log      *slog.Logger
 }
 
-func newWriter(vespaURL string, dim int, logger *slog.Logger) (*writer, error) {
+func newWriter(vespaURL string, dim, clipDim int, logger *slog.Logger) (*writer, error) {
 	vespaURL = strings.TrimRight(vespaURL, "/")
 	if vespaURL == "" {
 		return nil, errors.New("index-writer: vespa url must not be empty")
@@ -46,12 +50,21 @@ func newWriter(vespaURL string, dim int, logger *slog.Logger) (*writer, error) {
 	if dim <= 0 {
 		return nil, fmt.Errorf("index-writer: embedding dim must be positive, got %d", dim)
 	}
+	if clipDim <= 0 {
+		return nil, fmt.Errorf("index-writer: clip dim must be positive, got %d", clipDim)
+	}
+	if dim == clipDim {
+		// A chunk's vector is routed to embedding vs clip_embedding purely by
+		// its length (see buildFields); equal dims make that undecidable.
+		return nil, fmt.Errorf("index-writer: clip dim (%d) must differ from embedding dim (%d)", clipDim, dim)
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &writer{
 		vespaURL: vespaURL,
 		dim:      dim,
+		clipDim:  clipDim,
 		timeout:  feedTimeout,
 		client:   &http.Client{},
 		log:      logger.With("component", "index-writer.writer"),
@@ -97,7 +110,7 @@ func (w *writer) Handle(ctx context.Context, doc *askerv1.Document) error {
 	if err != nil {
 		return fmt.Errorf("index-writer: marshal feed for doc %s: %w", doc.GetDocId(), err)
 	}
-	if err := w.send(ctx, http.MethodPut, docURL, body, doc.GetDocId()); err != nil {
+	if err := w.send(ctx, http.MethodPost, docURL, body, doc.GetDocId()); err != nil {
 		return err
 	}
 	w.log.Info("document fed to vespa",
@@ -119,21 +132,40 @@ type feedDocument struct {
 	Fields vespaFields `json:"fields"`
 }
 
-// vespaFields mirrors the M1 schema feed shape exactly (vespa/README.md).
+// vespaFields mirrors the schema feed shape exactly (vespa/README.md) plus the
+// M3 media additions (ADR-013).
 type vespaFields struct {
-	DocID        string       `json:"doc_id"`
-	ConnectorID  string       `json:"connector_id"`
-	Type         string       `json:"type"`
-	Title        string       `json:"title"`
-	Body         string       `json:"body"`
-	Chunks       []string     `json:"chunks,omitempty"`
-	Embedding    *vespaTensor `json:"embedding,omitempty"`
-	Participants []string     `json:"participants,omitempty"`
-	MetadataJSON string       `json:"metadata_json"`
-	CreatedAt    int64        `json:"created_at"`
-	ModifiedAt   int64        `json:"modified_at"`
-	VersionEtag  string       `json:"version_etag"`
-	ACL          []string     `json:"acl,omitempty"`
+	DocID       string       `json:"doc_id"`
+	ConnectorID string       `json:"connector_id"`
+	Type        string       `json:"type"`
+	Title       string       `json:"title"`
+	Body        string       `json:"body"`
+	Chunks      []string     `json:"chunks,omitempty"`
+	Embedding   *vespaTensor `json:"embedding,omitempty"`
+	// CLIPEmbedding holds CLIP image/keyframe vectors (CLIP_DIM), keyed by the
+	// same chunk array index as Chunks. Present only when at least one chunk
+	// carries a CLIP vector; omitted entirely for pure-text documents (M3).
+	CLIPEmbedding *vespaTensor `json:"clip_embedding,omitempty"`
+	// ChunkStartsMs/ChunkEndsMs/ChunkModalities are parallel to Chunks (same
+	// index order). They anchor media chunks in time and label their kind so
+	// the query path can deep-link and tag hits (ADR-013). Text chunks carry
+	// 0/0/"text". Omitted when there are no chunks.
+	ChunkStartsMs   []int64  `json:"chunk_starts_ms,omitempty"`
+	ChunkEndsMs     []int64  `json:"chunk_ends_ms,omitempty"`
+	ChunkModalities []string `json:"chunk_modalities,omitempty"`
+	Participants    []string `json:"participants,omitempty"`
+	MetadataJSON    string   `json:"metadata_json"`
+	CreatedAt       int64    `json:"created_at"`
+	ModifiedAt      int64    `json:"modified_at"`
+	VersionEtag     string   `json:"version_etag"`
+	ACL             []string `json:"acl,omitempty"`
+	// Media metadata from Document.media (MediaInfo); zero/omitted for text
+	// documents (ADR-013).
+	MediaDurationMs int64  `json:"media_duration_ms,omitempty"`
+	MediaWidth      int64  `json:"media_width,omitempty"`
+	MediaHeight     int64  `json:"media_height,omitempty"`
+	ThumbnailKey    string `json:"thumbnail_key,omitempty"`
+	TranscriptLang  string `json:"transcript_lang,omitempty"`
 }
 
 // vespaTensor is the blocks form of the mixed tensor
@@ -144,36 +176,79 @@ type vespaTensor struct {
 }
 
 // buildFields converts a Document into the Vespa feed fields. It returns an
-// error when any chunk vector's length differs from EMBEDDING_DIM — a
-// misconfigured dimension must never silently index (ADR-005).
+// error when any chunk vector's length is neither EMBEDDING_DIM nor CLIP_DIM —
+// a misconfigured/mismatched dimension must never silently index (ADR-005,
+// ADR-013).
+//
+// Vector routing (M3): a chunk carries ONE vector in Chunk.embedding. The
+// destination Vespa field is decided BY ITS LENGTH, not its modality:
+//   - len == EMBEDDING_DIM -> the bge-m3 'embedding' tensor (text/ocr/asr/
+//     caption text vectors, the unified text space).
+//   - len == CLIP_DIM      -> the 'clip_embedding' tensor (CLIP image/keyframe
+//     vectors, the text->image space).
+//
+// The wave-1 enrich worker fills Chunk.embedding with the bge-m3 vector for
+// text chunks and the CLIP vector for image/keyframe chunks (modality is the
+// human-readable label; length is the machine-checkable discriminator). Any
+// other length dead-letters the record so a dim mismatch is never indexed.
 func (w *writer) buildFields(doc *askerv1.Document) (vespaFields, error) {
 	chunks := doc.GetChunks()
 	texts := make([]string, 0, len(chunks))
-	blocks := make(map[string][]float32, len(chunks))
+	textBlocks := make(map[string][]float32, len(chunks))
+	clipBlocks := make(map[string][]float32, len(chunks))
+	var startsMs, endsMs []int64
+	var modalities []string
+	if len(chunks) > 0 {
+		startsMs = make([]int64, len(chunks))
+		endsMs = make([]int64, len(chunks))
+		modalities = make([]string, len(chunks))
+	}
 	for i, c := range chunks {
 		texts = append(texts, c.GetText())
+		startsMs[i] = c.GetStartMs()
+		endsMs[i] = c.GetEndMs()
+		modalities[i] = chunkModality(c)
+
 		emb := c.GetEmbedding()
-		if len(emb) == 0 {
-			continue
-		}
-		if len(emb) != w.dim {
+		switch len(emb) {
+		case 0:
+			// No vector for this chunk (e.g. not yet enriched).
+		case w.dim:
+			textBlocks[strconv.Itoa(i)] = emb
+		case w.clipDim:
+			clipBlocks[strconv.Itoa(i)] = emb
+		default:
 			return vespaFields{}, fmt.Errorf(
-				"index-writer: doc %s chunk %d: embedding has %d dims, EMBEDDING_DIM is %d; refusing to index",
-				doc.GetDocId(), i, len(emb), w.dim)
+				"index-writer: doc %s chunk %d (modality %q): embedding has %d dims, expected EMBEDDING_DIM=%d or CLIP_DIM=%d; refusing to index",
+				doc.GetDocId(), i, chunkModality(c), len(emb), w.dim, w.clipDim)
 		}
-		blocks[strconv.Itoa(i)] = emb
 	}
 
-	// The embedding field is fed only when EVERY chunk has a vector; a
-	// partially embedded document would silently lose recall on the missing
-	// chunks, so feed it text-only and let a re-enrich fill the vectors.
+	// The bge-m3 embedding field is fed only when EVERY text-eligible chunk has
+	// a bge-m3 vector; a partially embedded document would silently lose recall
+	// on the missing chunks. CLIP-only chunks (keyframes/images) legitimately
+	// carry no bge-m3 vector, so they are excluded from this completeness check
+	// — the gate is "every non-CLIP chunk has a bge-m3 vector".
+	var textChunkCount int
+	for _, c := range chunks {
+		if len(c.GetEmbedding()) != w.clipDim {
+			textChunkCount++
+		}
+	}
 	var tensor *vespaTensor
 	switch {
-	case len(chunks) > 0 && len(blocks) == len(chunks):
-		tensor = &vespaTensor{Blocks: blocks}
-	case len(blocks) > 0:
-		w.log.Warn("document has vectors for only some chunks; feeding without embeddings",
-			"doc_id", doc.GetDocId(), "chunks", len(chunks), "with_vectors", len(blocks))
+	case textChunkCount > 0 && len(textBlocks) == textChunkCount:
+		tensor = &vespaTensor{Blocks: textBlocks}
+	case len(textBlocks) > 0:
+		w.log.Warn("document has bge-m3 vectors for only some text chunks; feeding without embeddings",
+			"doc_id", doc.GetDocId(), "text_chunks", textChunkCount, "with_vectors", len(textBlocks))
+	}
+
+	// clip_embedding is present only for chunks that actually carry a CLIP
+	// vector; the field is omitted entirely when no chunk has one (text docs).
+	var clipTensor *vespaTensor
+	if len(clipBlocks) > 0 {
+		clipTensor = &vespaTensor{Blocks: clipBlocks}
 	}
 
 	meta := doc.GetMetadata()
@@ -191,21 +266,45 @@ func (w *writer) buildFields(doc *askerv1.Document) (vespaFields, error) {
 		modified = m.GetSeconds()
 	}
 
+	// Media metadata (MediaInfo); all zero/empty for text documents, where the
+	// omitempty tags then drop the fields from the feed entirely.
+	media := doc.GetMedia()
+
 	return vespaFields{
-		DocID:        doc.GetDocId(),
-		ConnectorID:  doc.GetConnectorId(),
-		Type:         doc.GetType().String(),
-		Title:        doc.GetTitle(),
-		Body:         doc.GetBodyText(),
-		Chunks:       texts,
-		Embedding:    tensor,
-		Participants: participantStrings(doc.GetParticipants()),
-		MetadataJSON: string(metaJSON),
-		CreatedAt:    created,
-		ModifiedAt:   modified,
-		VersionEtag:  doc.GetVersionEtag(),
-		ACL:          doc.GetAcl().GetAllowedPrincipals(),
+		DocID:           doc.GetDocId(),
+		ConnectorID:     doc.GetConnectorId(),
+		Type:            doc.GetType().String(),
+		Title:           doc.GetTitle(),
+		Body:            doc.GetBodyText(),
+		Chunks:          texts,
+		Embedding:       tensor,
+		CLIPEmbedding:   clipTensor,
+		ChunkStartsMs:   startsMs,
+		ChunkEndsMs:     endsMs,
+		ChunkModalities: modalities,
+		Participants:    participantStrings(doc.GetParticipants()),
+		MetadataJSON:    string(metaJSON),
+		CreatedAt:       created,
+		ModifiedAt:      modified,
+		VersionEtag:     doc.GetVersionEtag(),
+		ACL:             doc.GetAcl().GetAllowedPrincipals(),
+		MediaDurationMs: media.GetDurationMs(),
+		MediaWidth:      int64(media.GetWidth()),
+		MediaHeight:     int64(media.GetHeight()),
+		ThumbnailKey:    media.GetThumbnail().GetKey(),
+		TranscriptLang:  media.GetTranscriptLang(),
 	}, nil
+}
+
+// chunkModality returns the chunk's modality, defaulting to "text" when unset
+// so the parallel chunk_modalities array always has a meaningful label (the
+// proto leaves modality empty for plain text chunks). The query path expects
+// one of "text"|"ocr"|"asr"|"caption" (ADR-013).
+func chunkModality(c *askerv1.Chunk) string {
+	if m := c.GetModality(); m != "" {
+		return m
+	}
+	return "text"
 }
 
 // participantStrings renders participants as "Name <email>"; the display name

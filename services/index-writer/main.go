@@ -1,6 +1,6 @@
 // Command index-writer consumes enriched documents from docs.enriched and
-// feeds them into Vespa: upserts via document/v1 PUT into the tenant's
-// streaming group, tombstones via document/v1 DELETE. Delivery is
+// feeds them into Vespa: upserts via document/v1 POST (full-document put) into
+// the tenant's streaming group, tombstones via document/v1 DELETE. Delivery is
 // at-least-once (kafkautil); Vespa upserts keyed by doc id make replays
 // no-ops (ADR-004).
 package main
@@ -79,7 +79,7 @@ func run(ctx context.Context, cfg indexWriterConfig, logger *slog.Logger) error 
 		return fmt.Errorf("ensure topics: %w", err)
 	}
 
-	w, err := newWriter(cfg.VespaURL, cfg.EmbeddingDim, logger)
+	w, err := newWriter(cfg.VespaURL, cfg.EmbeddingDim, cfg.CLIPDim, logger)
 	if err != nil {
 		return err
 	}
@@ -107,13 +107,18 @@ func run(ctx context.Context, cfg indexWriterConfig, logger *slog.Logger) error 
 		healthErr <- nil
 	}()
 
+	pm := newPipelineMetrics()
+	// The index-writer consumes docs.enriched and feeds Vespa; the metric topic
+	// label is the consumed topic (TopicDocsEnriched).
+	handle := pm.instrument(serviceName, kafkautil.TopicDocsEnriched, w.Handle)
+
 	consumeErr := make(chan error, 1)
-	go func() { consumeErr <- consumer.Run(ctx, w.Handle) }()
+	go func() { consumeErr <- consumer.Run(ctx, handle) }()
 
 	logger.Info("index-writer consuming",
 		"topic", kafkautil.TopicDocsEnriched, "group", consumerGroup,
 		"vespa_url", cfg.VespaURL, "embedding_dim", cfg.EmbeddingDim,
-		"health_addr", ln.Addr().String())
+		"clip_dim", cfg.CLIPDim, "health_addr", ln.Addr().String())
 
 	shutdownHealth := func() error {
 		shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -175,7 +180,14 @@ func newHealthHandler(vespaURL string) http.Handler {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(rw, "ready")
 	})
-	return mux
+	// Prometheus scrape endpoint on the existing health server; works without an
+	// OTLP collector. Exposes the pipeline records/stage-duration metrics and
+	// the asker_index_doc_age_seconds freshness histogram.
+	mux.Handle("GET /metrics", telemetry.MetricsHandler())
+	// Wrap in the RED middleware (like gateway/query/ingest) so this service also
+	// emits http_server_requests_total{job="index-writer"} — without it the
+	// AskerService5xxRateHigh alert silently never covers index-writer (M5 review).
+	return telemetry.HTTPMiddleware(serviceName)(mux)
 }
 
 // runHealthcheck probes the local /healthz endpoint and returns a process

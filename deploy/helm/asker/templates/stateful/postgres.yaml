@@ -1,0 +1,126 @@
+{{- /*
+================================================================================
+postgres — self-hosted StatefulSet (control-plane token vault metadata store).
+Compose: image postgres:17, container port 5432, env POSTGRES_USER/PASSWORD/DB,
+volume postgres-data:/var/lib/postgresql/data, healthcheck pg_isready -U asker -d asker.
+
+Service "postgres" (compose DNS) resolves config.postgresHost unchanged. Creds come
+from the EXISTING dev Secret (asker.secretName): POSTGRES_USER / POSTGRES_PASSWORD
+(dev defaults asker/asker). DB name is non-secret => config.postgresDb. PVC uses
+persistence.storageClass (default "" => cluster default). Gated by stateful.postgres.deploy
+(default true); flip false + point config.postgresHost at a managed Postgres (ADR-014 §4).
+================================================================================
+*/ -}}
+{{- $dep := "postgres" -}}
+{{- if eq (include "asker.stateful.enabled" (list . $dep)) "true" -}}
+{{- $sf := .Values.stateful | default dict -}}
+{{- $c := index $sf $dep | default dict -}}
+{{- $img := $c.image | default "postgres:17" -}}
+{{- $storage := ($c.storage | default dict).size | default "8Gi" -}}
+{{- $port := 5432 -}}
+{{- $pgUser := ((.Values.secrets | default dict).dev | default dict).postgresUser | default "asker" -}}
+{{- $pgDb := .Values.config.postgresDb | default "asker" -}}
+{{- $ports := list (dict "name" "postgres" "port" $port "appProtocol" "postgresql") -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "asker.stateful.fullname" (list . $dep) }}
+  labels:
+    {{- include "asker.stateful.labels" (list . $dep) | nindent 4 }}
+spec:
+  serviceName: {{ printf "%s-headless" $dep }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "asker.stateful.labels" (list . $dep) | nindent 8 }}
+      {{- with $c.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with ($c.imagePullSecrets | default .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml ($c.podSecurityContext | default (dict "fsGroup" 999 "seccompProfile" (dict "type" "RuntimeDefault"))) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $c.terminationGracePeriodSeconds | default 30 }}
+      containers:
+        - name: postgres
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ $c.imagePullPolicy | default .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "asker.stateful.containerSecurityContext" (list . $dep) | nindent 12 }}
+          ports:
+            - name: postgres
+              containerPort: {{ $port }}
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "asker.secretName" . }}
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "asker.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              value: {{ $pgDb | quote }}
+            # Subdir keeps the data dir off the volume mount root (lost+found etc.).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $pgUser | quote }}, "-d", {{ $pgDb | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $pgUser | quote }}, "-d", {{ $pgDb | quote }}]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with ($c.resources | default (dict "requests" (dict "cpu" "100m" "memory" "256Mi") "limits" (dict "cpu" "2" "memory" "1Gi"))) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "asker.stateful.selectorLabels" (list . $dep) | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "asker.stateful.storageClass" (list . $dep) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ $storage | quote }}
+---
+{{ include "asker.stateful.headlessService" (list . $dep $ports) }}
+---
+{{ include "asker.stateful.clusterIPService" (list . $dep $ports) }}
+{{- end -}}

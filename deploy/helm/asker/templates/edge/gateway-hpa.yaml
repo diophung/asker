@@ -1,0 +1,39 @@
+{{- /*
+Gateway HorizontalPodAutoscaler. Stateless edge -> scales on CPU (and optionally
+memory). When autoscaling.enabled the Deployment omits a static replica count so
+the HPA owns it. Spec §2.7: "Everything stateless ... scales horizontally on HPA."
+*/ -}}
+{{- $svc := "gateway" -}}
+{{- $cfg := .Values.services.gateway -}}
+{{- if $cfg.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "asker.serviceFullname" (list . $svc) }}
+  labels:
+    {{- include "asker.serviceLabels" (list . $svc) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "asker.serviceFullname" (list . $svc) }}
+  minReplicas: {{ $cfg.autoscaling.minReplicas }}
+  maxReplicas: {{ $cfg.autoscaling.maxReplicas }}
+  metrics:
+    {{- with $cfg.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with $cfg.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+{{- end }}

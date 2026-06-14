@@ -1,0 +1,19 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": [
+            "text/plain; charset=utf-8"
+          ]
+        },
+        "body": "3/15/24, 09:00 - Messages and calls are end-to-end encrypted.\n3/15/24, 09:42 - Alice: hello from the dash format\n3/15/24, 09:43 - Bob: line one\nline two continues here\n"
+      }
+    }
+  ]
+}

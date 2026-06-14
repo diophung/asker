@@ -54,7 +54,7 @@ func TestValidate(t *testing.T) {
 	ctx := context.Background()
 	c := newTestConnector()
 
-	t.Run("ok with token against fake (getProfile fallback)", func(t *testing.T) {
+	t.Run("ok with token via getProfile (fake's canonical endpoint)", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t)
 		if err := c.Validate(ctx, f.connectorConfig("", nil)); err != nil {
@@ -62,9 +62,9 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("ok with token via getProfile", func(t *testing.T) {
+	t.Run("ok with token when getProfile 404s (messages.list fallback)", func(t *testing.T) {
 		t.Parallel()
-		f := newFixtureWithProfile(t)
+		f := newFixtureWithoutProfile(t)
 		if err := c.Validate(ctx, f.connectorConfig("", nil)); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
@@ -72,7 +72,7 @@ func TestValidate(t *testing.T) {
 
 	t.Run("profile email mismatch", func(t *testing.T) {
 		t.Parallel()
-		f := newFixtureWithProfile(t)
+		f := newFixture(t)
 		cfg := f.connectorConfig("", nil)
 		cfg.ConfigJSON = []byte(`{"base_url":"` + f.ts.URL + `","user_email":"someone-else@example.com"}`)
 		err := c.Validate(ctx, cfg)

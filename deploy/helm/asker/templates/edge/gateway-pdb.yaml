@@ -1,0 +1,25 @@
+{{- /*
+Gateway PodDisruptionBudget — keeps the public edge available during voluntary
+disruptions (node drain/upgrade). M4 exit: "chaos test (kill any one pod) shows
+no failed queries beyond retry." minAvailable is a value; with >=2 replicas a
+default minAvailable:1 tolerates one pod loss.
+*/ -}}
+{{- $svc := "gateway" -}}
+{{- $cfg := .Values.services.gateway -}}
+{{- if $cfg.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "asker.serviceFullname" (list . $svc) }}
+  labels:
+    {{- include "asker.serviceLabels" (list . $svc) | nindent 4 }}
+spec:
+  {{- if hasKey $cfg.pdb "minAvailable" }}
+  minAvailable: {{ $cfg.pdb.minAvailable }}
+  {{- else if hasKey $cfg.pdb "maxUnavailable" }}
+  maxUnavailable: {{ $cfg.pdb.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "asker.serviceSelectorLabels" (list . $svc) | nindent 6 }}
+{{- end }}

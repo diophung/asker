@@ -194,6 +194,40 @@ class DeleteTokenResponse(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class DeleteTenantRequest(_message.Message):
+    __slots__ = ("confirm",)
+    CONFIRM_FIELD_NUMBER: _ClassVar[int]
+    confirm: str
+    def __init__(self, confirm: _Optional[str] = ...) -> None: ...
+
+class DeleteReport(_message.Message):
+    __slots__ = ("tenant_id", "connector_instances_deleted", "tokens_deleted", "dek_destroyed", "vespa_group_purged", "blobs_deleted", "redis_purged", "verified_empty", "actor")
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    CONNECTOR_INSTANCES_DELETED_FIELD_NUMBER: _ClassVar[int]
+    TOKENS_DELETED_FIELD_NUMBER: _ClassVar[int]
+    DEK_DESTROYED_FIELD_NUMBER: _ClassVar[int]
+    VESPA_GROUP_PURGED_FIELD_NUMBER: _ClassVar[int]
+    BLOBS_DELETED_FIELD_NUMBER: _ClassVar[int]
+    REDIS_PURGED_FIELD_NUMBER: _ClassVar[int]
+    VERIFIED_EMPTY_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    connector_instances_deleted: int
+    tokens_deleted: int
+    dek_destroyed: bool
+    vespa_group_purged: bool
+    blobs_deleted: int
+    redis_purged: bool
+    verified_empty: bool
+    actor: str
+    def __init__(self, tenant_id: _Optional[str] = ..., connector_instances_deleted: _Optional[int] = ..., tokens_deleted: _Optional[int] = ..., dek_destroyed: _Optional[bool] = ..., vespa_group_purged: _Optional[bool] = ..., blobs_deleted: _Optional[int] = ..., redis_purged: _Optional[bool] = ..., verified_empty: _Optional[bool] = ..., actor: _Optional[str] = ...) -> None: ...
+
+class DeleteTenantResponse(_message.Message):
+    __slots__ = ("report",)
+    REPORT_FIELD_NUMBER: _ClassVar[int]
+    report: DeleteReport
+    def __init__(self, report: _Optional[_Union[DeleteReport, _Mapping]] = ...) -> None: ...
+
 class ListAllInstancesRequest(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
@@ -211,3 +245,71 @@ class TenantInstance(_message.Message):
     tenant_id: str
     instance: ConnectorInstance
     def __init__(self, tenant_id: _Optional[str] = ..., instance: _Optional[_Union[ConnectorInstance, _Mapping]] = ...) -> None: ...
+
+class TenantUsage(_message.Message):
+    __slots__ = ("tenant_id", "created", "connector_instances", "docs_emitted", "suspended")
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    CREATED_FIELD_NUMBER: _ClassVar[int]
+    CONNECTOR_INSTANCES_FIELD_NUMBER: _ClassVar[int]
+    DOCS_EMITTED_FIELD_NUMBER: _ClassVar[int]
+    SUSPENDED_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    created: _timestamp_pb2.Timestamp
+    connector_instances: int
+    docs_emitted: int
+    suspended: bool
+    def __init__(self, tenant_id: _Optional[str] = ..., created: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., connector_instances: _Optional[int] = ..., docs_emitted: _Optional[int] = ..., suspended: _Optional[bool] = ...) -> None: ...
+
+class ListTenantsRequest(_message.Message):
+    __slots__ = ("limit", "page_token")
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    limit: int
+    page_token: str
+    def __init__(self, limit: _Optional[int] = ..., page_token: _Optional[str] = ...) -> None: ...
+
+class ListTenantsResponse(_message.Message):
+    __slots__ = ("tenants", "next_page_token")
+    TENANTS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    tenants: _containers.RepeatedCompositeFieldContainer[TenantUsage]
+    next_page_token: str
+    def __init__(self, tenants: _Optional[_Iterable[_Union[TenantUsage, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
+
+class GetTenantUsageRequest(_message.Message):
+    __slots__ = ("tenant_id",)
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
+
+class GetTenantUsageResponse(_message.Message):
+    __slots__ = ("usage",)
+    USAGE_FIELD_NUMBER: _ClassVar[int]
+    usage: TenantUsage
+    def __init__(self, usage: _Optional[_Union[TenantUsage, _Mapping]] = ...) -> None: ...
+
+class SuspendTenantRequest(_message.Message):
+    __slots__ = ("tenant_id", "suspended")
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    SUSPENDED_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    suspended: bool
+    def __init__(self, tenant_id: _Optional[str] = ..., suspended: _Optional[bool] = ...) -> None: ...
+
+class SuspendTenantResponse(_message.Message):
+    __slots__ = ("instances_changed",)
+    INSTANCES_CHANGED_FIELD_NUMBER: _ClassVar[int]
+    instances_changed: int
+    def __init__(self, instances_changed: _Optional[int] = ...) -> None: ...
+
+class AdminDeleteTenantRequest(_message.Message):
+    __slots__ = ("tenant_id",)
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    def __init__(self, tenant_id: _Optional[str] = ...) -> None: ...
+
+class AdminDeleteTenantResponse(_message.Message):
+    __slots__ = ("report",)
+    REPORT_FIELD_NUMBER: _ClassVar[int]
+    report: DeleteReport
+    def __init__(self, report: _Optional[_Union[DeleteReport, _Mapping]] = ...) -> None: ...

@@ -1,35 +1,36 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"fmt"
-	"net"
-	"strconv"
-	"strings"
+	"errors"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
-// redisCounter is a minimal RESP2 Redis client implementing exactly the
-// INCR+EXPIRE pipeline the rate limiter needs. go.mod is frozen and go-redis
-// is not in it, so the two commands are spoken directly over TCP with the
-// standard library; a small connection pool avoids a dial per request.
-type redisCounter struct {
-	addr    string
-	timeout time.Duration
-	pool    chan *redisConn
-}
+// errStateNotFound is returned by oauthStateStore.GetDel when the key is
+// absent — either it expired (TTL) or it was already consumed (single use).
+// Callers must NOT distinguish the two: both map to the same opaque OAuth
+// error so a probe cannot learn whether a state value ever existed.
+var errStateNotFound = errors.New("oauth state not found")
 
-type redisConn struct {
-	c  net.Conn
-	br *bufio.Reader
+// redisCounter backs the rate limiter's counter interface with Redis via
+// go-redis. The client dials lazily, so constructing it performs no I/O.
+type redisCounter struct {
+	client *redis.Client
 }
 
 func newRedisCounter(addr string) *redisCounter {
 	return &redisCounter{
-		addr:    addr,
-		timeout: 2 * time.Second, // a slow Redis must not stall requests; fail open fast
-		pool:    make(chan *redisConn, 8),
+		client: redis.NewClient(&redis.Options{
+			Addr: addr,
+			// A slow Redis must not stall requests; the limiter fails open
+			// fast on error, so cap every network op and never retry.
+			DialTimeout:  2 * time.Second,
+			ReadTimeout:  2 * time.Second,
+			WriteTimeout: 2 * time.Second,
+			MaxRetries:   -1,
+		}),
 	}
 }
 
@@ -37,105 +38,36 @@ func newRedisCounter(addr string) *redisCounter {
 // post-increment count. Refreshing the TTL on every hit is harmless because
 // the key embeds the window start.
 func (rc *redisCounter) Incr(ctx context.Context, key string, ttl time.Duration) (int64, error) {
-	conn, err := rc.get(ctx)
-	if err != nil {
+	pipe := rc.client.Pipeline()
+	incr := pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, ttl)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return 0, err
 	}
-	n, err := rc.incrOn(ctx, conn, key, ttl)
+	return incr.Val(), nil
+}
+
+// Set stores value under key with the given TTL (SET key value EX ttl). It is
+// used by the OAuth state store to persist the short-lived, single-use flow
+// state the unauthenticated callback later consumes.
+func (rc *redisCounter) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	return rc.client.Set(ctx, key, value, ttl).Err()
+}
+
+// GetDel atomically reads and deletes key (Redis GETDEL), giving the OAuth
+// state its single-use guarantee at the server: a replayed callback finds the
+// key already gone. It returns errStateNotFound when the key is absent
+// (expired OR already consumed); the two are deliberately indistinguishable.
+func (rc *redisCounter) GetDel(ctx context.Context, key string) (string, error) {
+	v, err := rc.client.GetDel(ctx, key).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", errStateNotFound
+	}
 	if err != nil {
-		// The connection state is unknown (possibly unread replies): drop it.
-		_ = conn.c.Close()
-		return 0, err
+		return "", err
 	}
-	rc.put(conn)
-	return n, nil
+	return v, nil
 }
 
-func (rc *redisCounter) incrOn(ctx context.Context, conn *redisConn, key string, ttl time.Duration) (int64, error) {
-	deadline := time.Now().Add(rc.timeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	if err := conn.c.SetDeadline(deadline); err != nil {
-		return 0, fmt.Errorf("redis: set deadline: %w", err)
-	}
-
-	cmd := appendRESPCommand(nil, "INCR", key)
-	cmd = appendRESPCommand(cmd, "EXPIRE", key, strconv.FormatInt(int64(ttl/time.Second), 10))
-	if _, err := conn.c.Write(cmd); err != nil {
-		return 0, fmt.Errorf("redis: write: %w", err)
-	}
-
-	n, err := readRESPInt(conn.br) // INCR reply
-	if err != nil {
-		return 0, err
-	}
-	if _, err := readRESPInt(conn.br); err != nil { // EXPIRE reply
-		return 0, err
-	}
-	return n, nil
-}
-
-// get returns a pooled connection or dials a new one.
-func (rc *redisCounter) get(ctx context.Context) (*redisConn, error) {
-	select {
-	case conn := <-rc.pool:
-		return conn, nil
-	default:
-	}
-	d := net.Dialer{Timeout: rc.timeout}
-	c, err := d.DialContext(ctx, "tcp", rc.addr)
-	if err != nil {
-		return nil, fmt.Errorf("redis: dial %s: %w", rc.addr, err)
-	}
-	return &redisConn{c: c, br: bufio.NewReader(c)}, nil
-}
-
-// put returns a healthy connection to the pool, closing it when full.
-func (rc *redisCounter) put(conn *redisConn) {
-	select {
-	case rc.pool <- conn:
-	default:
-		_ = conn.c.Close()
-	}
-}
-
-// appendRESPCommand appends the RESP2 encoding of a command to b.
-func appendRESPCommand(b []byte, args ...string) []byte {
-	b = append(b, '*')
-	b = strconv.AppendInt(b, int64(len(args)), 10)
-	b = append(b, '\r', '\n')
-	for _, a := range args {
-		b = append(b, '$')
-		b = strconv.AppendInt(b, int64(len(a)), 10)
-		b = append(b, '\r', '\n')
-		b = append(b, a...)
-		b = append(b, '\r', '\n')
-	}
-	return b
-}
-
-// readRESPInt reads one reply that must be a RESP integer. Error replies and
-// any other type are reported as errors (the caller discards the connection).
-func readRESPInt(br *bufio.Reader) (int64, error) {
-	line, err := br.ReadString('\n')
-	if err != nil {
-		return 0, fmt.Errorf("redis: read reply: %w", err)
-	}
-	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-	if line == "" {
-		return 0, fmt.Errorf("redis: empty reply")
-	}
-	switch line[0] {
-	case ':':
-		n, err := strconv.ParseInt(line[1:], 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("redis: malformed integer reply %q", line)
-		}
-		return n, nil
-	case '-':
-		return 0, fmt.Errorf("redis: error reply: %s", line[1:])
-	default:
-		return 0, fmt.Errorf("redis: unexpected reply type %q", line)
-	}
-}
+// Close releases the client's connection pool.
+func (rc *redisCounter) Close() error { return rc.client.Close() }

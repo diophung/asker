@@ -36,6 +36,7 @@ const (
 	ControlPlaneService_PutToken_FullMethodName                = "/asker.controlplane.v1.ControlPlaneService/PutToken"
 	ControlPlaneService_GetToken_FullMethodName                = "/asker.controlplane.v1.ControlPlaneService/GetToken"
 	ControlPlaneService_DeleteToken_FullMethodName             = "/asker.controlplane.v1.ControlPlaneService/DeleteToken"
+	ControlPlaneService_DeleteTenant_FullMethodName            = "/asker.controlplane.v1.ControlPlaneService/DeleteTenant"
 )
 
 // ControlPlaneServiceClient is the client API for ControlPlaneService service.
@@ -58,6 +59,16 @@ type ControlPlaneServiceClient interface {
 	PutToken(ctx context.Context, in *PutTokenRequest, opts ...grpc.CallOption) (*PutTokenResponse, error)
 	GetToken(ctx context.Context, in *GetTokenRequest, opts ...grpc.CallOption) (*GetTokenResponse, error)
 	DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error)
+	// DeleteTenant erases the CALLER's own tenant across every store (the GDPR
+	// right-to-erasure cascade, M6). The tenant is taken from the verified caller
+	// context (x-asker-tenant) — NEVER from the request — so a user can only ever
+	// delete their OWN data here; cross-tenant admin erasure is AdminService.
+	// AdminDeleteTenant. The request carries an explicit confirmation token equal
+	// to the caller's tenant id, a defense-in-depth guard against an accidental
+	// call (the server still ignores it for tenant SELECTION). Irreversible: it
+	// crypto-shreds the tenant DEK, purges Postgres/Vespa/MinIO/Redis, and
+	// verifies emptiness before reporting done.
+	DeleteTenant(ctx context.Context, in *DeleteTenantRequest, opts ...grpc.CallOption) (*DeleteTenantResponse, error)
 }
 
 type controlPlaneServiceClient struct {
@@ -168,6 +179,16 @@ func (c *controlPlaneServiceClient) DeleteToken(ctx context.Context, in *DeleteT
 	return out, nil
 }
 
+func (c *controlPlaneServiceClient) DeleteTenant(ctx context.Context, in *DeleteTenantRequest, opts ...grpc.CallOption) (*DeleteTenantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteTenantResponse)
+	err := c.cc.Invoke(ctx, ControlPlaneService_DeleteTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServiceServer is the server API for ControlPlaneService service.
 // All implementations must embed UnimplementedControlPlaneServiceServer
 // for forward compatibility.
@@ -188,6 +209,16 @@ type ControlPlaneServiceServer interface {
 	PutToken(context.Context, *PutTokenRequest) (*PutTokenResponse, error)
 	GetToken(context.Context, *GetTokenRequest) (*GetTokenResponse, error)
 	DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error)
+	// DeleteTenant erases the CALLER's own tenant across every store (the GDPR
+	// right-to-erasure cascade, M6). The tenant is taken from the verified caller
+	// context (x-asker-tenant) — NEVER from the request — so a user can only ever
+	// delete their OWN data here; cross-tenant admin erasure is AdminService.
+	// AdminDeleteTenant. The request carries an explicit confirmation token equal
+	// to the caller's tenant id, a defense-in-depth guard against an accidental
+	// call (the server still ignores it for tenant SELECTION). Irreversible: it
+	// crypto-shreds the tenant DEK, purges Postgres/Vespa/MinIO/Redis, and
+	// verifies emptiness before reporting done.
+	DeleteTenant(context.Context, *DeleteTenantRequest) (*DeleteTenantResponse, error)
 	mustEmbedUnimplementedControlPlaneServiceServer()
 }
 
@@ -227,6 +258,9 @@ func (UnimplementedControlPlaneServiceServer) GetToken(context.Context, *GetToke
 }
 func (UnimplementedControlPlaneServiceServer) DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteToken not implemented")
+}
+func (UnimplementedControlPlaneServiceServer) DeleteTenant(context.Context, *DeleteTenantRequest) (*DeleteTenantResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteTenant not implemented")
 }
 func (UnimplementedControlPlaneServiceServer) mustEmbedUnimplementedControlPlaneServiceServer() {}
 func (UnimplementedControlPlaneServiceServer) testEmbeddedByValue()                             {}
@@ -429,6 +463,24 @@ func _ControlPlaneService_DeleteToken_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlaneService_DeleteTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServiceServer).DeleteTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlaneService_DeleteTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServiceServer).DeleteTenant(ctx, req.(*DeleteTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlaneService_ServiceDesc is the grpc.ServiceDesc for ControlPlaneService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -475,6 +527,10 @@ var ControlPlaneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteToken",
 			Handler:    _ControlPlaneService_DeleteToken_Handler,
+		},
+		{
+			MethodName: "DeleteTenant",
+			Handler:    _ControlPlaneService_DeleteTenant_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -591,6 +647,272 @@ var SchedulerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListAllInstances",
 			Handler:    _SchedulerService_ListAllInstances_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "asker/controlplane/v1/controlplane.proto",
+}
+
+const (
+	AdminService_ListTenants_FullMethodName       = "/asker.controlplane.v1.AdminService/ListTenants"
+	AdminService_GetTenantUsage_FullMethodName    = "/asker.controlplane.v1.AdminService/GetTenantUsage"
+	AdminService_SuspendTenant_FullMethodName     = "/asker.controlplane.v1.AdminService/SuspendTenant"
+	AdminService_AdminDeleteTenant_FullMethodName = "/asker.controlplane.v1.AdminService/AdminDeleteTenant"
+)
+
+// AdminServiceClient is the client API for AdminService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// AdminService is the privileged, DELIBERATELY cross-tenant operator surface
+// (M6). Unlike every ControlPlaneService RPC (scoped to the verified caller's
+// own tenant), admin RPCs act on an arbitrary tenant_id in the REQUEST. That is
+// safe ONLY because:
+//  1. authorization is a DISTINCT admin check, not mere authentication: the
+//     gateway requires an "admin" role/scope claim in the verified token
+//     before it will dial these RPCs (see docs; the claim is set via a
+//     Keycloak realm/client role mapper, NOT self-asserted);
+//  2. like SchedulerService, this service is exempt from the per-tenant
+//     x-asker-tenant metadata requirement by EXACT full-method name (never a
+//     prefix), and is never reachable outside the cluster-internal network
+//     (ADR-009; M4 NetworkPolicy + mTLS enforce it);
+//  3. every admin call is audit-logged (actor + target tenant + action), no
+//     secrets.
+//
+// The cross-tenant exemption pattern mirrors
+// SchedulerService.ListAllInstances exactly.
+type AdminServiceClient interface {
+	// ListTenants enumerates registered tenants (paged) with summary usage.
+	ListTenants(ctx context.Context, in *ListTenantsRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error)
+	// GetTenantUsage returns one tenant's resource counts (quota/abuse triage).
+	GetTenantUsage(ctx context.Context, in *GetTenantUsageRequest, opts ...grpc.CallOption) (*GetTenantUsageResponse, error)
+	// SuspendTenant flips every connector instance to PAUSED (and back), halting
+	// sync without destroying data — the reversible abuse control.
+	SuspendTenant(ctx context.Context, in *SuspendTenantRequest, opts ...grpc.CallOption) (*SuspendTenantResponse, error)
+	// AdminDeleteTenant runs the full GDPR erasure cascade for an ARBITRARY
+	// tenant (operator-initiated erasure / abuse takedown). Same cascade as
+	// ControlPlaneService.DeleteTenant, but the target is the request tenant_id.
+	AdminDeleteTenant(ctx context.Context, in *AdminDeleteTenantRequest, opts ...grpc.CallOption) (*AdminDeleteTenantResponse, error)
+}
+
+type adminServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAdminServiceClient(cc grpc.ClientConnInterface) AdminServiceClient {
+	return &adminServiceClient{cc}
+}
+
+func (c *adminServiceClient) ListTenants(ctx context.Context, in *ListTenantsRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantsResponse)
+	err := c.cc.Invoke(ctx, AdminService_ListTenants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) GetTenantUsage(ctx context.Context, in *GetTenantUsageRequest, opts ...grpc.CallOption) (*GetTenantUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantUsageResponse)
+	err := c.cc.Invoke(ctx, AdminService_GetTenantUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) SuspendTenant(ctx context.Context, in *SuspendTenantRequest, opts ...grpc.CallOption) (*SuspendTenantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SuspendTenantResponse)
+	err := c.cc.Invoke(ctx, AdminService_SuspendTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) AdminDeleteTenant(ctx context.Context, in *AdminDeleteTenantRequest, opts ...grpc.CallOption) (*AdminDeleteTenantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminDeleteTenantResponse)
+	err := c.cc.Invoke(ctx, AdminService_AdminDeleteTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AdminServiceServer is the server API for AdminService service.
+// All implementations must embed UnimplementedAdminServiceServer
+// for forward compatibility.
+//
+// AdminService is the privileged, DELIBERATELY cross-tenant operator surface
+// (M6). Unlike every ControlPlaneService RPC (scoped to the verified caller's
+// own tenant), admin RPCs act on an arbitrary tenant_id in the REQUEST. That is
+// safe ONLY because:
+//  1. authorization is a DISTINCT admin check, not mere authentication: the
+//     gateway requires an "admin" role/scope claim in the verified token
+//     before it will dial these RPCs (see docs; the claim is set via a
+//     Keycloak realm/client role mapper, NOT self-asserted);
+//  2. like SchedulerService, this service is exempt from the per-tenant
+//     x-asker-tenant metadata requirement by EXACT full-method name (never a
+//     prefix), and is never reachable outside the cluster-internal network
+//     (ADR-009; M4 NetworkPolicy + mTLS enforce it);
+//  3. every admin call is audit-logged (actor + target tenant + action), no
+//     secrets.
+//
+// The cross-tenant exemption pattern mirrors
+// SchedulerService.ListAllInstances exactly.
+type AdminServiceServer interface {
+	// ListTenants enumerates registered tenants (paged) with summary usage.
+	ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error)
+	// GetTenantUsage returns one tenant's resource counts (quota/abuse triage).
+	GetTenantUsage(context.Context, *GetTenantUsageRequest) (*GetTenantUsageResponse, error)
+	// SuspendTenant flips every connector instance to PAUSED (and back), halting
+	// sync without destroying data — the reversible abuse control.
+	SuspendTenant(context.Context, *SuspendTenantRequest) (*SuspendTenantResponse, error)
+	// AdminDeleteTenant runs the full GDPR erasure cascade for an ARBITRARY
+	// tenant (operator-initiated erasure / abuse takedown). Same cascade as
+	// ControlPlaneService.DeleteTenant, but the target is the request tenant_id.
+	AdminDeleteTenant(context.Context, *AdminDeleteTenantRequest) (*AdminDeleteTenantResponse, error)
+	mustEmbedUnimplementedAdminServiceServer()
+}
+
+// UnimplementedAdminServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAdminServiceServer struct{}
+
+func (UnimplementedAdminServiceServer) ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTenants not implemented")
+}
+func (UnimplementedAdminServiceServer) GetTenantUsage(context.Context, *GetTenantUsageRequest) (*GetTenantUsageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTenantUsage not implemented")
+}
+func (UnimplementedAdminServiceServer) SuspendTenant(context.Context, *SuspendTenantRequest) (*SuspendTenantResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SuspendTenant not implemented")
+}
+func (UnimplementedAdminServiceServer) AdminDeleteTenant(context.Context, *AdminDeleteTenantRequest) (*AdminDeleteTenantResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AdminDeleteTenant not implemented")
+}
+func (UnimplementedAdminServiceServer) mustEmbedUnimplementedAdminServiceServer() {}
+func (UnimplementedAdminServiceServer) testEmbeddedByValue()                      {}
+
+// UnsafeAdminServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AdminServiceServer will
+// result in compilation errors.
+type UnsafeAdminServiceServer interface {
+	mustEmbedUnimplementedAdminServiceServer()
+}
+
+func RegisterAdminServiceServer(s grpc.ServiceRegistrar, srv AdminServiceServer) {
+	// If the following call pancis, it indicates UnimplementedAdminServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&AdminService_ServiceDesc, srv)
+}
+
+func _AdminService_ListTenants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).ListTenants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_ListTenants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).ListTenants(ctx, req.(*ListTenantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_GetTenantUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).GetTenantUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_GetTenantUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).GetTenantUsage(ctx, req.(*GetTenantUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_SuspendTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SuspendTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).SuspendTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_SuspendTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).SuspendTenant(ctx, req.(*SuspendTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_AdminDeleteTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminDeleteTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).AdminDeleteTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_AdminDeleteTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).AdminDeleteTenant(ctx, req.(*AdminDeleteTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// AdminService_ServiceDesc is the grpc.ServiceDesc for AdminService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var AdminService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "asker.controlplane.v1.AdminService",
+	HandlerType: (*AdminServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListTenants",
+			Handler:    _AdminService_ListTenants_Handler,
+		},
+		{
+			MethodName: "GetTenantUsage",
+			Handler:    _AdminService_GetTenantUsage_Handler,
+		},
+		{
+			MethodName: "SuspendTenant",
+			Handler:    _AdminService_SuspendTenant_Handler,
+		},
+		{
+			MethodName: "AdminDeleteTenant",
+			Handler:    _AdminService_AdminDeleteTenant_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

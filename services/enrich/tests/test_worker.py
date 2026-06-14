@@ -332,6 +332,114 @@ async def test_commit_failure_is_logged_not_fatal():
 # --- run loop -----------------------------------------------------------------
 
 
+# --- media routing (ADR-013) --------------------------------------------------
+
+
+class FakeMediaHandler:
+    """Stand-in media handler: marks the doc and returns its bytes, or fails."""
+
+    def __init__(self, fail_times=0):
+        self.fail_times = fail_times
+        self.calls = 0
+
+    async def enrich(self, doc):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("media handler exploded")
+        doc.media.transcript_lang = "en"  # observable mutation proving routing
+        return doc.SerializeToString()
+
+
+def make_media_doc(doc_type=document_pb2.IMAGE, content_type="image/png"):
+    doc = document_pb2.Document(
+        tenant_id=TENANT,
+        doc_id="doc-1",
+        connector_id="gdrive",
+        type=doc_type,
+        version_etag="etag-1",
+    )
+    doc.original.content_type = content_type
+    return doc  # no chunks: a media doc carries none on docs.chunked
+
+
+def make_media_worker(consumer, producer, media_handler, embedder=None):
+    return Worker(
+        consumer,
+        producer,
+        embedder or FakeEmbedder(),
+        media_handler=media_handler,
+        backoff=(0, 0, 0),
+        sleep=_no_sleep,
+    )
+
+
+async def test_media_doc_routes_to_media_handler_not_embedder():
+    consumer, producer = FakeConsumer(), FakeProducer()
+    embedder = FakeEmbedder()
+    media = FakeMediaHandler()
+    record = make_record(make_media_doc(document_pb2.IMAGE))
+    outcome = await make_media_worker(consumer, producer, media, embedder).process(record)
+
+    assert outcome is Outcome.ENRICHED
+    assert media.calls == 1
+    assert embedder.calls == 0  # media path bypasses the text embedder
+    out = producer.produced[0]
+    assert out.topic == cfg.TOPIC_DOCS_ENRICHED
+    assert out.key == record.key
+    assert out.headers == record.headers  # SAME key/headers
+    enriched = document_pb2.Document()
+    enriched.ParseFromString(out.value)
+    assert enriched.media.transcript_lang == "en"  # the handler ran
+    assert consumer.commits == [{TopicPartition(record.topic, record.partition): record.offset + 1}]
+
+
+async def test_media_handler_failure_retries_then_deadletters():
+    consumer, producer = FakeConsumer(), FakeProducer()
+    media = FakeMediaHandler(fail_times=99)
+    record = make_record(make_media_doc(document_pb2.VIDEO, content_type="video/mp4"))
+    outcome = await make_media_worker(consumer, producer, media).process(record)
+
+    assert outcome is Outcome.DEADLETTERED
+    assert media.calls == 3  # retried maxHandlerAttempts, never crashed
+    dl = producer.produced[0]
+    assert dl.topic == cfg.TOPIC_DOCS_DEADLETTER
+    assert dl.value == record.value  # original bytes preserved
+    assert "after 3 attempts" in header(dl.headers, cfg.HEADER_ERROR).decode()
+    assert len(consumer.commits) == 1
+
+
+async def test_media_handler_transient_failure_then_succeeds():
+    consumer, producer = FakeConsumer(), FakeProducer()
+    media = FakeMediaHandler(fail_times=2)
+    record = make_record(make_media_doc())
+    outcome = await make_media_worker(consumer, producer, media).process(record)
+    assert outcome is Outcome.ENRICHED
+    assert media.calls == 3
+    assert producer.produced[0].topic == cfg.TOPIC_DOCS_ENRICHED
+
+
+async def test_media_tombstone_passes_through_not_to_media_handler():
+    consumer, producer = FakeConsumer(), FakeProducer()
+    media = FakeMediaHandler()
+    doc = make_media_doc()
+    doc.tombstone.deleted = True
+    record = make_record(doc)
+    outcome = await make_media_worker(consumer, producer, media).process(record)
+    assert outcome is Outcome.PASSED_THROUGH
+    assert media.calls == 0  # a media delete never re-enriches; it passes through
+    assert producer.produced[0].value == record.value
+
+
+async def test_media_doc_without_handler_passes_through():
+    # No media_handler injected: a media doc (zero chunks) falls back to the
+    # text path, which passes a zero-chunk doc through unchanged.
+    consumer, producer = FakeConsumer(), FakeProducer()
+    record = make_record(make_media_doc())
+    outcome = await make_worker(consumer, producer).process(record)
+    assert outcome is Outcome.PASSED_THROUGH
+    assert producer.produced[0].value == record.value
+
+
 async def test_run_processes_batches_and_stops():
     doc_record = make_record(make_doc())
     tp = TopicPartition(cfg.TOPIC_DOCS_CHUNKED, 0)
