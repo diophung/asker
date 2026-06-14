@@ -26,7 +26,7 @@ import {
   type SearchMode,
   setSearchMode,
 } from "./backend";
-import { Avatar, SourceDot } from "./ui";
+import { Avatar, SourceIcon } from "./ui";
 import type { SourceName } from "./types";
 
 const CONNECTOR_LABEL: Record<string, { name: string; source: SourceName }> = {
@@ -173,7 +173,11 @@ export function Settings({
                     key={instance.id}
                     className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
                   >
-                    <SourceDot source={meta.source} />
+                    <SourceIcon
+                      source={meta.source}
+                      connectorId={instance.connector_id}
+                      size={22}
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="text-[14.5px] text-gink">{meta.name}</p>
                       <p className="text-[12.5px] text-gmuted">
@@ -506,7 +510,11 @@ function AddSource({
                 }}
                 className="flex items-center gap-2 rounded-lg border border-gline px-3 py-2 text-left text-[13.5px] text-gink hover:bg-gbg-soft"
               >
-                <SourceDot source={CONNECTOR_LABEL[t.id]?.source ?? "Drive"} />
+                <SourceIcon
+                  source={CONNECTOR_LABEL[t.id]?.source ?? "Drive"}
+                  connectorId={t.id}
+                  size={18}
+                />
                 <span className="truncate">{t.displayName}</span>
               </button>
             ))}
@@ -523,7 +531,11 @@ function AddSource({
             >
               <ArrowLeft className="size-4" />
             </button>
-            <SourceDot source={CONNECTOR_LABEL[type.id]?.source ?? "Drive"} />
+            <SourceIcon
+              source={CONNECTOR_LABEL[type.id]?.source ?? "Drive"}
+              connectorId={type.id}
+              size={18}
+            />
             <span className="text-[14.5px] font-medium text-gink">
               {type.displayName}
             </span>

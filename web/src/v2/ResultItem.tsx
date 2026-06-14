@@ -7,7 +7,7 @@ import {
   Send,
 } from "lucide-react";
 import type { SearchResult, SourceName } from "./types";
-import { Avatar, fileIcon, Highlight, SourceDot } from "./ui";
+import { Avatar, fileIcon, Highlight, SourceIcon } from "./ui";
 
 /** Shared provenance line — Google's green-URL equivalent. */
 function Provenance({
@@ -21,7 +21,7 @@ function Provenance({
 }) {
   return (
     <div className="flex items-center gap-1.5 text-[13px] leading-5 text-gmuted">
-      <SourceDot source={source} />
+      <SourceIcon source={source} size={14} />
       <span className="font-medium text-gprov">{source}</span>
       <span aria-hidden="true">·</span>
       <span className="truncate">{who}</span>

@@ -1,5 +1,6 @@
 // Small presentational primitives shared across result types. No data concerns.
 
+import { useState } from "react";
 import {
   Calendar as CalendarIcon,
   File,
@@ -33,6 +34,85 @@ export function SourceDot({ source }: { source: SourceName }) {
       aria-hidden="true"
       className="inline-block size-2 shrink-0 rounded-full align-middle"
       style={{ background: SOURCE_COLOR[source] }}
+    />
+  );
+}
+
+// Brand-logo slugs on the Simple Icons CDN (cdn.simpleicons.org/<slug> = a
+// brand-colored SVG) — only the ones that still exist there (Slack/Microsoft/
+// Amazon pulled theirs over brand policies). Keyed by connector id, then source.
+const ICON_SLUG: Record<string, string> = {
+  gmail: "gmail",
+  gdrive: "googledrive",
+  gcal: "googlecalendar",
+  jira: "jira",
+  confluence: "confluence",
+  "whatsapp-export": "whatsapp",
+  Gmail: "gmail",
+  Drive: "googledrive",
+  Calendar: "googlecalendar",
+  Photos: "googlephotos",
+};
+
+// Brand domains for the favicon fallback (works for every brand, incl. the ones
+// Simple Icons dropped). Keyed by connector id, then source.
+const ICON_DOMAIN: Record<string, string> = {
+  gmail: "mail.google.com",
+  "outlook-mail": "outlook.com",
+  gdrive: "drive.google.com",
+  s3: "aws.amazon.com",
+  gcal: "calendar.google.com",
+  "outlook-cal": "outlook.com",
+  slack: "slack.com",
+  msteams: "microsoft.com",
+  "whatsapp-export": "whatsapp.com",
+  jira: "atlassian.com",
+  confluence: "atlassian.com",
+  ical: "apple.com",
+  Gmail: "mail.google.com",
+  Drive: "drive.google.com",
+  Slack: "slack.com",
+  Calendar: "calendar.google.com",
+  Photos: "photos.google.com",
+  Contacts: "contacts.google.com",
+};
+
+/**
+ * A source's real brand logo from the Internet: a crisp Simple Icons SVG where
+ * available, else the brand's favicon, else the colored dot. Each img failure
+ * advances to the next candidate.
+ */
+export function SourceIcon({
+  source,
+  connectorId,
+  size = 16,
+}: {
+  source: SourceName;
+  connectorId?: string;
+  size?: number;
+}) {
+  const slug = (connectorId && ICON_SLUG[connectorId]) || ICON_SLUG[source];
+  const domain = (connectorId && ICON_DOMAIN[connectorId]) || ICON_DOMAIN[source];
+  const candidates = [
+    slug ? `https://cdn.simpleicons.org/${slug}` : null,
+    domain
+      ? `https://www.google.com/s2/favicons?domain=${domain}&sz=64`
+      : null,
+  ].filter((u): u is string => u !== null);
+
+  const [idx, setIdx] = useState(0);
+  if (idx >= candidates.length) {
+    return <SourceDot source={source} />;
+  }
+  return (
+    <img
+      src={candidates[idx]}
+      alt=""
+      aria-hidden="true"
+      loading="lazy"
+      onError={() => setIdx((i) => i + 1)}
+      style={{ width: size, height: size }}
+      className="shrink-0 rounded-sm align-middle"
     />
   );
 }
