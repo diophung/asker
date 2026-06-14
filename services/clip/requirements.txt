@@ -7,9 +7,9 @@
 # every platform. The Dockerfile installs torch from the CPU index first; the
 # version here pins what that resolves to.
 open_clip_torch==2.24.0
-torch==2.2.2
+torch==2.12.0
 pillow==12.2.0
 # Required by open_clip's image preprocessing (PIL image -> tensor). Without it
 # image embedding fails at runtime with "Numpy is not available" while text
-# embedding still works. torch 2.2.x needs numpy<2.
+# embedding still works. Kept at numpy<2 — validated working with torch 2.12.0.
 numpy==1.26.4
