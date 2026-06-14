@@ -8,7 +8,7 @@
 # version here pins what that resolves to.
 open_clip_torch==2.24.0
 torch==2.2.2
-pillow==10.4.0
+pillow==12.2.0
 # Required by open_clip's image preprocessing (PIL image -> tensor). Without it
 # image embedding fails at runtime with "Numpy is not available" while text
 # embedding still works. torch 2.2.x needs numpy<2.
