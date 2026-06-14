@@ -2,6 +2,7 @@
 // mock data directly — swap `searchPersonalData` for the real Asker /v1/search
 // (it already returns provenance-rich, per-source hits) and the UI is unchanged.
 
+import { BACKEND_ENABLED, backendMeta, searchBackend } from "./backend";
 import type {
   Panel,
   PersonResult,
@@ -354,6 +355,9 @@ export async function searchPersonalData(
   query: string,
   source: SourceFilter,
 ): Promise<SearchResult[]> {
+  if (BACKEND_ENABLED) {
+    return searchBackend(query, source);
+  }
   await delay(ARTIFICIAL_DELAY_MS);
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length === 0) {
@@ -391,7 +395,9 @@ export function getSuggestions(query: string): Suggestion[] {
     out.push({ kind: "recent", text });
   }
 
-  if (q) {
+  // People/document suggestions come from the mock corpus only — the real
+  // backend has no autocomplete/entity endpoint, so backend mode shows recents.
+  if (q && !BACKEND_ENABLED) {
     for (const p of PEOPLE.filter((p) => p.haystack.includes(q)).slice(0, 2)) {
       out.push({ kind: "person", text: p.name, sub: `${p.role} · ${p.org}` });
     }
@@ -417,6 +423,12 @@ export function metaFor(
   query: string,
   shown: number,
 ): { approx: string; seconds: string } {
+  if (BACKEND_ENABLED) {
+    const real = backendMeta(query);
+    if (real) {
+      return real;
+    }
+  }
   const h = hash(query);
   const approx = (200 + (h % 1900) + shown * 7).toLocaleString();
   const seconds = (0.08 + (h % 24) / 100).toFixed(2);
@@ -453,6 +465,11 @@ const PROJECTS: Record<string, Extract<Panel, { kind: "project" }>> = {
 };
 
 export function resolvePanel(query: string): Panel | null {
+  // The knowledge panel is built from the mock graph; the real backend has no
+  // person/project entity index, so no panel in backend mode.
+  if (BACKEND_ENABLED) {
+    return null;
+  }
   const q = query.trim().toLowerCase();
   if (!q) {
     return null;

@@ -47,6 +47,8 @@ interface ResultBase {
   snippet: string;
   /** Lowercase blob the stub matches against (title+body+people+source). */
   haystack: string;
+  /** Browser-openable link to the real item (set by the backend mapper). */
+  url?: string;
 }
 
 export interface EmailResult extends ResultBase {

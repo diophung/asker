@@ -31,20 +31,28 @@ function Provenance({
   );
 }
 
-/** Blue link title — the primary tap target. */
+/** Blue link title — the primary tap target. Opens the real item when the
+ * backend supplied a url; otherwise an inert in-app anchor (mock/no link). */
 function TitleLink({
   id,
+  url,
   children,
 }: {
   id: string;
+  url?: string;
   children: ReactNode;
 }) {
+  const cls =
+    "text-[20px] leading-7 text-gtitle visited:text-gtitle-visited hover:underline";
+  if (url !== undefined && url !== "") {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" className={cls}>
+        {children}
+      </a>
+    );
+  }
   return (
-    <a
-      href={`#${id}`}
-      onClick={(e) => e.preventDefault()}
-      className="text-[20px] leading-7 text-gtitle visited:text-gtitle-visited hover:underline"
-    >
+    <a href={`#${id}`} onClick={(e) => e.preventDefault()} className={cls}>
       {children}
     </a>
   );
@@ -90,7 +98,7 @@ export function ResultItem({
         <div className="min-w-0 flex-1">
           <Provenance source={result.source} who={result.who} when={result.when} />
           <h3 className="text-[18px] leading-6">
-            <TitleLink id={result.id}>{result.name}</TitleLink>
+            <TitleLink id={result.id} url={result.url}>{result.name}</TitleLink>
           </h3>
           <p className="text-[13px] text-gmuted">{result.email}</p>
         </div>
@@ -119,7 +127,7 @@ export function ResultItem({
         <div className="min-w-0 flex-1">
           <Provenance source={result.source} who={result.who} when={result.when} />
           <h3>
-            <TitleLink id={result.id}>{result.title}</TitleLink>
+            <TitleLink id={result.id} url={result.url}>{result.title}</TitleLink>
           </h3>
           <Snippet text={result.snippet} query={query} />
           {result.place && (
@@ -147,7 +155,7 @@ export function ResultItem({
         <div className="min-w-0 flex-1">
           <Provenance source={result.source} who={result.who} when={result.when} />
           <h3>
-            <TitleLink id={result.id}>{result.title}</TitleLink>
+            <TitleLink id={result.id} url={result.url}>{result.title}</TitleLink>
           </h3>
           <Snippet text={result.snippet} query={query} />
           <div className="mt-1.5 flex flex-wrap items-center gap-3">
@@ -176,7 +184,7 @@ export function ResultItem({
       <div className="min-w-0 flex-1">
         <Provenance source={result.source} who={result.who} when={result.when} />
         <h3 className="flex items-center gap-2">
-          <TitleLink id={result.id}>{result.title}</TitleLink>
+          <TitleLink id={result.id} url={result.url}>{result.title}</TitleLink>
           {result.type === "email" && result.hasAttachment && (
             <Paperclip
               aria-label="Has attachment"
