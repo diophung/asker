@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { LogOut } from "lucide-react";
+import { currentUser, signOut } from "./auth";
+import { BACKEND_ENABLED } from "./backend";
 import {
   getSuggestions,
   metaFor,
@@ -9,6 +12,7 @@ import type { Panel, SearchResult, SourceFilter } from "./types";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { ResultItem } from "./ResultItem";
 import { SearchBox } from "./SearchBox";
+import { SignIn } from "./SignIn";
 import { SourceTabs } from "./SourceTabs";
 import { ErrorState, LoadingSkeleton, MetaLine, NoResults } from "./states";
 
@@ -59,6 +63,9 @@ export function SearchApp() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [counts, setCounts] = useState<Partial<Record<SourceFilter, number>>>({});
   const [panel, setPanel] = useState<Panel | null>(null);
+  // In backend mode the gateway needs a token — gate on a dev sign-in. In mock
+  // mode there is no backend, so no sign-in is required.
+  const [authed, setAuthed] = useState(!BACKEND_ENABLED);
 
   const reqId = useRef(0);
   const jumpToTop = useRef(false);
@@ -124,6 +131,33 @@ export function SearchApp() {
     }
   }, [phase, results]);
 
+  // Auth gate (after all hooks). Backend mode requires a signed-in dev session.
+  if (BACKEND_ENABLED && !authed) {
+    return <SignIn onSignedIn={() => setAuthed(true)} />;
+  }
+
+  const accountChip =
+    BACKEND_ENABLED && authed ? (
+      <div className="fixed right-3 top-3 z-30 flex items-center gap-2 rounded-full border border-gline bg-white/90 px-3 py-1.5 text-[12.5px] shadow-sm backdrop-blur">
+        <span className="hidden text-gmuted sm:inline">{currentUser()}</span>
+        <button
+          type="button"
+          onClick={() => {
+            signOut();
+            setQuery("");
+            setBox("");
+            setSource("all");
+            setPhase("idle");
+            setAuthed(false);
+          }}
+          className="inline-flex items-center gap-1 text-gblue hover:underline"
+          title="Sign out"
+        >
+          <LogOut className="size-3.5" /> Sign out
+        </button>
+      </div>
+    ) : null;
+
   const searchHeader = (
     <div
       className={[
@@ -162,6 +196,7 @@ export function SearchApp() {
   if (isHome) {
     return (
       <main className="flex min-h-screen flex-col">
+        {accountChip}
         <div className="flex flex-1 flex-col items-center justify-center pb-[18vh]">
           {searchHeader}
           <p className="mt-6 px-4 text-center text-[14px] text-gmuted">
@@ -193,6 +228,7 @@ export function SearchApp() {
 
   return (
     <main className="min-h-screen">
+      {accountChip}
       <header className="sticky top-0 z-10 bg-white pt-3">
         <div className="relative h-0.5 overflow-hidden">
           {phase === "loading" && (

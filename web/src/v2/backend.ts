@@ -10,6 +10,7 @@
 // same-origin and no CORS / redirect-URI config is touched). In production the
 // seam swaps back to the real OIDC token from src/auth.ts. NEVER ship this.
 
+import { getToken } from "./auth";
 import type {
   CalendarResult,
   EmailResult,
@@ -26,46 +27,8 @@ const env = import.meta.env;
 export const BACKEND_ENABLED =
   env.MODE !== "test" && env.VITE_USE_BACKEND !== "0";
 
-// Same-origin paths the Vite dev proxy forwards to the gateway / Keycloak.
+// Same-origin path the Vite dev proxy forwards to the gateway.
 const SEARCH_PATH = "/v1/search";
-const TOKEN_PATH = "/kc/realms/asker/protocol/openid-connect/token";
-
-const DEV_USER = env.VITE_DEV_USER ?? "alice";
-const DEV_PASS = env.VITE_DEV_PASS ?? "password123";
-
-// --- Dev token (password grant), cached + proactively refreshed. ------------
-
-interface Cached {
-  token: string;
-  expiresAt: number;
-}
-let cached: Cached | null = null;
-
-async function getToken(): Promise<string> {
-  if (cached && Date.now() < cached.expiresAt - 30_000) {
-    return cached.token;
-  }
-  const body = new URLSearchParams({
-    grant_type: "password",
-    client_id: "asker-web",
-    username: DEV_USER,
-    password: DEV_PASS,
-  });
-  const res = await fetch(TOKEN_PATH, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-  if (!res.ok) {
-    throw new Error(`auth failed (HTTP ${res.status})`);
-  }
-  const json = (await res.json()) as { access_token: string; expires_in: number };
-  cached = {
-    token: json.access_token,
-    expiresAt: Date.now() + json.expires_in * 1000,
-  };
-  return cached.token;
-}
 
 // --- The gateway /v1/search wire shape (mirrors web/src/api.ts Hit). ---------
 
