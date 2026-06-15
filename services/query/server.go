@@ -286,6 +286,27 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	return resp, nil
 }
 
+// Count reports how many documents are indexed for the calling tenant (the
+// live "indexed" figure for the Settings indexing-progress view). It is a
+// filter-only Vespa query with hits=0, so Vespa returns just the tenant group's
+// total match count — no documents, no ranking. The tenant comes from the
+// verified gRPC metadata, never the request.
+func (s *server) Count(ctx context.Context, _ *queryv1.CountRequest) (*queryv1.CountResponse, error) {
+	tc, err := tenancy.FromContext(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "query: no tenant in request context")
+	}
+	res, err := s.vespa.Search(ctx, vespaQuery{
+		Tenant: tc.TenantID(), // from verified ctx — NEVER from the request
+		Kind:   retrieveFilterOnly,
+		Hits:   0,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "query: count: %v", err)
+	}
+	return &queryv1.CountResponse{Indexed: res.Total}, nil
+}
+
 // searchMerged runs the text arm (with its degradation ladder) and the CLIP
 // arm side by side, unions the hits by doc_id, blends scores, and returns the
 // requested page of the merged ranking. Each arm is fetched from offset 0 up

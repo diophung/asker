@@ -370,6 +370,108 @@ export async function exportPersonalization(): Promise<Record<string, unknown>> 
   return (await res.json()) as Record<string, unknown>;
 }
 
+// --- Indexing status (Settings page). ---------------------------------------
+// Live view of the async ingest pipeline: how many documents are searchable in
+// Vespa (`indexed`) vs. how many connectors have pulled from sources
+// (`emitted`), the in-flight `backlog` between them, and per-connector sync
+// phase. A per-connector "Re-index" resets a connector to re-pull + re-index
+// from scratch (POST /v1/connectors/{id}/reindex).
+
+/** One connector's slice of the indexing status. */
+export interface IndexConnectorStatus {
+  id: string;
+  connector_id: string;
+  display_name: string;
+  /** "PENDING" | "FULL_SYNC" | "INCREMENTAL" | "FAILED" | "SYNC_PHASE_UNSPECIFIED" */
+  phase: string;
+  docs_emitted: number;
+  /** RFC3339, or "" when never synced. */
+  last_sync_completed: string;
+  last_error: string;
+}
+
+export interface IndexStatus {
+  /** Documents currently searchable in Vespa. -1 means "unknown" (the query
+   * service was unreachable) — render as "—", never the literal -1. */
+  indexed: number;
+  /** Documents pulled from sources by connectors. */
+  emitted: number;
+  /** max(0, emitted - indexed): still flowing through the pipeline. */
+  backlog: number;
+  /** A backfill/re-index is in progress. */
+  syncing: boolean;
+  connectors: IndexConnectorStatus[];
+}
+
+/** GET /v1/index/status — the live indexing snapshot. In mock mode returns a
+ * sensible fake so the Settings page renders without a backend. */
+export async function getIndexStatus(): Promise<IndexStatus> {
+  if (!BACKEND_ENABLED) {
+    return {
+      indexed: 1200,
+      emitted: 1200,
+      backlog: 0,
+      syncing: false,
+      connectors: [
+        {
+          id: "mock-gmail",
+          connector_id: "gmail",
+          display_name: "Gmail",
+          phase: "INCREMENTAL",
+          docs_emitted: 1200,
+          last_sync_completed: new Date(Date.now() - 5 * 60_000).toISOString(),
+          last_error: "",
+        },
+      ],
+    };
+  }
+  const token = await getToken();
+  const res = await fetch("/v1/index/status", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Couldn't load indexing status (HTTP ${res.status})`);
+  }
+  const j = (await res.json()) as Partial<IndexStatus> & {
+    connectors?: Partial<IndexConnectorStatus>[] | null;
+  };
+  return {
+    indexed: typeof j.indexed === "number" ? j.indexed : -1,
+    emitted: j.emitted ?? 0,
+    backlog: j.backlog ?? 0,
+    syncing: j.syncing ?? false,
+    connectors: (j.connectors ?? []).map((c) => ({
+      id: c?.id ?? "",
+      connector_id: c?.connector_id ?? "",
+      display_name: c?.display_name ?? "",
+      phase: c?.phase ?? "",
+      docs_emitted: c?.docs_emitted ?? 0,
+      last_sync_completed: c?.last_sync_completed ?? "",
+      last_error: c?.last_error ?? "",
+    })),
+  };
+}
+
+/** POST /v1/connectors/{id}/reindex — reset a connector so it re-pulls and
+ * re-indexes from scratch. Best-effort: throws on a non-2xx so the caller can
+ * surface the failure, but in mock mode resolves immediately. */
+export async function reindexConnector(id: string): Promise<void> {
+  if (!BACKEND_ENABLED) {
+    return;
+  }
+  const token = await getToken();
+  const res = await fetch(
+    `/v1/connectors/${encodeURIComponent(id)}/reindex`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Couldn't start re-indexing (HTTP ${res.status})`);
+  }
+}
+
 // --- The gateway /v1/search wire shape (mirrors web/src/api.ts Hit). ---------
 
 interface GatewayHit {

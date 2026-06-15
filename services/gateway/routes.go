@@ -87,6 +87,12 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	mux.Handle("/v1/connectors/{id}/token", authed(methods(map[string]http.HandlerFunc{
 		http.MethodPut: d.handlePutToken,
 	})))
+	// Live indexing progress (indexed vs. emitted + per-connector sync state) and
+	// re-index (reset a connector's sync cursor so the hub re-runs a full sync).
+	mux.Handle("/v1/index/status", authed(getOnly(d.handleIndexStatus)))
+	mux.Handle("/v1/connectors/{id}/reindex", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleReindexConnector,
+	})))
 	// OAuth connector authorization start (wave 1). AUTHED: the tenant is the
 	// verified-token tenant, and the server-side flow state it persists is bound
 	// to it. The web fetches this, then navigates the browser to authorize_url.

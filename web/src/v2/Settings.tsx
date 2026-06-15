@@ -8,6 +8,7 @@ import {
   Lock,
   LogOut,
   Plus,
+  RefreshCw,
   RotateCw,
   Trash2,
   X,
@@ -25,11 +26,15 @@ import {
   defaultProfile,
   deleteMyData,
   exportPersonalization,
+  getIndexStatus,
   getMe,
   getPreferences,
   getSearchMode,
+  type IndexConnectorStatus,
+  type IndexStatus,
   type Me,
   type Profile,
+  reindexConnector,
   resetLearning,
   savePreferences,
   type SearchMode,
@@ -223,6 +228,9 @@ export function Settings({
           </div>
         </Section>
 
+        {/* Indexing */}
+        <Indexing />
+
         {/* Search */}
         <Section title="Search">
           <p className="mb-2 text-[13px] text-gmuted">Default search mode</p>
@@ -291,6 +299,256 @@ function StatusPill({ status, error }: { status: string; error: string }) {
     <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11.5px] ${color}`}>
       {label}
     </span>
+  );
+}
+
+// --- Indexing (live): a snapshot of the async ingest pipeline + a per-connector
+// re-index control. Polls GET /v1/index/status every ~4s while open. -----------
+
+const POLL_MS = 4000;
+
+/** Map a connector sync phase to a short, human-friendly label + tone. */
+function phaseMeta(phase: string): {
+  label: string;
+  tone: "ok" | "busy" | "wait" | "bad";
+} {
+  switch (phase) {
+    case "FULL_SYNC":
+      return { label: "Indexing…", tone: "busy" };
+    case "INCREMENTAL":
+      return { label: "Up to date", tone: "ok" };
+    case "PENDING":
+      return { label: "Queued", tone: "wait" };
+    case "FAILED":
+      return { label: "Error", tone: "bad" };
+    default:
+      return { label: "Idle", tone: "wait" };
+  }
+}
+
+const PHASE_COLOR: Record<"ok" | "busy" | "wait" | "bad", string> = {
+  ok: "bg-[#e6f4ea] text-[#137333]",
+  busy: "bg-[#fef7e0] text-[#b06000]",
+  wait: "bg-gbg-soft text-gmuted",
+  bad: "bg-[#fce8e6] text-[#c5221f]",
+};
+
+function PhasePill({ phase }: { phase: string }) {
+  const { label, tone } = phaseMeta(phase);
+  return (
+    <span
+      className={`shrink-0 rounded-full px-2 py-0.5 text-[11.5px] ${PHASE_COLOR[tone]}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function Indexing() {
+  const [status, setStatus] = useState<IndexStatus | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    async function load() {
+      try {
+        const s = await getIndexStatus();
+        if (live) {
+          setStatus(s);
+          setError("");
+        }
+      } catch (e: unknown) {
+        if (live) {
+          setError(
+            e instanceof Error ? e.message : "Couldn't load indexing status.",
+          );
+        }
+      }
+    }
+    void load();
+    // Poll while the view is open; skip ticks while the tab is hidden.
+    const timer = window.setInterval(() => {
+      if (!document.hidden) {
+        void load();
+      }
+    }, POLL_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  async function refresh() {
+    try {
+      const s = await getIndexStatus();
+      setStatus(s);
+      setError("");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Couldn't load indexing status.");
+    }
+  }
+
+  if (status === null) {
+    return (
+      <Section title="Indexing">
+        {error !== "" ? (
+          <p className="text-[14px] text-[#c5221f]" role="status">
+            {error}
+          </p>
+        ) : (
+          <div className="flex items-center gap-2 text-[14px] text-gmuted">
+            <Loader2 className="size-4 animate-spin" /> Loading indexing status…
+          </div>
+        )}
+      </Section>
+    );
+  }
+
+  const { indexed, emitted, backlog, syncing, connectors } = status;
+  const unknown = indexed < 0;
+  const indexedLabel = unknown ? "—" : indexed.toLocaleString();
+  // Progress fraction: 0 when nothing emitted or indexed-count unknown.
+  const pct =
+    unknown || emitted <= 0
+      ? 0
+      : Math.min(100, Math.round((indexed / emitted) * 100));
+
+  return (
+    <Section title="Indexing">
+      <div
+        role="status"
+        aria-label="Indexing status"
+        aria-live="polite"
+        className="space-y-1.5"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[14.5px] text-gink">
+            <span className="font-medium">{indexedLabel}</span> of{" "}
+            {emitted.toLocaleString()} document{emitted === 1 ? "" : "s"} indexed
+          </p>
+          {syncing && (
+            <span className="inline-flex shrink-0 items-center gap-1.5 text-[12.5px] text-[#b06000]">
+              <Loader2 className="size-3.5 animate-spin" /> Syncing…
+            </span>
+          )}
+        </div>
+        <div
+          className="h-2 w-full overflow-hidden rounded-full bg-gbg-soft"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          aria-label="Documents indexed"
+        >
+          <div
+            className="h-full rounded-full bg-gprov transition-[width] duration-500"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        {backlog > 0 && (
+          <p className="text-[12.5px] text-gmuted">
+            {backlog.toLocaleString()} still indexing…
+          </p>
+        )}
+        {unknown && (
+          <p className="text-[12.5px] text-gmuted">
+            Indexed count is unavailable right now.
+          </p>
+        )}
+      </div>
+
+      {error !== "" && (
+        <p className="mt-2 text-[13px] text-[#c5221f]" role="alert">
+          {error}
+        </p>
+      )}
+
+      {connectors.length > 0 && (
+        <ul className="mt-4 divide-y divide-gline">
+          {connectors.map((c) => (
+            <IndexingRow key={c.id} connector={c} onReindexed={() => void refresh()} />
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function IndexingRow({
+  connector,
+  onReindexed,
+}: {
+  connector: IndexConnectorStatus;
+  onReindexed: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [ack, setAck] = useState(false);
+  const [error, setError] = useState("");
+  const name = connector.display_name || connector.connector_id;
+
+  function reindex() {
+    if (
+      !window.confirm(
+        `Re-index ${name}? This re-pulls everything from the source and indexes it from scratch.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setAck(false);
+    reindexConnector(connector.id)
+      .then(() => {
+        setAck(true);
+        onReindexed();
+        window.setTimeout(() => setAck(false), 4000);
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Couldn't start re-indexing.");
+      })
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <li className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+      <div className="min-w-0 flex-1">
+        <p className="text-[14.5px] text-gink">{name}</p>
+        <p className="text-[12.5px] text-gmuted">
+          {connector.docs_emitted.toLocaleString()} pulled · synced{" "}
+          {prettyDate(connector.last_sync_completed)}
+        </p>
+        {connector.last_error !== "" && (
+          <p className="mt-0.5 text-[12.5px] text-[#c5221f]" role="alert">
+            {connector.last_error}
+          </p>
+        )}
+        {error !== "" && (
+          <p className="mt-0.5 text-[12.5px] text-[#c5221f]" role="alert">
+            {error}
+          </p>
+        )}
+        {ack && (
+          <p className="mt-0.5 flex items-center gap-1 text-[12.5px] text-gprov">
+            <Check className="size-3.5" /> Re-indexing started
+          </p>
+        )}
+      </div>
+      <PhasePill phase={connector.phase} />
+      <button
+        type="button"
+        onClick={reindex}
+        disabled={busy}
+        aria-label={`Re-index ${name}`}
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gline px-3 py-1.5 text-[12.5px] text-gblue hover:bg-gbg-soft disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <RefreshCw className="size-3.5" />
+        )}
+        {busy ? "Starting…" : "Re-index"}
+      </button>
+    </li>
   );
 }
 

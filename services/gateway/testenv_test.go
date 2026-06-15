@@ -236,6 +236,20 @@ type fakeQuery struct {
 	gotReq    *queryv1.SearchRequest
 	resp      *queryv1.SearchResponse
 	err       error
+	indexed   int64 // returned by Count
+	countErr  error
+}
+
+func (f *fakeQuery) Count(ctx context.Context, _ *queryv1.CountRequest) (*queryv1.CountResponse, error) {
+	if _, err := tenancy.FromContext(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, "no tenant in context")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.countErr != nil {
+		return nil, f.countErr
+	}
+	return &queryv1.CountResponse{Indexed: f.indexed}, nil
 }
 
 func (f *fakeQuery) Search(ctx context.Context, req *queryv1.SearchRequest) (*queryv1.SearchResponse, error) {
@@ -273,6 +287,7 @@ type fakeControlPlane struct {
 	instances      map[string]map[string]*controlplanev1.ConnectorInstance
 	order          map[string][]string
 	tokens         map[string][]byte
+	syncStates     map[string]map[string]*controlplanev1.SyncState // tenant -> id -> state
 	deletedTenants []string
 
 	// Per-tenant personalization store (v3.2): keyed off the caller tenant the
@@ -303,6 +318,7 @@ func newFakeControlPlane() *fakeControlPlane {
 		instances:        map[string]map[string]*controlplanev1.ConnectorInstance{},
 		order:            map[string][]string{},
 		tokens:           map[string][]byte{},
+		syncStates:       map[string]map[string]*controlplanev1.SyncState{},
 		profiles:         map[string]string{},
 		versions:         map[string]int64{},
 		weights:          map[string]string{},
@@ -411,12 +427,56 @@ func (f *fakeControlPlane) GetSyncState(ctx context.Context, req *controlplanev1
 	if _, ok := f.instances[tenant][req.GetConnectorInstanceId()]; !ok {
 		return nil, status.Error(codes.NotFound, "not found")
 	}
+	if st, ok := f.syncStates[tenant][req.GetConnectorInstanceId()]; ok {
+		return &controlplanev1.GetSyncStateResponse{State: st}, nil
+	}
 	return &controlplanev1.GetSyncStateResponse{
 		State: &controlplanev1.SyncState{
 			ConnectorInstanceId: req.GetConnectorInstanceId(),
 			Phase:               controlplanev1.SyncPhase_PENDING,
 		},
 	}, nil
+}
+
+// SetSyncState stores the state for an instance the caller's tenant owns
+// (NotFound otherwise) — backs the re-index reset.
+func (f *fakeControlPlane) SetSyncState(ctx context.Context, req *controlplanev1.SetSyncStateRequest) (*controlplanev1.SetSyncStateResponse, error) {
+	tenant, err := fakeCallerTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.syncErr != nil {
+		return nil, f.syncErr
+	}
+	id := req.GetState().GetConnectorInstanceId()
+	if _, ok := f.instances[tenant][id]; !ok {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+	if f.syncStates[tenant] == nil {
+		f.syncStates[tenant] = map[string]*controlplanev1.SyncState{}
+	}
+	f.syncStates[tenant][id] = req.GetState()
+	return &controlplanev1.SetSyncStateResponse{State: req.GetState()}, nil
+}
+
+// seedSyncState lets a test set a connector's sync state directly (tenant ->
+// id), so the index-status assertions see real emitted/phase values.
+func (f *fakeControlPlane) seedSyncState(tenant, id string, st *controlplanev1.SyncState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.syncStates[tenant] == nil {
+		f.syncStates[tenant] = map[string]*controlplanev1.SyncState{}
+	}
+	f.syncStates[tenant][id] = st
+}
+
+// storedSyncState returns the state a test set/observed for (tenant, id).
+func (f *fakeControlPlane) storedSyncState(tenant, id string) *controlplanev1.SyncState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.syncStates[tenant][id]
 }
 
 func (f *fakeControlPlane) PutToken(ctx context.Context, req *controlplanev1.PutTokenRequest) (*controlplanev1.PutTokenResponse, error) {

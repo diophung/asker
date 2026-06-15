@@ -22,6 +22,16 @@ HYBRID: SearchMode
 KEYWORD: SearchMode
 VECTOR: SearchMode
 
+class CountRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class CountResponse(_message.Message):
+    __slots__ = ("indexed",)
+    INDEXED_FIELD_NUMBER: _ClassVar[int]
+    indexed: int
+    def __init__(self, indexed: _Optional[int] = ...) -> None: ...
+
 class SearchRequest(_message.Message):
     __slots__ = ("query", "doc_types", "from_date", "to_date", "participant", "limit", "offset", "mode", "debug")
     QUERY_FIELD_NUMBER: _ClassVar[int]

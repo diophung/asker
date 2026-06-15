@@ -430,6 +430,36 @@ func TestSearchHybridFlow(t *testing.T) {
 	}
 }
 
+func TestCount(t *testing.T) {
+	env := newQueryEnv(t)
+
+	resp, err := env.client.Count(tenantCtx(t, "tenant-a"), &queryv1.CountRequest{})
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	// vespaFixture's totalCount is 2; Count surfaces it as the indexed count.
+	if resp.GetIndexed() != 2 {
+		t.Errorf("indexed = %d, want 2 (fixture totalCount)", resp.GetIndexed())
+	}
+	// It is a filter-only, hits=0 query scoped to the context tenant group.
+	body := env.vespa.lastBody(t)
+	if body["yql"] != "select * from sources * where true" {
+		t.Errorf("count yql = %v, want filter-only true clause", body["yql"])
+	}
+	if got := body["hits"].(float64); got != 0 {
+		t.Errorf("count hits = %v, want 0", got)
+	}
+	if got := body["streaming.groupname"]; got != "tenant-a" {
+		t.Errorf("count groupname = %v, want tenant-a", got)
+	}
+}
+
+func TestCountWithoutTenantFailsClosed(t *testing.T) {
+	srv := newServer(nil, nil, nil, newFakeCache(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := srv.Count(context.Background(), &queryv1.CountRequest{})
+	wantCode(t, err, codes.Unauthenticated)
+}
+
 // TestStreamingGroupnameIsContextTenant is THE isolation property: the Vespa
 // group always comes from verified gRPC metadata, never from request content.
 func TestStreamingGroupnameIsContextTenant(t *testing.T) {

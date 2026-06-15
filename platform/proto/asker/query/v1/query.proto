@@ -17,6 +17,19 @@ service QueryService {
   // Search runs a hybrid (keyword + vector) search over the calling tenant's
   // documents, with graceful degradation to keyword-only under failure/load.
   rpc Search(SearchRequest) returns (SearchResponse);
+
+  // Count returns how many documents are currently indexed (searchable) for the
+  // calling tenant — the live "indexed" figure the Settings indexing-progress
+  // view compares against the connectors' emitted count. Tenant-scoped via the
+  // streaming group, like Search.
+  rpc Count(CountRequest) returns (CountResponse);
+}
+
+message CountRequest {}
+
+message CountResponse {
+  // indexed is the tenant's document count in the search index.
+  int64 indexed = 1;
 }
 
 // SearchMode selects the retrieval strategy.
