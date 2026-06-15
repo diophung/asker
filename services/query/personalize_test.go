@@ -337,6 +337,49 @@ func TestRRFRetrievalIssuesBothArms(t *testing.T) {
 	}
 }
 
+// TestNormalizeRequestPreservesDebug guards the bug where normalizeRequest
+// rebuilt the request and dropped the debug flag, so feature contributions were
+// never emitted even with ?debug=1.
+func TestNormalizeRequestPreservesDebug(t *testing.T) {
+	got := normalizeRequest(&queryv1.SearchRequest{Query: "x", Debug: true})
+	if !got.GetDebug() {
+		t.Error("normalizeRequest dropped the debug flag")
+	}
+}
+
+// TestPersonalizeDebugFeatures verifies the per-hit feature contributions are
+// attached when debug is set on the personalized path.
+func TestPersonalizeDebugFeatures(t *testing.T) {
+	loader := newFakeLoader()
+	loader.set("alice", personalization.Profile{ImportantPeople: []string{"alice@example.com"}})
+	env := newQueryEnv(t, withProfiles(loader, false))
+
+	now := time.Now().UTC()
+	env.vespa.setProfileFixture("keyword", buildFixture(t, []docSpec{
+		{id: "d1", typ: "EMAIL", title: "project update", relevance: 0.7,
+			metadata: map[string]string{"from": "alice@example.com"}, created: now},
+	}))
+
+	resp, err := env.client.Search(tenantCtx(t, "alice"), &queryv1.SearchRequest{
+		Query: "project update", Mode: queryv1.SearchMode_KEYWORD, Debug: true,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(resp.GetHits()) == 0 {
+		t.Fatal("no hits")
+	}
+	feats := resp.GetHits()[0].GetFeatures()
+	if len(feats) == 0 {
+		t.Fatal("debug features not attached")
+	}
+	for _, k := range []string{"semantic", "preference", "behavioral", "attention", "repetition"} {
+		if _, ok := feats[k]; !ok {
+			t.Errorf("feature contribution %q missing: %v", k, feats)
+		}
+	}
+}
+
 // TestPersonalizeMuteHidesSource verifies a muted source is hidden from results.
 func TestPersonalizeMuteHidesSource(t *testing.T) {
 	loader := newFakeLoader()

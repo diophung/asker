@@ -214,5 +214,9 @@ func normalizeRequest(req *queryv1.SearchRequest) *queryv1.SearchRequest {
 		Limit:       limit,
 		Offset:      offset,
 		Mode:        mode,
+		// Debug is a pass-through observability flag (per-hit feature
+		// contributions); it never affects ranking but must survive normalization
+		// so the personalized re-rank can honor it.
+		Debug: req.GetDebug(),
 	}
 }
