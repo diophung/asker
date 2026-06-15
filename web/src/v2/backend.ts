@@ -16,6 +16,7 @@ import type {
   EmailResult,
   FileResult,
   MessageResult,
+  PersonResult,
   PhotoResult,
   SearchResult,
   SourceFilter,
@@ -27,8 +28,18 @@ const env = import.meta.env;
 export const BACKEND_ENABLED =
   env.MODE !== "test" && env.VITE_USE_BACKEND !== "0";
 
-// Same-origin path the Vite dev proxy forwards to the gateway.
+// Same-origin path the proxy forwards to the gateway.
 const SEARCH_PATH = "/v1/search";
+
+/**
+ * The endpoint for a source tab. "all" is the unfiltered /v1/search; every
+ * other tab is served by its OWN endpoint (/v1/search/<source>) — the source is
+ * the path, not a query param, so each tab is genuinely a distinct endpoint the
+ * full page load navigates to.
+ */
+function endpointFor(source: SourceFilter): string {
+  return source === "all" ? SEARCH_PATH : `${SEARCH_PATH}/${source}`;
+}
 
 // --- Search preference (in-memory; the Settings page sets it). --------------
 
@@ -97,14 +108,19 @@ interface GatewayResponse {
   took_ms: number;
 }
 
-/** v2 SourceFilter -> gateway DocType enum names (comma-joined). */
-const SOURCE_TYPES: Record<Exclude<SourceFilter, "all" | "people">, string[]> = {
-  email: ["EMAIL"],
-  files: ["FILE", "WIKI_PAGE", "TICKET"],
-  messages: ["CHAT_MESSAGE"],
-  calendar: ["CALENDAR_EVENT"],
-  photos: ["IMAGE", "VIDEO", "AUDIO"],
-};
+// The /v1/search/people wire shape (derived contacts — not document hits).
+interface GatewayPerson {
+  name: string;
+  email: string;
+  count: number;
+  last_contacted: string;
+  summary: string;
+}
+interface PeopleResponse {
+  people: GatewayPerson[];
+  total: number;
+  took_ms: number;
+}
 
 let lastMeta: { query: string; approx: string; seconds: string } | null = null;
 
@@ -120,10 +136,9 @@ export async function searchBackend(
   query: string,
   source: SourceFilter,
 ): Promise<SearchResult[]> {
-  // The backend has no person/entity index; the People tab has nothing to show.
+  // People are derived (no person index): a separate endpoint + wire shape.
   if (source === "people") {
-    lastMeta = { query, approx: "0", seconds: "0.00" };
-    return [];
+    return searchPeople(query);
   }
   const token = await getToken();
   const params = new URLSearchParams({
@@ -132,10 +147,7 @@ export async function searchBackend(
     offset: "0",
     mode: searchMode,
   });
-  if (source !== "all") {
-    params.set("types", SOURCE_TYPES[source].join(","));
-  }
-  const res = await fetch(`${SEARCH_PATH}?${params.toString()}`, {
+  const res = await fetch(`${endpointFor(source)}?${params.toString()}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -148,6 +160,77 @@ export async function searchBackend(
     seconds: (data.took_ms / 1000).toFixed(2),
   };
   return data.hits.map(mapHit);
+}
+
+/** The People tab: derived contacts from /v1/search/people. */
+async function searchPeople(query: string): Promise<SearchResult[]> {
+  const token = await getToken();
+  const params = new URLSearchParams({ q: query });
+  const res = await fetch(`${SEARCH_PATH}/people?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`people search failed (HTTP ${res.status})`);
+  }
+  const data = (await res.json()) as PeopleResponse;
+  lastMeta = {
+    query,
+    approx: data.total.toLocaleString(),
+    seconds: (data.took_ms / 1000).toFixed(2),
+  };
+  return data.people.map(mapPerson);
+}
+
+function mapPerson(p: GatewayPerson): PersonResult {
+  const when = p.last_contacted ? relativeTime(p.last_contacted) : "";
+  return {
+    id: `person:${p.email || p.name}`,
+    type: "person",
+    source: "Contacts",
+    who: p.summary || "Contact",
+    when,
+    title: p.name,
+    snippet: p.summary,
+    haystack: "",
+    name: p.name,
+    role: "",
+    org: "",
+    lastContacted: when,
+    sharedDocs: [],
+    email: p.email,
+  };
+}
+
+// --- Recent searches (backend-stored, per tenant). --------------------------
+
+/** The caller's recent queries, newest first; [] on any failure (non-critical). */
+export async function getRecentSearches(): Promise<string[]> {
+  try {
+    const token = await getToken();
+    const res = await fetch("/v1/searches/recent", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      return [];
+    }
+    const j = (await res.json()) as { searches?: string[] };
+    return Array.isArray(j.searches) ? j.searches : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Remove one recent search (best effort). */
+export async function removeRecentSearch(q: string): Promise<void> {
+  try {
+    const token = await getToken();
+    await fetch(`/v1/searches?q=${encodeURIComponent(q)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    // best effort — the optimistic UI update already removed it locally.
+  }
 }
 
 // --- Mapping: gateway hit -> v2 result. -------------------------------------

@@ -50,6 +50,17 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 		http.MethodDelete: d.handleDeleteMyData,
 	})))
 	mux.Handle("/v1/search", authed(getOnly(d.handleSearch)))
+	// Per-source search (the v2 source tabs navigate here on a full page load):
+	// /v1/search/email, /files, /messages, /calendar, /photos, /people. The path
+	// segment selects the DocType filter (search.go) or the people aggregation.
+	mux.Handle("/v1/search/{source}", authed(getOnly(d.handleSourceSearch)))
+	// Recent-search history (per tenant, from the verified token). GET lists the
+	// caller's recent queries; POST records one; DELETE removes one (?q=) or all.
+	mux.Handle("/v1/searches/recent", authed(getOnly(d.handleListRecent)))
+	mux.Handle("/v1/searches", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost:   d.handlePostRecent,
+		http.MethodDelete: d.handleDeleteRecent,
+	})))
 	mux.Handle("/v1/media", authed(getOnly(d.handleMedia)))
 	mux.Handle("/v1/connectors", authed(methods(map[string]http.HandlerFunc{
 		http.MethodGet:  d.handleListConnectors,

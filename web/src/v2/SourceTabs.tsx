@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { SourceFilter } from "./types";
+import { searchUrl } from "./router";
 
 const TABS: { id: SourceFilter; label: string; icon: LucideIcon }[] = [
   { id: "all", label: "All", icon: LayoutGrid },
@@ -22,32 +23,34 @@ const TABS: { id: SourceFilter; label: string; icon: LucideIcon }[] = [
 
 export interface SourceTabsProps {
   active: SourceFilter;
-  onChange: (next: SourceFilter) => void;
-  /** Per-tab result counts (from the unfiltered query); shown where present. */
-  counts: Partial<Record<SourceFilter, number>>;
+  /** The current query — each tab links to its own endpoint for this query. */
+  query: string;
 }
 
 /**
- * Google's "All / Images / News" row, repurposed for sources. Switching a tab
- * re-runs the search for that source (the parent does the re-query) — it does
- * not merely hide rows.
+ * Google's "All / Images / News" row, repurposed for sources. Each tab is a
+ * real link (an <a href>) to that source's own URL/endpoint, so switching tabs
+ * is a FULL PAGE LOAD served by a distinct backend endpoint — not a client-side
+ * filter. cmd/middle-click opens a tab in a new browser tab, as expected of
+ * real links.
+ *
+ * The row scrolls horizontally on very narrow screens but hides the scrollbar
+ * (.no-scrollbar) so there is no stray scrollbar under the tabs on desktop.
  */
-export function SourceTabs({ active, onChange, counts }: SourceTabsProps) {
+export function SourceTabs({ active, query }: SourceTabsProps) {
   return (
     <nav
       aria-label="Filter by source"
-      className="-mx-2 overflow-x-auto border-b border-gline"
+      className="no-scrollbar -mx-2 overflow-x-auto border-b border-gline"
     >
       <ul className="flex min-w-max items-center gap-1 px-2 text-[13px]">
         {TABS.map(({ id, label, icon: Icon }) => {
           const isActive = id === active;
-          const count = counts[id];
           return (
             <li key={id}>
-              <button
-                type="button"
+              <a
+                href={searchUrl(id, query)}
                 aria-current={isActive ? "page" : undefined}
-                onClick={() => onChange(id)}
                 className={[
                   "flex items-center gap-1.5 border-b-[3px] px-3 py-3 -mb-px transition-colors",
                   isActive
@@ -57,14 +60,7 @@ export function SourceTabs({ active, onChange, counts }: SourceTabsProps) {
               >
                 <Icon aria-hidden="true" className="size-4" />
                 <span>{label}</span>
-                {count !== undefined && count > 0 && (
-                  <span
-                    className={isActive ? "text-gblue/70" : "text-gmuted/70"}
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
+              </a>
             </li>
           );
         })}

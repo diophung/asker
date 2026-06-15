@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LogOut, Settings as SettingsIcon } from "lucide-react";
-import { currentUser, signOut } from "./auth";
-import { BACKEND_ENABLED } from "./backend";
+import { currentUser, isSignedIn, signOut } from "./auth";
+import {
+  BACKEND_ENABLED,
+  getRecentSearches,
+  removeRecentSearch,
+} from "./backend";
 import { Settings } from "./Settings";
 import {
   getSuggestions,
@@ -16,19 +20,12 @@ import { SearchBox } from "./SearchBox";
 import { SignIn } from "./SignIn";
 import { SourceTabs } from "./SourceTabs";
 import { ErrorState, LoadingSkeleton, MetaLine, NoResults } from "./states";
+import { homeUrl, parseLocation, searchUrl } from "./router";
 
 type Phase = "idle" | "loading" | "done" | "error";
 
-const TYPE_TO_FILTER: Record<SearchResult["type"], SourceFilter> = {
-  email: "email",
-  file: "files",
-  message: "messages",
-  calendar: "calendar",
-  photo: "photos",
-  person: "people",
-};
-
 const DEAD_END_SUGGESTIONS = ["Sarah Chen", "Q3 planning", "budget", "design"];
+const MAX_RECENTS = 20;
 
 /** Google-homage wordmark; restrained everywhere else, per the spec. */
 function Logo({ compact }: { compact?: boolean }) {
@@ -57,71 +54,137 @@ function Logo({ compact }: { compact?: boolean }) {
 }
 
 export function SearchApp() {
-  const [box, setBox] = useState("");
-  const [query, setQuery] = useState(""); // submitted query; "" = home
-  const [source, setSource] = useState<SourceFilter>("all");
-  const [phase, setPhase] = useState<Phase>("idle");
+  // The whole results state is reconstructable from the URL: a full page load on
+  // a tab (or a bookmark/share) lands here and we rebuild from it.
+  const [initialRoute] = useState(parseLocation);
+  const [box, setBox] = useState(initialRoute.query);
+  const [query, setQuery] = useState(initialRoute.query); // submitted; "" = home
+  const [source, setSource] = useState<SourceFilter>(initialRoute.source);
+  const [phase, setPhase] = useState<Phase>(
+    initialRoute.query === "" ? "idle" : "loading",
+  );
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [counts, setCounts] = useState<Partial<Record<SourceFilter, number>>>({});
   const [panel, setPanel] = useState<Panel | null>(null);
-  // In backend mode the gateway needs a token — gate on a dev sign-in. In mock
-  // mode there is no backend, so no sign-in is required.
-  const [authed, setAuthed] = useState(!BACKEND_ENABLED);
+  const [recents, setRecents] = useState<string[]>([]);
+  // Backend mode needs a token — gate on a dev sign-in (restored from
+  // sessionStorage across the tab reloads). Mock mode has no backend, no gate.
+  const [authed, setAuthed] = useState(!BACKEND_ENABLED || isSignedIn());
   const [view, setView] = useState<"search" | "settings">("search");
 
   const reqId = useRef(0);
   const jumpToTop = useRef(false);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const initialFetched = useRef(false);
 
   const isHome = query === "";
-  const suggestions = useMemo(() => getSuggestions(box), [box]);
+  const suggestions = useMemo(
+    () => getSuggestions(box, BACKEND_ENABLED ? recents : undefined),
+    [box, recents],
+  );
   const meta = useMemo(() => metaFor(query, results.length), [query, results.length]);
 
-  async function run(q: string, src: SourceFilter, recount: boolean) {
+  // A single source's results (the active tab). Each tab is its own endpoint.
+  const run = useCallback(async (q: string, src: SourceFilter) => {
     const id = ++reqId.current;
     setPhase("loading");
     try {
-      // Switching a source RE-RUNS the search (not a client-side hide). The
-      // unfiltered pass feeds the per-tab counts + the entity panel.
-      const all = recount ? await searchPersonalData(q, "all") : null;
-      const hits =
-        src === "all" && all ? all : await searchPersonalData(q, src);
+      const hits = await searchPersonalData(q, src);
       if (id !== reqId.current) {
         return; // a newer request superseded this one
       }
-      if (all) {
-        const c: Partial<Record<SourceFilter, number>> = { all: all.length };
-        for (const r of all) {
-          const f = TYPE_TO_FILTER[r.type];
-          c[f] = (c[f] ?? 0) + 1;
-        }
-        setCounts(c);
-        setPanel(resolvePanel(q));
-      }
       setResults(hits);
+      setPanel(resolvePanel(q));
       setPhase("done");
     } catch {
       if (id === reqId.current) {
         setPhase("error");
       }
     }
-  }
+  }, []);
 
-  function submit(q: string, opts?: { jump?: boolean }) {
-    setBox(q);
-    setQuery(q);
+  const refreshRecents = useCallback(async () => {
+    setRecents(await getRecentSearches());
+  }, []);
+
+  // Submit from the box / a suggestion: a SOFT transition (the hero glide, which
+  // the spec forbids hard-swapping). Tab switches, by contrast, are full loads.
+  const submit = useCallback(
+    (q: string, opts?: { jump?: boolean }) => {
+      const trimmed = q.trim();
+      if (trimmed === "") {
+        return;
+      }
+      setBox(trimmed);
+      setQuery(trimmed);
+      setSource("all");
+      jumpToTop.current = opts?.jump ?? false;
+      window.history.pushState({}, "", searchUrl("all", trimmed));
+      void run(trimmed, "all");
+      // Optimistically surface the just-searched query (the backend records it
+      // server-side on the search request itself).
+      if (BACKEND_ENABLED) {
+        setRecents((prev) =>
+          [trimmed, ...prev.filter((r) => r.toLowerCase() !== trimmed.toLowerCase())].slice(
+            0,
+            MAX_RECENTS,
+          ),
+        );
+      }
+    },
+    [run],
+  );
+
+  const goHome = useCallback(() => {
+    setBox("");
+    setQuery("");
     setSource("all");
-    jumpToTop.current = opts?.jump ?? false;
-    void run(q, "all", true);
-  }
+    setResults([]);
+    setPanel(null);
+    setPhase("idle");
+    window.history.pushState({}, "", homeUrl);
+  }, []);
 
-  function changeSource(next: SourceFilter) {
-    if (next === source) {
+  const handleRemoveRecent = useCallback((text: string) => {
+    setRecents((prev) => prev.filter((r) => r !== text));
+    void removeRecentSearch(text);
+  }, []);
+
+  // Initial fetch: once authed (in backend mode) and on mount, run the URL's
+  // query and load recents. Runs once (the ref guards re-entry after sign-in).
+  useEffect(() => {
+    if (BACKEND_ENABLED && !authed) {
+      return; // wait for sign-in
+    }
+    if (initialFetched.current) {
       return;
     }
-    setSource(next);
-    void run(query, next, false);
-  }
+    initialFetched.current = true;
+    if (initialRoute.query !== "") {
+      void run(initialRoute.query, initialRoute.source);
+    }
+    if (BACKEND_ENABLED) {
+      void refreshRecents();
+    }
+  }, [authed, run, refreshRecents, initialRoute]);
+
+  // Back/forward across the soft (pushState) home<->results transitions.
+  useEffect(() => {
+    function onPop() {
+      const r = parseLocation();
+      setBox(r.query);
+      setQuery(r.query);
+      setSource(r.source);
+      if (r.query !== "") {
+        void run(r.query, r.source);
+      } else {
+        setResults([]);
+        setPanel(null);
+        setPhase("idle");
+      }
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [run]);
 
   // "Open top match": land the user on the single best result.
   useEffect(() => {
@@ -133,15 +196,19 @@ export function SearchApp() {
     }
   }, [phase, results]);
 
-  function signOutAll() {
+  const signOutAll = useCallback(() => {
     signOut();
     setQuery("");
     setBox("");
     setSource("all");
+    setResults([]);
+    setPanel(null);
+    setRecents([]);
     setPhase("idle");
     setView("search");
     setAuthed(false);
-  }
+    window.history.pushState({}, "", homeUrl);
+  }, []);
 
   // Auth gate (after all hooks). Backend mode requires a signed-in dev session.
   if (BACKEND_ENABLED && !authed) {
@@ -189,12 +256,7 @@ export function SearchApp() {
     >
       <button
         type="button"
-        onClick={() => {
-          setQuery("");
-          setBox("");
-          setSource("all");
-          setPhase("idle");
-        }}
+        onClick={goHome}
         className={isHome ? "mb-7" : "shrink-0"}
         aria-label="Asker home"
       >
@@ -206,6 +268,7 @@ export function SearchApp() {
           onChange={setBox}
           onSubmit={(q) => submit(q)}
           suggestions={suggestions}
+          onRemoveRecent={BACKEND_ENABLED ? handleRemoveRecent : undefined}
           autoFocus
           variant={isHome ? "home" : "header"}
         />
@@ -257,7 +320,7 @@ export function SearchApp() {
         </div>
         {searchHeader}
         <div className="mx-auto mt-2 max-w-[1100px] px-4">
-          <SourceTabs active={source} onChange={changeSource} counts={counts} />
+          <SourceTabs active={source} query={query} />
         </div>
       </header>
 
@@ -265,7 +328,7 @@ export function SearchApp() {
         <div className="flex flex-col gap-10 lg:flex-row lg:gap-12">
           <section className="min-w-0 max-w-[600px] flex-1" aria-live="polite">
             {phase === "error" ? (
-              <ErrorState onRetry={() => run(query, source, true)} />
+              <ErrorState onRetry={() => run(query, source)} />
             ) : phase === "loading" ? (
               <LoadingSkeleton />
             ) : results.length === 0 ? (

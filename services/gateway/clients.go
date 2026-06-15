@@ -30,7 +30,10 @@ type deps struct {
 	// upload client (thumbnails/keyframes are small).
 	mediaClient *http.Client
 	// counter backs the per-tenant rate limiter (Redis in production).
-	counter        rateCounter
+	counter rateCounter
+	// recent persists per-tenant recent-search history (Redis in production;
+	// nil-safe — a nil store degrades the feature, never the search).
+	recent         recentSearchStore
 	maxUploadBytes int64
 	maxMediaBytes  int64
 	// oidcAudience is the token audience; admin client-role claims live under
@@ -100,6 +103,7 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 		// Media fetches are small (thumbnails/keyframes): a tighter timeout.
 		mediaClient:      &http.Client{Timeout: 30 * time.Second},
 		counter:          counter,
+		recent:           counter, // the Redis counter also backs recent-search history
 		maxUploadBytes:   cfg.MaxUploadMB << 20,
 		maxMediaBytes:    cfg.MaxMediaMB << 20,
 		oidcAudience:     cfg.OIDCAudience,

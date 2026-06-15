@@ -28,6 +28,13 @@ type server struct {
 	logger  *slog.Logger
 	metrics *queryMetrics
 
+	// recencyWeight / recencyHalfLife drive the "most recent, most relevant
+	// first" re-rank applied to the retrieved page (rerank.go). Zero weight
+	// (the newServer default) leaves the pure relevance order; main.go sets
+	// these from config so production blends in freshness.
+	recencyWeight   float64
+	recencyHalfLife time.Duration
+
 	// cacheWarnOnce gates the loud log for a down Redis: the contract is
 	// "skip silently (log once)" — first failure warns, the rest are debug.
 	cacheWarnOnce sync.Once
@@ -192,6 +199,12 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	for _, rung := range degradedReasons {
 		s.metrics.recordDegradation(ctx, rung)
 	}
+
+	// Stage 6b: re-rank the retrieved page by "most recent, most relevant
+	// first" — blend freshness into the relevance order (rerank.go). A no-op
+	// when recencyWeight is 0. Applied before caching so a cache hit serves the
+	// same blended order (the sub-minute recency drift over the TTL is noise).
+	rerankByRecency(result.Hits, s.recencyWeight, s.recencyHalfLife, time.Now())
 
 	// Stage 7: respond; cache full-fidelity (non-degraded) results only, so
 	// a 60s TTL never pins keyword-only results past a TEI/Vespa blip.

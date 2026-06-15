@@ -93,6 +93,10 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 		cache,
 		logger,
 	)
+	// "most recent, most relevant first": blend freshness into ranking
+	// (rerank.go). newServer leaves this off; configure it from the environment.
+	srv.recencyWeight = cfg.RecencyWeight
+	srv.recencyHalfLife = cfg.RecencyHalfLife
 
 	// otelgrpc stats handler records RPC-level RED metrics + traces (the M4-noted
 	// gap). It uses the global meter/tracer providers, so it is no-op-safe when

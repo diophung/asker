@@ -1,8 +1,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SearchApp } from "./SearchApp";
 
 afterEach(cleanup);
+
+// The app reflects the submitted query into the URL (history.pushState), which
+// persists across tests in jsdom; reset to home so each test starts fresh.
+beforeEach(() => {
+  window.history.replaceState({}, "", "/");
+});
 
 function typeAndSearch(query: string) {
   fireEvent.change(screen.getByRole("combobox"), { target: { value: query } });
@@ -32,15 +38,18 @@ describe("SearchApp", () => {
     expect(await screen.findByText(/Shared documents/i)).toBeTruthy();
   });
 
-  it("switching the source tab re-runs the search for that source", async () => {
+  it("source tabs are full-page links to per-source endpoints", async () => {
     render(<SearchApp />);
     typeAndSearch("q3");
     await screen.findByText(/results from your data/i);
 
-    fireEvent.click(screen.getByRole("button", { name: /Files/ }));
+    // Tabs are real links (a full page load per tab, each its own endpoint),
+    // not client-side filters: the Files tab points at /search/files?q=q3.
+    const filesTab = screen.getByRole("link", { name: /Files/ });
+    expect(filesTab.getAttribute("href")).toBe("/search/files?q=q3");
 
-    // A file result for the new source is rendered after the re-run.
-    expect(await screen.findByText("Q3 Planning Doc")).toBeTruthy();
+    const peopleTab = screen.getByRole("link", { name: /People/ });
+    expect(peopleTab.getAttribute("href")).toBe("/search/people?q=q3");
   });
 
   it("no-match offers corpus-aware suggestions, not a dead end", async () => {

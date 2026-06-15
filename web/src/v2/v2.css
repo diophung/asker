@@ -49,6 +49,19 @@
   }
 }
 
+/*
+ * Hide the horizontal scrollbar on the source-tab row while keeping it
+ * scrollable on very narrow screens (Google's tab strip does the same): the
+ * visible scrollbar under the tabs was the reported UI bug.
+ */
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE/old Edge */
+  scrollbar-width: none; /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Edge */
+}
+
 /* Loading shimmer (Google-style skeleton, not a spinner). */
 @keyframes v2-shimmer {
   0% {

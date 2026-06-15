@@ -16,6 +16,8 @@ export interface SearchBoxProps {
   onSubmit: (query: string) => void;
   /** Typed autocomplete rows for the current value. */
   suggestions: Suggestion[];
+  /** Remove a recent-search row (the ✕); omitted in mock mode. */
+  onRemoveRecent?: (text: string) => void;
   autoFocus?: boolean;
   variant: "home" | "header";
 }
@@ -31,6 +33,7 @@ export function SearchBox({
   onChange,
   onSubmit,
   suggestions,
+  onRemoveRecent,
   autoFocus,
   variant,
 }: SearchBoxProps) {
@@ -177,9 +180,23 @@ export function SearchBox({
                   </span>
                 )}
               </span>
-              {s.kind === "recent" && (
-                <span className="shrink-0 text-[13px] text-gmuted">Recent</span>
-              )}
+              {s.kind === "recent" &&
+                (onRemoveRecent ? (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${s.text} from recent searches`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveRecent(s.text);
+                    }}
+                    className="shrink-0 rounded p-1 text-[13px] text-gmuted hover:bg-white hover:text-gink"
+                  >
+                    Remove
+                  </button>
+                ) : (
+                  <span className="shrink-0 text-[13px] text-gmuted">Recent</span>
+                ))}
             </li>
           ))}
         </ul>

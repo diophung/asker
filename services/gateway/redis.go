@@ -69,5 +69,39 @@ func (rc *redisCounter) GetDel(ctx context.Context, key string) (string, error) 
 	return v, nil
 }
 
+// --- Recent-search history (recentSearchStore). -----------------------------
+//
+// A per-tenant, most-recent-first, deduplicated, capped list of search queries
+// stored as a Redis list. The key is built from the verified-token tenant
+// (recent.go), never request input.
+
+// RecordRecent moves value to the front of the list at key: it removes any
+// existing exact occurrence, prepends value, caps the list to maxN entries, and
+// refreshes the TTL — all in one pipeline (most-recent-first, deduped, bounded).
+func (rc *redisCounter) RecordRecent(ctx context.Context, key, value string, maxN int, ttl time.Duration) error {
+	pipe := rc.client.Pipeline()
+	pipe.LRem(ctx, key, 0, value) // drop existing exact occurrences
+	pipe.LPush(ctx, key, value)   // newest at the front
+	pipe.LTrim(ctx, key, 0, int64(maxN-1))
+	pipe.Expire(ctx, key, ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// RecentList returns up to n entries from the front (newest first).
+func (rc *redisCounter) RecentList(ctx context.Context, key string, n int) ([]string, error) {
+	return rc.client.LRange(ctx, key, 0, int64(n-1)).Result()
+}
+
+// RemoveRecent deletes every occurrence of value from the list at key.
+func (rc *redisCounter) RemoveRecent(ctx context.Context, key, value string) error {
+	return rc.client.LRem(ctx, key, 0, value).Err()
+}
+
+// ClearRecent removes the whole list at key.
+func (rc *redisCounter) ClearRecent(ctx context.Context, key string) error {
+	return rc.client.Del(ctx, key).Err()
+}
+
 // Close releases the client's connection pool.
 func (rc *redisCounter) Close() error { return rc.client.Close() }
