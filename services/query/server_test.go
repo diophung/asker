@@ -247,6 +247,10 @@ type envConfig struct {
 	teiDim   int
 	clipDown bool
 	clipDim  int
+	// v3 personalization: when profiles is non-nil the server runs the
+	// personalized path (rrf controls dual-arm RRF retrieval).
+	profiles profileLoader
+	rrf      bool
 }
 
 func withTEIDown() envOption       { return func(c *envConfig) { c.teiDown = true } }
@@ -254,6 +258,12 @@ func withTEIDim(dim int) envOption { return func(c *envConfig) { c.teiDim = dim 
 func withClipDown() envOption      { return func(c *envConfig) { c.clipDown = true } }
 func withClipDim(dim int) envOption {
 	return func(c *envConfig) { c.clipDim = dim }
+}
+
+// withProfiles turns ON the personalized path with the given loader; rrf selects
+// dual-arm RRF retrieval.
+func withProfiles(l profileLoader, rrf bool) envOption {
+	return func(c *envConfig) { c.profiles = l; c.rrf = rrf }
 }
 
 func newQueryEnv(t *testing.T, opts ...envOption) *queryEnv {
@@ -283,6 +293,12 @@ func newQueryEnv(t *testing.T, opts ...envOption) *queryEnv {
 		cache,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+	if ec.profiles != nil {
+		srv.profiles = ec.profiles
+		srv.rrfEnabled = ec.rrf
+		srv.candidateCap = maxLimit
+		srv.recencyHalfLife = 720 * time.Hour // enable the recency bonus in scoring
+	}
 
 	lis := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(tenancygrpc.UnaryServerInterceptor()))

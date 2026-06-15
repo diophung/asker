@@ -33,7 +33,10 @@ type deps struct {
 	counter rateCounter
 	// recent persists per-tenant recent-search history (Redis in production;
 	// nil-safe — a nil store degrades the feature, never the search).
-	recent         recentSearchStore
+	recent recentSearchStore
+	// prefs write-through-caches the resolved personalization profile + learned
+	// model into Redis for the query hot path (v3.2; nil-safe).
+	prefs          prefWriteStore
 	maxUploadBytes int64
 	maxMediaBytes  int64
 	// oidcAudience is the token audience; admin client-role claims live under
@@ -104,6 +107,7 @@ func newDeps(cfg gatewayConfig, logger *slog.Logger) (*deps, func(), error) {
 		mediaClient:      &http.Client{Timeout: 30 * time.Second},
 		counter:          counter,
 		recent:           counter, // the Redis counter also backs recent-search history
+		prefs:            counter, // ...and the personalization write-through cache
 		maxUploadBytes:   cfg.MaxUploadMB << 20,
 		maxMediaBytes:    cfg.MaxMediaMB << 20,
 		oidcAudience:     cfg.OIDCAudience,

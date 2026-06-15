@@ -98,6 +98,19 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 	srv.recencyWeight = cfg.RecencyWeight
 	srv.recencyHalfLife = cfg.RecencyHalfLife
 
+	// v3 personalization: wire the Redis profile loader (turns the personalized
+	// re-rank ON). newServer leaves srv.profiles nil — the non-personalized
+	// pipeline — so this is the single switch that enables per-user ranking. A
+	// Redis miss/outage degrades to cold-start defaults, never an error.
+	if cfg.PersonalizationEnabled {
+		loader := newRedisProfileLoader(cfg.RedisAddr)
+		defer loader.Close()
+		srv.profiles = loader
+		srv.rrfEnabled = cfg.HybridRRF
+		srv.candidateCap = int32(cfg.CandidateCap)
+		logger.Info("personalization enabled", "rrf", cfg.HybridRRF, "candidate_cap", cfg.CandidateCap)
+	}
+
 	// otelgrpc stats handler records RPC-level RED metrics + traces (the M4-noted
 	// gap). It uses the global meter/tracer providers, so it is no-op-safe when
 	// telemetry was initialized without an endpoint. The tenancy interceptor

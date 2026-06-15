@@ -37,6 +37,10 @@ type searchHitJSON struct {
 	EndMs        int64  `json:"end_ms"`
 	Modality     string `json:"modality"`
 	ThumbnailKey string `json:"thumbnail_key"`
+	// Explanation is the v3 "why this ranked" reason (empty when personalization
+	// is not active). Features carries per-term contributions when ?debug=1.
+	Explanation string             `json:"explanation"`
+	Features    map[string]float64 `json:"features,omitempty"`
 }
 
 // searchResponseJSON is the pinned REST response shape (web/src/api.ts
@@ -160,6 +164,16 @@ func parseSearchRequest(q url.Values, maxQueryChars int) (*queryv1.SearchRequest
 		return nil, fmt.Errorf("invalid mode %q: want hybrid, keyword or vector", q.Get("mode"))
 	}
 
+	// debug=1 asks the query service to include per-hit feature contributions
+	// (Hit.features) — a ranking-reproducibility surface, never a ranking input.
+	switch q.Get("debug") {
+	case "", "0", "false":
+	case "1", "true":
+		req.Debug = true
+	default:
+		return nil, fmt.Errorf("invalid debug %q: want 1 or 0", q.Get("debug"))
+	}
+
 	return req, nil
 }
 
@@ -209,6 +223,8 @@ func restSearchResponse(resp *queryv1.SearchResponse) searchResponseJSON {
 			EndMs:        h.GetEndMs(),
 			Modality:     h.GetModality(),
 			ThumbnailKey: h.GetThumbnailKey(),
+			Explanation:  h.GetExplanation(),
+			Features:     h.GetFeatures(),
 		})
 	}
 	return searchResponseJSON{

@@ -61,6 +61,21 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 		http.MethodPost:   d.handlePostRecent,
 		http.MethodDelete: d.handleDeleteRecent,
 	})))
+	// Personalization (v3.2): per-tenant preferences + behavioral feedback. All
+	// authed; the tenant is the verified-token tenant only. Settings GET/PUT, a
+	// feedback capture endpoint, and the mandatory reset/export data-rights
+	// controls.
+	mux.Handle("/v1/preferences", authed(methods(map[string]http.HandlerFunc{
+		http.MethodGet: d.handleGetPreferences,
+		http.MethodPut: d.handlePutPreferences,
+	})))
+	mux.Handle("/v1/preferences/reset", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleResetLearning,
+	})))
+	mux.Handle("/v1/preferences/export", authed(getOnly(d.handleExportPersonalization)))
+	mux.Handle("/v1/feedback", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleFeedback,
+	})))
 	mux.Handle("/v1/media", authed(getOnly(d.handleMedia)))
 	mux.Handle("/v1/connectors", authed(methods(map[string]http.HandlerFunc{
 		http.MethodGet:  d.handleListConnectors,

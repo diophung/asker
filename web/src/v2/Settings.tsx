@@ -3,12 +3,14 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  Download,
   Loader2,
   Lock,
   LogOut,
   Plus,
   RotateCw,
   Trash2,
+  X,
 } from "lucide-react";
 import { ConnectorClient, type ConnectorInstanceStatus } from "../api";
 import {
@@ -19,10 +21,17 @@ import {
 } from "../connectors/catalog";
 import { currentUser, getToken } from "./auth";
 import {
+  type DocType,
+  defaultProfile,
   deleteMyData,
+  exportPersonalization,
   getMe,
+  getPreferences,
   getSearchMode,
   type Me,
+  type Profile,
+  resetLearning,
+  savePreferences,
   type SearchMode,
   setSearchMode,
 } from "./backend";
@@ -248,6 +257,9 @@ export function Settings({
             ))}
           </div>
         </Section>
+
+        {/* Personalization */}
+        <Personalization />
 
         {/* Privacy & data */}
         <Section title="Privacy & data">
@@ -607,5 +619,680 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       </h2>
       {children}
     </section>
+  );
+}
+
+// --- Personalization (v3.2): one control per preference field, plus the
+// mandatory transparency controls (pause, reset, export). Loads the resolved
+// profile on mount and persists every change via savePreferences. -------------
+
+/** The user-facing priority sources, mapped to their DocType source-weight key.
+ * A "priority" toggle nudges the weight above 1.0; off resets it to the 1.0
+ * default (the gateway treats a missing key as 1.0). */
+const PRIORITY_SOURCES: { key: DocType; label: string; source: SourceName }[] = [
+  { key: "EMAIL", label: "Email", source: "Gmail" },
+  { key: "CHAT_MESSAGE", label: "Messages", source: "Slack" },
+  { key: "FILE", label: "Files", source: "Drive" },
+  { key: "CALENDAR_EVENT", label: "Calendar", source: "Calendar" },
+];
+const PRIORITY_WEIGHT = 2.0;
+
+/** A short, curated IANA timezone list (the backend validates any value). */
+const TIMEZONES = [
+  "",
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "UTC",
+  "Europe/London",
+  "Europe/Berlin",
+  "Asia/Kolkata",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+];
+
+function Personalization() {
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [sampleCount, setSampleCount] = useState(0);
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    getPreferences()
+      .then((r) => {
+        if (live) {
+          setProfile(r.profile);
+          setSampleCount(r.sampleCount);
+        }
+      })
+      .catch(() => {
+        if (live) {
+          setProfile(defaultProfile());
+          setLoadError("Couldn't load your preferences — showing defaults.");
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Apply a change and persist it. Optimistic: the control reflects the edit
+  // immediately; a failed save surfaces an inline message but keeps the edit.
+  function update(mutate: (p: Profile) => Profile) {
+    setProfile((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const next = mutate(prev);
+      setSaving(true);
+      setSaveError("");
+      savePreferences(next)
+        .then((version) => {
+          setProfile((cur) => (cur ? { ...cur, version } : cur));
+        })
+        .catch((e: unknown) => {
+          setSaveError(e instanceof Error ? e.message : "Couldn't save changes.");
+        })
+        .finally(() => setSaving(false));
+      return next;
+    });
+  }
+
+  if (profile === null) {
+    return (
+      <Section title="Personalization">
+        <div className="flex items-center gap-2 text-[14px] text-gmuted">
+          <Loader2 className="size-4 animate-spin" /> Loading your preferences…
+        </div>
+      </Section>
+    );
+  }
+
+  return (
+    <Section title="Personalization">
+      <p className="-mt-1 mb-4 text-[13px] text-gmuted">
+        Tune how results are ranked for you. Every control feeds the ranker —
+        nothing here is cosmetic.{" "}
+        {saving && (
+          <span className="inline-flex items-center gap-1 text-gmuted">
+            <Loader2 className="size-3 animate-spin" /> Saving…
+          </span>
+        )}
+      </p>
+      {loadError !== "" && (
+        <p className="mb-3 text-[13px] text-[#b06000]" role="status">
+          {loadError}
+        </p>
+      )}
+      {saveError !== "" && (
+        <p className="mb-3 text-[13px] text-[#c5221f]" role="alert">
+          {saveError}
+        </p>
+      )}
+
+      <div className="space-y-6">
+        {/* Priority sources */}
+        <Field
+          label="Priority sources"
+          hint="Boost results from the sources that matter most to you."
+        >
+          <div className="flex flex-wrap gap-2">
+            {PRIORITY_SOURCES.map((s) => {
+              const on = (profile.source_weights[s.key] ?? 1) > 1;
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    update((p) => {
+                      const weights = { ...p.source_weights };
+                      if (on) {
+                        delete weights[s.key];
+                      } else {
+                        weights[s.key] = PRIORITY_WEIGHT;
+                      }
+                      return { ...p, source_weights: weights };
+                    })
+                  }
+                  className={[
+                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px]",
+                    on
+                      ? "border-gblue bg-gblue/5 text-gblue"
+                      : "border-gline text-gink hover:bg-gbg-soft",
+                  ].join(" ")}
+                >
+                  <SourceIcon source={s.source} size={15} /> {s.label}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
+        {/* Important people */}
+        <Field
+          label="Important people"
+          hint="Results involving these people are boosted. Use an email or name."
+        >
+          <TagList
+            values={profile.important_people}
+            placeholder="alice@example.com"
+            ariaLabel="Add an important person"
+            onChange={(important_people) =>
+              update((p) => ({ ...p, important_people }))
+            }
+          />
+        </Field>
+
+        {/* Topics */}
+        <Field
+          label="Topics & projects"
+          hint="Keywords, projects, or interests to favor in ranking."
+        >
+          <TagList
+            values={profile.topics}
+            placeholder="q3 planning"
+            ariaLabel="Add a topic"
+            onChange={(topics) => update((p) => ({ ...p, topics }))}
+          />
+        </Field>
+
+        {/* Mute */}
+        <Field
+          label="Muted people"
+          hint="Down-rank or hide results involving these people."
+        >
+          <TagList
+            values={profile.mute.people}
+            placeholder="noreply@example.com"
+            ariaLabel="Mute a person"
+            onChange={(people) =>
+              update((p) => ({ ...p, mute: { ...p.mute, people } }))
+            }
+          />
+        </Field>
+        <Field label="Muted topics" hint="Hide results matching these keywords.">
+          <TagList
+            values={profile.mute.topics}
+            placeholder="newsletter"
+            ariaLabel="Mute a topic"
+            onChange={(topics) =>
+              update((p) => ({ ...p, mute: { ...p.mute, topics } }))
+            }
+          />
+        </Field>
+        <Field label="Muted sources" hint="Turn off a whole source in ranking.">
+          <div className="flex flex-wrap gap-2">
+            {PRIORITY_SOURCES.map((s) => {
+              const muted = profile.mute.sources.includes(s.key);
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  aria-pressed={muted}
+                  onClick={() =>
+                    update((p) => {
+                      const sources = muted
+                        ? p.mute.sources.filter((x) => x !== s.key)
+                        : [...p.mute.sources, s.key];
+                      return { ...p, mute: { ...p.mute, sources } };
+                    })
+                  }
+                  className={[
+                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px]",
+                    muted
+                      ? "border-[#f3c9c5] bg-[#fce8e6] text-[#c5221f]"
+                      : "border-gline text-gink hover:bg-gbg-soft",
+                  ].join(" ")}
+                >
+                  <SourceIcon source={s.source} size={15} /> {s.label}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
+        {/* Working hours + timezone */}
+        <Field
+          label="Working hours"
+          hint="Grounds “this week” and what counts as urgent."
+        >
+          <div className="flex flex-wrap items-center gap-2 text-[14px] text-gink">
+            <HourSelect
+              ariaLabel="Working hours start"
+              value={profile.working_hours.start_hour}
+              max={23}
+              onChange={(start_hour) =>
+                update((p) => ({
+                  ...p,
+                  working_hours: { ...p.working_hours, start_hour },
+                }))
+              }
+            />
+            <span className="text-gmuted">to</span>
+            <HourSelect
+              ariaLabel="Working hours end"
+              value={profile.working_hours.end_hour}
+              max={24}
+              onChange={(end_hour) =>
+                update((p) => ({
+                  ...p,
+                  working_hours: { ...p.working_hours, end_hour },
+                }))
+              }
+            />
+            <select
+              aria-label="Timezone"
+              value={profile.timezone}
+              onChange={(e) =>
+                update((p) => ({ ...p, timezone: e.target.value }))
+              }
+              className="rounded-lg border border-gline px-2.5 py-1.5 text-[13.5px] text-gink outline-none focus:border-gblue"
+            >
+              {TIMEZONES.map((tz) => (
+                <option key={tz || "default"} value={tz}>
+                  {tz === "" ? "Default (UTC)" : tz}
+                </option>
+              ))}
+            </select>
+          </div>
+        </Field>
+
+        {/* Sliders */}
+        <Slider
+          label="Attention sensitivity"
+          lo="Show me everything"
+          hi="Only the critical few"
+          value={profile.attention_sensitivity}
+          onChange={(attention_sensitivity) =>
+            update((p) => ({ ...p, attention_sensitivity }))
+          }
+        />
+        <Slider
+          label="Recency vs. importance"
+          lo="Importance"
+          hi="Recency"
+          value={profile.recency_vs_importance}
+          onChange={(recency_vs_importance) =>
+            update((p) => ({ ...p, recency_vs_importance }))
+          }
+        />
+        <Slider
+          label="Novelty vs. familiarity"
+          lo="Familiar"
+          hi="Novel"
+          value={profile.novelty_vs_familiarity}
+          onChange={(novelty_vs_familiarity) =>
+            update((p) => ({ ...p, novelty_vs_familiarity }))
+          }
+        />
+      </div>
+
+      {/* Transparency controls */}
+      <div className="mt-6 border-t border-gline pt-5">
+        <label className="flex items-center justify-between gap-3">
+          <span className="min-w-0">
+            <span className="block text-[14px] text-gink">Pause learning</span>
+            <span className="block text-[12.5px] text-gmuted">
+              Freeze the model — your feedback won’t change ranking while paused.
+            </span>
+          </span>
+          <Toggle
+            checked={profile.learning_paused}
+            ariaLabel="Pause learning"
+            onChange={(learning_paused) =>
+              update((p) => ({ ...p, learning_paused }))
+            }
+          />
+        </label>
+
+        <p className="mt-4 text-[13px] text-gmuted" data-testid="sample-count">
+          Learned from {sampleCount.toLocaleString()} interaction
+          {sampleCount === 1 ? "" : "s"}.
+        </p>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <ExportButton />
+          <ResetLearning onReset={() => setSampleCount(0)} />
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <p className="text-[14px] font-medium text-gink">{label}</p>
+      {hint && <p className="mb-2 mt-0.5 text-[12.5px] text-gmuted">{hint}</p>}
+      <div className={hint ? "" : "mt-2"}>{children}</div>
+    </div>
+  );
+}
+
+/** An add/remove chip list — Enter or the + button adds; × removes. */
+function TagList({
+  values,
+  placeholder,
+  ariaLabel,
+  onChange,
+}: {
+  values: string[];
+  placeholder: string;
+  ariaLabel: string;
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function add() {
+    const v = draft.trim();
+    if (v === "") {
+      return;
+    }
+    if (!values.some((x) => x.toLowerCase() === v.toLowerCase())) {
+      onChange([...values, v]);
+    }
+    setDraft("");
+  }
+
+  return (
+    <div>
+      {values.length > 0 && (
+        <ul className="mb-2 flex flex-wrap gap-1.5">
+          {values.map((v) => (
+            <li
+              key={v}
+              className="inline-flex items-center gap-1 rounded-full bg-gbg-soft px-2.5 py-1 text-[13px] text-gink"
+            >
+              <span className="truncate">{v}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${v}`}
+                onClick={() => onChange(values.filter((x) => x !== v))}
+                className="rounded-full text-gmuted hover:text-[#c5221f]"
+              >
+                <X className="size-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={draft}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+          autoComplete="off"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          className="min-w-0 flex-1 rounded-lg border border-gline px-3 py-2 text-[14px] text-gink outline-none focus:border-gblue"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={draft.trim() === ""}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-gline px-3 py-2 text-[13px] text-gblue hover:bg-gbg-soft disabled:opacity-40"
+        >
+          <Plus className="size-3.5" /> Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HourSelect({
+  value,
+  max,
+  ariaLabel,
+  onChange,
+}: {
+  value: number;
+  max: number;
+  ariaLabel: string;
+  onChange: (h: number) => void;
+}) {
+  return (
+    <select
+      aria-label={ariaLabel}
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className="rounded-lg border border-gline px-2.5 py-1.5 text-[13.5px] text-gink outline-none focus:border-gblue"
+    >
+      {Array.from({ length: max + 1 }, (_, h) => (
+        <option key={h} value={h}>
+          {h.toString().padStart(2, "0")}:00
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function Slider({
+  label,
+  lo,
+  hi,
+  value,
+  onChange,
+}: {
+  label: string;
+  lo: string;
+  hi: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <p className="text-[14px] font-medium text-gink">{label}</p>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={value}
+        aria-label={label}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-2 w-full accent-gblue"
+      />
+      <div className="mt-0.5 flex justify-between text-[12px] text-gmuted">
+        <span>{lo}</span>
+        <span>{hi}</span>
+      </div>
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  ariaLabel,
+  onChange,
+}: {
+  checked: boolean;
+  ariaLabel: string;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={() => onChange(!checked)}
+      className={[
+        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors",
+        checked ? "bg-gblue" : "bg-gline",
+      ].join(" ")}
+    >
+      <span
+        className={[
+          "inline-block size-5 transform rounded-full bg-white shadow transition-transform",
+          checked ? "translate-x-5" : "translate-x-0.5",
+        ].join(" ")}
+      />
+    </button>
+  );
+}
+
+/** Export everything the engine has personalized for you (data rights). */
+function ExportButton() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function run() {
+    setBusy(true);
+    setError("");
+    exportPersonalization()
+      .then((data) => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "asker-personalization.json";
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Export failed.");
+      })
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <span className="inline-flex flex-col">
+      <button
+        type="button"
+        onClick={run}
+        disabled={busy}
+        className="inline-flex items-center gap-1.5 rounded-full border border-gline px-3 py-1.5 text-[13px] text-gink hover:bg-gbg-soft disabled:opacity-50"
+      >
+        <Download className="size-3.5" /> {busy ? "Exporting…" : "Export my data"}
+      </button>
+      {error !== "" && (
+        <span className="mt-1 text-[12.5px] text-[#c5221f]" role="alert">
+          {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Reset what we've learned — confirm modal (it erases feedback history). */
+function ResetLearning({ onReset }: { onReset: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [doneCount, setDoneCount] = useState<number | null>(null);
+
+  function run() {
+    setBusy(true);
+    setError("");
+    resetLearning()
+      .then((deleted) => {
+        setDoneCount(deleted);
+        onReset();
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Reset failed.");
+      })
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(true);
+          setError("");
+          setDoneCount(null);
+        }}
+        className="inline-flex items-center gap-1.5 rounded-full border border-[#f3c9c5] px-3 py-1.5 text-[13px] text-[#c5221f] hover:bg-[#fce8e6]"
+      >
+        <RotateCw className="size-3.5" /> Reset what you’ve learned about me
+      </button>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm reset learning"
+        >
+          <div className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-xl">
+            {doneCount !== null ? (
+              <>
+                <p className="flex items-center gap-2 text-[16px] font-medium text-gink">
+                  <Check className="size-5 text-gprov" /> Learning reset.
+                </p>
+                <p className="mt-2 text-[13px] text-gmuted">
+                  Cleared {doneCount.toLocaleString()} feedback signal
+                  {doneCount === 1 ? "" : "s"}. Ranking is back to your explicit
+                  preferences and the defaults.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="mt-4 w-full rounded-full bg-gblue py-2 text-[14px] font-medium text-white"
+                >
+                  Done
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-[16px] font-medium text-gink">
+                  Reset what you’ve learned?
+                </p>
+                <p className="mt-2 text-[13px] text-gmuted">
+                  This erases the behavioral model built from your clicks and
+                  feedback. Your explicit preferences above are kept. This can’t
+                  be undone.
+                </p>
+                {error !== "" && (
+                  <p className="mt-2 text-[13px] text-[#c5221f]" role="alert">
+                    {error}
+                  </p>
+                )}
+                <div className="mt-4 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    className="flex-1 rounded-full border border-gline py-2 text-[14px] text-gink hover:bg-gbg-soft"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={run}
+                    className="flex-1 rounded-full bg-[#c5221f] py-2 text-[14px] font-medium text-white hover:brightness-95 disabled:opacity-40"
+                  >
+                    {busy ? "Resetting…" : "Reset learning"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

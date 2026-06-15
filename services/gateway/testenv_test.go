@@ -171,6 +171,62 @@ func (f *fakeRecent) snapshot(key string) []string {
 	return append([]string(nil), f.data[key]...)
 }
 
+// fakePrefs is an in-memory prefWriteStore: it captures the personalization
+// write-through cache so tests can assert what the gateway cached under
+// RedisProfileKey/RedisWeightsKey and that reset drops the model key. nil-safe
+// in the handler (a Set/DeleteKey error never fails the request); the err knobs
+// let a test exercise that degradation.
+type fakePrefs struct {
+	mu      sync.Mutex
+	vals    map[string]string
+	deleted []string
+	setErr  error
+	delErr  error
+}
+
+func newFakePrefs() *fakePrefs { return &fakePrefs{vals: map[string]string{}} }
+
+func (f *fakePrefs) Set(_ context.Context, key, value string, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.vals[key] = value
+	return nil
+}
+
+func (f *fakePrefs) DeleteKey(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.delErr != nil {
+		return f.delErr
+	}
+	delete(f.vals, key)
+	f.deleted = append(f.deleted, key)
+	return nil
+}
+
+// get returns the cached value and whether the key is present.
+func (f *fakePrefs) get(key string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.vals[key]
+	return v, ok
+}
+
+// wasDeleted reports whether DeleteKey was ever called for key.
+func (f *fakePrefs) wasDeleted(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, k := range f.deleted {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
 // fakeQuery captures the tenant (as installed by the REAL tenancygrpc server
 // interceptor) and the request, then plays back a canned response.
 type fakeQuery struct {
@@ -218,17 +274,40 @@ type fakeControlPlane struct {
 	order          map[string][]string
 	tokens         map[string][]byte
 	deletedTenants []string
+
+	// Per-tenant personalization store (v3.2): keyed off the caller tenant the
+	// tenancygrpc server interceptor installs from the JWT, so one tenant's
+	// preferences/model are invisible to every other tenant. profileJSON is the
+	// verbatim Profile the gateway persisted; version is bumped on each PUT;
+	// weightsJSON is the learned LearnedModel; sampleCount tracks feedback events.
+	profiles    map[string]string
+	versions    map[string]int64
+	weights     map[string]string
+	sampleCount map[string]int64
+	// recordedFeedback captures the FeedbackEvents per tenant so tests can assert
+	// the gateway forwarded the body to RecordFeedback.
+	recordedFeedback map[string][]*controlplanev1.FeedbackEvent
+
 	// injectable failures
-	ensureErr error
-	listErr   error
-	syncErr   error
+	ensureErr   error
+	listErr     error
+	syncErr     error
+	getPersErr  error
+	putPrefErr  error
+	feedbackErr error
+	resetErr    error
 }
 
 func newFakeControlPlane() *fakeControlPlane {
 	return &fakeControlPlane{
-		instances: map[string]map[string]*controlplanev1.ConnectorInstance{},
-		order:     map[string][]string{},
-		tokens:    map[string][]byte{},
+		instances:        map[string]map[string]*controlplanev1.ConnectorInstance{},
+		order:            map[string][]string{},
+		tokens:           map[string][]byte{},
+		profiles:         map[string]string{},
+		versions:         map[string]int64{},
+		weights:          map[string]string{},
+		sampleCount:      map[string]int64{},
+		recordedFeedback: map[string][]*controlplanev1.FeedbackEvent{},
 	}
 }
 
@@ -375,6 +454,103 @@ func (f *fakeControlPlane) DeleteTenant(ctx context.Context, req *controlplanev1
 	}}, nil
 }
 
+// --- Personalization RPCs (v3.2), per-tenant in-memory ----------------------
+
+// GetPersonalization returns the caller tenant's stored profile/model (empty
+// strings when nothing was ever saved, so the gateway substitutes defaults).
+func (f *fakeControlPlane) GetPersonalization(ctx context.Context, _ *controlplanev1.GetPersonalizationRequest) (*controlplanev1.GetPersonalizationResponse, error) {
+	tenant, err := fakeCallerTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getPersErr != nil {
+		return nil, f.getPersErr
+	}
+	profile, exists := f.profiles[tenant]
+	return &controlplanev1.GetPersonalizationResponse{
+		ProfileJson: profile,
+		Version:     f.versions[tenant],
+		WeightsJson: f.weights[tenant],
+		SampleCount: f.sampleCount[tenant],
+		Exists:      exists,
+	}, nil
+}
+
+// PutPreferences stores the profile verbatim under the caller tenant and bumps
+// the version (mirroring the real Postgres-of-record behavior).
+func (f *fakeControlPlane) PutPreferences(ctx context.Context, req *controlplanev1.PutPreferencesRequest) (*controlplanev1.PutPreferencesResponse, error) {
+	tenant, err := fakeCallerTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.putPrefErr != nil {
+		return nil, f.putPrefErr
+	}
+	f.profiles[tenant] = req.GetProfileJson()
+	f.versions[tenant]++
+	return &controlplanev1.PutPreferencesResponse{Version: f.versions[tenant]}, nil
+}
+
+// RecordFeedback captures the event, increments the per-tenant sample count, and
+// returns a non-empty learned model so the gateway write-through fires.
+func (f *fakeControlPlane) RecordFeedback(ctx context.Context, req *controlplanev1.RecordFeedbackRequest) (*controlplanev1.RecordFeedbackResponse, error) {
+	tenant, err := fakeCallerTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.feedbackErr != nil {
+		return nil, f.feedbackErr
+	}
+	f.recordedFeedback[tenant] = append(f.recordedFeedback[tenant], req.GetEvent())
+	f.sampleCount[tenant]++
+	weights := fmt.Sprintf(`{"weights":{},"bias":0,"samples":%d}`, f.sampleCount[tenant])
+	f.weights[tenant] = weights
+	return &controlplanev1.RecordFeedbackResponse{
+		WeightsJson: weights,
+		SampleCount: f.sampleCount[tenant],
+	}, nil
+}
+
+// ResetLearning drops the caller tenant's learned model + feedback history,
+// returning how many feedback events were removed.
+func (f *fakeControlPlane) ResetLearning(ctx context.Context, _ *controlplanev1.ResetLearningRequest) (*controlplanev1.ResetLearningResponse, error) {
+	tenant, err := fakeCallerTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.resetErr != nil {
+		return nil, f.resetErr
+	}
+	deleted := int64(len(f.recordedFeedback[tenant]))
+	delete(f.recordedFeedback, tenant)
+	delete(f.weights, tenant)
+	delete(f.sampleCount, tenant)
+	return &controlplanev1.ResetLearningResponse{FeedbackDeleted: deleted}, nil
+}
+
+// storedProfile returns the verbatim profile JSON the gateway persisted for a
+// tenant (or "" when none).
+func (f *fakeControlPlane) storedProfile(tenant string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.profiles[tenant]
+}
+
+// recordedFeedbackFor returns a snapshot of the events recorded for a tenant.
+func (f *fakeControlPlane) recordedFeedbackFor(tenant string) []*controlplanev1.FeedbackEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*controlplanev1.FeedbackEvent(nil), f.recordedFeedback[tenant]...)
+}
+
 // fakeAdmin is the in-proc AdminService for gateway admin-route tests. It
 // records the target tenants it acted on; the gateway's admin-claim gate is
 // what these tests exercise, so the fake's logic is minimal.
@@ -458,6 +634,7 @@ type testEnv struct {
 	admin   *fakeAdmin
 	counter *fakeCounter
 	recent  *fakeRecent
+	prefs   *fakePrefs
 	deps    *deps
 	cfg     gatewayConfig
 }
@@ -472,6 +649,7 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 
 	counter := &fakeCounter{}
 	recent := newFakeRecent()
+	prefs := newFakePrefs()
 	cfg := testGatewayConfig(idp.jwks.URL)
 	d := &deps{
 		query:          queryv1.NewQueryServiceClient(conn),
@@ -482,6 +660,7 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 		mediaClient:    &http.Client{Timeout: 5 * time.Second},
 		counter:        counter,
 		recent:         recent,
+		prefs:          prefs,
 		maxUploadBytes: cfg.MaxUploadMB << 20,
 		maxMediaBytes:  cfg.MaxMediaMB << 20,
 		oidcAudience:   cfg.OIDCAudience,
@@ -501,6 +680,7 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 		admin:   admin,
 		counter: counter,
 		recent:  recent,
+		prefs:   prefs,
 		deps:    d,
 		cfg:     cfg,
 	}

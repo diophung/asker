@@ -320,6 +320,18 @@ func (s *pgStore) PurgeTenant(ctx context.Context, tenantID tenancy.TenantID) (P
 	if _, err := tx.Exec(ctx, `DELETE FROM sync_states WHERE tenant_id = $1`, string(tenantID)); err != nil {
 		return PurgeCounts{}, fmt.Errorf("purge tenant: delete sync states: %w", err)
 	}
+	// Personalization (v3.2): deleted explicitly so erasure is exact even though
+	// these also cascade off the tenants row below. Not counted in PurgeCounts
+	// (same treatment as sync_states); the residue check verifies emptiness.
+	for table, label := range map[string]string{
+		"feedback_events":  "feedback events",
+		"learned_weights":  "learned weights",
+		"user_preferences": "preferences",
+	} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE tenant_id = $1`, string(tenantID)); err != nil {
+			return PurgeCounts{}, fmt.Errorf("purge tenant: delete %s: %w", label, err)
+		}
+	}
 	ciTag, err := tx.Exec(ctx, `DELETE FROM connector_instances WHERE tenant_id = $1`, string(tenantID))
 	if err != nil {
 		return PurgeCounts{}, fmt.Errorf("purge tenant: delete connector instances: %w", err)
@@ -343,7 +355,10 @@ func (s *pgStore) TenantResidue(ctx context.Context, tenantID tenancy.TenantID) 
 			EXISTS (SELECT 1 FROM tenants WHERE tenant_id = $1)
 			OR EXISTS (SELECT 1 FROM connector_instances WHERE tenant_id = $1)
 			OR EXISTS (SELECT 1 FROM sync_states WHERE tenant_id = $1)
-			OR EXISTS (SELECT 1 FROM tokens WHERE tenant_id = $1)`
+			OR EXISTS (SELECT 1 FROM tokens WHERE tenant_id = $1)
+			OR EXISTS (SELECT 1 FROM user_preferences WHERE tenant_id = $1)
+			OR EXISTS (SELECT 1 FROM learned_weights WHERE tenant_id = $1)
+			OR EXISTS (SELECT 1 FROM feedback_events WHERE tenant_id = $1)`
 	var anyResidue bool
 	if err := s.pool.QueryRow(ctx, q, string(tenantID)).Scan(&anyResidue); err != nil {
 		return false, fmt.Errorf("tenant residue: %w", err)
@@ -412,6 +427,153 @@ func (s *pgStore) SetTenantConnectorStatus(ctx context.Context, tenantID tenancy
 		string(tenantID), status)
 	if err != nil {
 		return 0, fmt.Errorf("set tenant connector status: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// --- Personalization (v3.2) -------------------------------------------------
+
+func (s *pgStore) GetPersonalization(ctx context.Context, tenantID tenancy.TenantID) (UserPreferences, LearnedWeights, error) {
+	var prefs UserPreferences
+	err := s.pool.QueryRow(ctx,
+		`SELECT profile_json::text, version FROM user_preferences WHERE tenant_id = $1`,
+		string(tenantID)).Scan(&prefs.ProfileJSON, &prefs.Version)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// No saved profile is normal (cold start), not an error.
+	case err != nil:
+		return UserPreferences{}, LearnedWeights{}, fmt.Errorf("get preferences: %w", err)
+	default:
+		prefs.Exists = true
+	}
+
+	var weights LearnedWeights
+	err = s.pool.QueryRow(ctx,
+		`SELECT weights_json::text, sample_count FROM learned_weights WHERE tenant_id = $1`,
+		string(tenantID)).Scan(&weights.WeightsJSON, &weights.SampleCount)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return UserPreferences{}, LearnedWeights{}, fmt.Errorf("get learned weights: %w", err)
+	default:
+		weights.Exists = true
+	}
+	return prefs, weights, nil
+}
+
+func (s *pgStore) PutPreferences(ctx context.Context, tenantID tenancy.TenantID, profileJSON string) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("put preferences: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Implicit EnsureTenant: the FK requires the tenant row, and the identity is
+	// always a verified JWT (same rationale as CreateConnectorInstance).
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tenants (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING`,
+		string(tenantID)); err != nil {
+		return 0, fmt.Errorf("put preferences: ensure tenant: %w", err)
+	}
+
+	// Upsert, bumping version monotonically: a new row starts at 1, an existing
+	// one increments. The bumped version is what the query result-cache key
+	// folds in, so a preference change invalidates cached orders.
+	const q = `
+		INSERT INTO user_preferences (tenant_id, profile_json, version, updated_at)
+		VALUES ($1, $2::jsonb, 1, now())
+		ON CONFLICT (tenant_id) DO UPDATE SET
+			profile_json = excluded.profile_json,
+			version      = user_preferences.version + 1,
+			updated_at   = now()
+		RETURNING version`
+	var version int64
+	if err := tx.QueryRow(ctx, q, string(tenantID), profileJSON).Scan(&version); err != nil {
+		return 0, fmt.Errorf("put preferences: upsert: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("put preferences: commit: %w", err)
+	}
+	return version, nil
+}
+
+func (s *pgStore) AppendFeedback(ctx context.Context, tenantID tenancy.TenantID, ev FeedbackEvent) error {
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO tenants (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING`,
+		string(tenantID)); err != nil {
+		return fmt.Errorf("append feedback: ensure tenant: %w", err)
+	}
+	const q = `
+		INSERT INTO feedback_events (tenant_id, doc_id, doc_type, connector_id, action, dwell_ms, query)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	if _, err := s.pool.Exec(ctx, q,
+		string(tenantID), ev.DocID, ev.DocType, ev.ConnectorID, ev.Action, ev.DwellMs, ev.Query); err != nil {
+		return fmt.Errorf("append feedback: %w", err)
+	}
+	return nil
+}
+
+func (s *pgStore) UpdateLearnedWeights(ctx context.Context, tenantID tenancy.TenantID, update func(curJSON string, curSamples int64) (string, int64, error)) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("update learned weights: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tenants (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING`,
+		string(tenantID)); err != nil {
+		return fmt.Errorf("update learned weights: ensure tenant: %w", err)
+	}
+	// Materialize the row (default when absent) so the FOR UPDATE lock has
+	// something to hold; the lock serializes concurrent feedback for THIS tenant
+	// so the read-modify-write below cannot lose an update (TOCTOU).
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO learned_weights (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING`,
+		string(tenantID)); err != nil {
+		return fmt.Errorf("update learned weights: ensure row: %w", err)
+	}
+
+	var curJSON string
+	var curSamples int64
+	if err := tx.QueryRow(ctx,
+		`SELECT weights_json::text, sample_count FROM learned_weights WHERE tenant_id = $1 FOR UPDATE`,
+		string(tenantID)).Scan(&curJSON, &curSamples); err != nil {
+		return fmt.Errorf("update learned weights: lock: %w", err)
+	}
+
+	newJSON, newSamples, err := update(curJSON, curSamples)
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE learned_weights SET weights_json = $2::jsonb, sample_count = $3, updated_at = now() WHERE tenant_id = $1`,
+		string(tenantID), newJSON, newSamples); err != nil {
+		return fmt.Errorf("update learned weights: write: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update learned weights: commit: %w", err)
+	}
+	return nil
+}
+
+func (s *pgStore) ResetLearning(ctx context.Context, tenantID tenancy.TenantID) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reset learning: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `DELETE FROM learned_weights WHERE tenant_id = $1`, string(tenantID)); err != nil {
+		return 0, fmt.Errorf("reset learning: delete weights: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM feedback_events WHERE tenant_id = $1`, string(tenantID))
+	if err != nil {
+		return 0, fmt.Errorf("reset learning: delete feedback: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("reset learning: commit: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

@@ -98,7 +98,28 @@ func metadata(msg *gmailapi.Message) map[string]string {
 	put("thread_id", msg.ThreadId)
 	put("message_id", msg.Id)
 	put("web_link", "https://mail.google.com/mail/u/0/#all/"+msg.Id)
+	// Attention signals (v3.2): the Gmail system labels UNREAD/IMPORTANT ground
+	// the "unread important email" needs-attention feature (DECISIONS D12). Only
+	// set the keys when the label is present, so a read/unimportant message
+	// carries neither (the attention scorer treats absence as false).
+	if hasLabel(msg.LabelIds, "UNREAD") {
+		put("unread", "true")
+	}
+	if hasLabel(msg.LabelIds, "IMPORTANT") {
+		put("important", "true")
+	}
 	return md
+}
+
+// hasLabel reports whether labelIds contains label (Gmail label ids are
+// upper-case system constants like "UNREAD"/"IMPORTANT").
+func hasLabel(labelIds []string, label string) bool {
+	for _, l := range labelIds {
+		if l == label {
+			return true
+		}
+	}
+	return false
 }
 
 // participants parses the From/To/Cc headers (RFC 5322 address lists via

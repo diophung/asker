@@ -2,12 +2,68 @@ import type { ReactNode } from "react";
 import {
   CornerUpLeft,
   Heart,
+  Info,
   MapPin,
   Paperclip,
   Send,
+  ThumbsDown,
+  ThumbsUp,
 } from "lucide-react";
 import type { SearchResult, SourceName } from "./types";
 import { Avatar, fileIcon, Highlight, SourceIcon } from "./ui";
+
+/** The personalization signal a result emits: "more like this" (positive) or
+ * "fewer like this" (negative). Threaded from SearchApp -> sendFeedback. */
+export type FeedbackAction = "show_more" | "show_fewer";
+export type ResultFeedback = (result: SearchResult, action: FeedbackAction) => void;
+
+/** The muted "Why this?" line + the More/Fewer feedback controls. Only the
+ * email/file/message branch shows these (the text-forward results). */
+function WhyAndFeedback({
+  result,
+  onFeedback,
+}: {
+  result: SearchResult;
+  onFeedback?: ResultFeedback;
+}) {
+  const why = result.explanation?.trim();
+  if (!why && !onFeedback) {
+    return null;
+  }
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      {why ? (
+        <span className="inline-flex items-center gap-1 text-[12.5px] text-gmuted">
+          <Info aria-hidden="true" className="size-3.5 shrink-0" />
+          <span>
+            <span className="sr-only">Why this result: </span>
+            {why}
+          </span>
+        </span>
+      ) : null}
+      {onFeedback ? (
+        <span className="inline-flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onFeedback(result, "show_more")}
+            aria-label="More results like this"
+            className="inline-flex items-center gap-1 rounded-full border border-gline px-2.5 py-1 text-[12px] text-gmuted hover:bg-gbg-soft hover:text-gblue"
+          >
+            <ThumbsUp aria-hidden="true" className="size-3.5" /> More like this
+          </button>
+          <button
+            type="button"
+            onClick={() => onFeedback(result, "show_fewer")}
+            aria-label="Fewer results like this"
+            className="inline-flex items-center gap-1 rounded-full border border-gline px-2.5 py-1 text-[12px] text-gmuted hover:bg-gbg-soft hover:text-[#c5221f]"
+          >
+            <ThumbsDown aria-hidden="true" className="size-3.5" /> Fewer like this
+          </button>
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 /** Shared provenance line — Google's green-URL equivalent. */
 function Provenance({
@@ -85,9 +141,11 @@ function Chip({
 export function ResultItem({
   result,
   query,
+  onFeedback,
 }: {
   result: SearchResult;
   query: string;
+  onFeedback?: ResultFeedback;
 }) {
   // Person — a directory entry, not a blue link (the resolved entity also gets
   // the right-rail knowledge panel).
@@ -206,6 +264,7 @@ export function ResultItem({
             <Chip icon={Heart}>{result.reactions}</Chip>
           ) : null}
         </div>
+        <WhyAndFeedback result={result} onFeedback={onFeedback} />
       </div>
     </article>
   );

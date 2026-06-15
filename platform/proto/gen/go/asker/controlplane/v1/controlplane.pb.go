@@ -1244,6 +1244,515 @@ func (*DeleteTokenResponse) Descriptor() ([]byte, []int) {
 	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{22}
 }
 
+// GetPersonalizationRequest fetches the caller's resolved profile + learned
+// model (for the gateway's GET /v1/preferences and data-rights export, and to
+// warm the Redis read cache the query path uses).
+type GetPersonalizationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPersonalizationRequest) Reset() {
+	*x = GetPersonalizationRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPersonalizationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPersonalizationRequest) ProtoMessage() {}
+
+func (x *GetPersonalizationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPersonalizationRequest.ProtoReflect.Descriptor instead.
+func (*GetPersonalizationRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{23}
+}
+
+type GetPersonalizationResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// profile_json is the personalization.Profile as JSON; empty when the user has
+	// never saved preferences (the caller substitutes DefaultProfile()).
+	ProfileJson string `protobuf:"bytes,1,opt,name=profile_json,json=profileJson,proto3" json:"profile_json,omitempty"`
+	// version is the monotonic preference version (0 when unset); folded into the
+	// query result-cache key so a preference change invalidates cached orders.
+	Version int64 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	// weights_json is the personalization.LearnedModel as JSON; empty when no
+	// behavior has been learned yet (cold start).
+	WeightsJson   string `protobuf:"bytes,3,opt,name=weights_json,json=weightsJson,proto3" json:"weights_json,omitempty"`
+	SampleCount   int64  `protobuf:"varint,4,opt,name=sample_count,json=sampleCount,proto3" json:"sample_count,omitempty"`
+	Exists        bool   `protobuf:"varint,5,opt,name=exists,proto3" json:"exists,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPersonalizationResponse) Reset() {
+	*x = GetPersonalizationResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPersonalizationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPersonalizationResponse) ProtoMessage() {}
+
+func (x *GetPersonalizationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPersonalizationResponse.ProtoReflect.Descriptor instead.
+func (*GetPersonalizationResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetPersonalizationResponse) GetProfileJson() string {
+	if x != nil {
+		return x.ProfileJson
+	}
+	return ""
+}
+
+func (x *GetPersonalizationResponse) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *GetPersonalizationResponse) GetWeightsJson() string {
+	if x != nil {
+		return x.WeightsJson
+	}
+	return ""
+}
+
+func (x *GetPersonalizationResponse) GetSampleCount() int64 {
+	if x != nil {
+		return x.SampleCount
+	}
+	return 0
+}
+
+func (x *GetPersonalizationResponse) GetExists() bool {
+	if x != nil {
+		return x.Exists
+	}
+	return false
+}
+
+type PutPreferencesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// profile_json is a personalization.Profile as JSON; the control plane stores
+	// it verbatim (the gateway has already validated/clamped it) and bumps version.
+	ProfileJson   string `protobuf:"bytes,1,opt,name=profile_json,json=profileJson,proto3" json:"profile_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutPreferencesRequest) Reset() {
+	*x = PutPreferencesRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutPreferencesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutPreferencesRequest) ProtoMessage() {}
+
+func (x *PutPreferencesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutPreferencesRequest.ProtoReflect.Descriptor instead.
+func (*PutPreferencesRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *PutPreferencesRequest) GetProfileJson() string {
+	if x != nil {
+		return x.ProfileJson
+	}
+	return ""
+}
+
+type PutPreferencesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       int64                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutPreferencesResponse) Reset() {
+	*x = PutPreferencesResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutPreferencesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutPreferencesResponse) ProtoMessage() {}
+
+func (x *PutPreferencesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutPreferencesResponse.ProtoReflect.Descriptor instead.
+func (*PutPreferencesResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *PutPreferencesResponse) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+// FeedbackEvent is one observed interaction with a search result (implicit
+// behavioral signal). The control plane appends it and folds it into the
+// learned model via personalization.LearnedModel.Update — unless learning is
+// paused in the stored profile.
+type FeedbackEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	DocId string                 `protobuf:"bytes,1,opt,name=doc_id,json=docId,proto3" json:"doc_id,omitempty"`
+	// doc_type is the DocType enum NAME (e.g. "EMAIL"); a learned model feature.
+	DocType     string `protobuf:"bytes,2,opt,name=doc_type,json=docType,proto3" json:"doc_type,omitempty"`
+	ConnectorId string `protobuf:"bytes,3,opt,name=connector_id,json=connectorId,proto3" json:"connector_id,omitempty"`
+	// senders/topics are the candidate's feature attributes captured by the UI at
+	// interaction time (the doc is not re-fetched server-side).
+	Senders []string `protobuf:"bytes,4,rep,name=senders,proto3" json:"senders,omitempty"`
+	Topics  []string `protobuf:"bytes,5,rep,name=topics,proto3" json:"topics,omitempty"`
+	// action is the interaction kind: click/open/reply/dwell/show_more (positive)
+	// or dismiss/show_fewer (negative). Unknown actions are recorded but do not
+	// train the model.
+	Action  string `protobuf:"bytes,6,opt,name=action,proto3" json:"action,omitempty"`
+	DwellMs int64  `protobuf:"varint,7,opt,name=dwell_ms,json=dwellMs,proto3" json:"dwell_ms,omitempty"`
+	// query is the search text that produced the result (audit/analytics).
+	Query         string `protobuf:"bytes,8,opt,name=query,proto3" json:"query,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FeedbackEvent) Reset() {
+	*x = FeedbackEvent{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FeedbackEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FeedbackEvent) ProtoMessage() {}
+
+func (x *FeedbackEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FeedbackEvent.ProtoReflect.Descriptor instead.
+func (*FeedbackEvent) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *FeedbackEvent) GetDocId() string {
+	if x != nil {
+		return x.DocId
+	}
+	return ""
+}
+
+func (x *FeedbackEvent) GetDocType() string {
+	if x != nil {
+		return x.DocType
+	}
+	return ""
+}
+
+func (x *FeedbackEvent) GetConnectorId() string {
+	if x != nil {
+		return x.ConnectorId
+	}
+	return ""
+}
+
+func (x *FeedbackEvent) GetSenders() []string {
+	if x != nil {
+		return x.Senders
+	}
+	return nil
+}
+
+func (x *FeedbackEvent) GetTopics() []string {
+	if x != nil {
+		return x.Topics
+	}
+	return nil
+}
+
+func (x *FeedbackEvent) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *FeedbackEvent) GetDwellMs() int64 {
+	if x != nil {
+		return x.DwellMs
+	}
+	return 0
+}
+
+func (x *FeedbackEvent) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+type RecordFeedbackRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Event         *FeedbackEvent         `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordFeedbackRequest) Reset() {
+	*x = RecordFeedbackRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordFeedbackRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordFeedbackRequest) ProtoMessage() {}
+
+func (x *RecordFeedbackRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordFeedbackRequest.ProtoReflect.Descriptor instead.
+func (*RecordFeedbackRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *RecordFeedbackRequest) GetEvent() *FeedbackEvent {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+type RecordFeedbackResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// weights_json is the updated learned model (for the gateway to write through
+	// to the Redis read cache); empty when learning is paused (no update applied).
+	WeightsJson    string `protobuf:"bytes,1,opt,name=weights_json,json=weightsJson,proto3" json:"weights_json,omitempty"`
+	SampleCount    int64  `protobuf:"varint,2,opt,name=sample_count,json=sampleCount,proto3" json:"sample_count,omitempty"`
+	LearningPaused bool   `protobuf:"varint,3,opt,name=learning_paused,json=learningPaused,proto3" json:"learning_paused,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RecordFeedbackResponse) Reset() {
+	*x = RecordFeedbackResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordFeedbackResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordFeedbackResponse) ProtoMessage() {}
+
+func (x *RecordFeedbackResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordFeedbackResponse.ProtoReflect.Descriptor instead.
+func (*RecordFeedbackResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *RecordFeedbackResponse) GetWeightsJson() string {
+	if x != nil {
+		return x.WeightsJson
+	}
+	return ""
+}
+
+func (x *RecordFeedbackResponse) GetSampleCount() int64 {
+	if x != nil {
+		return x.SampleCount
+	}
+	return 0
+}
+
+func (x *RecordFeedbackResponse) GetLearningPaused() bool {
+	if x != nil {
+		return x.LearningPaused
+	}
+	return false
+}
+
+type ResetLearningRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResetLearningRequest) Reset() {
+	*x = ResetLearningRequest{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResetLearningRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResetLearningRequest) ProtoMessage() {}
+
+func (x *ResetLearningRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResetLearningRequest.ProtoReflect.Descriptor instead.
+func (*ResetLearningRequest) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{30}
+}
+
+type ResetLearningResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// feedback_deleted is how many stored feedback events were removed.
+	FeedbackDeleted int64 `protobuf:"varint,1,opt,name=feedback_deleted,json=feedbackDeleted,proto3" json:"feedback_deleted,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ResetLearningResponse) Reset() {
+	*x = ResetLearningResponse{}
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResetLearningResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResetLearningResponse) ProtoMessage() {}
+
+func (x *ResetLearningResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResetLearningResponse.ProtoReflect.Descriptor instead.
+func (*ResetLearningResponse) Descriptor() ([]byte, []int) {
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ResetLearningResponse) GetFeedbackDeleted() int64 {
+	if x != nil {
+		return x.FeedbackDeleted
+	}
+	return 0
+}
+
 type DeleteTenantRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// confirm MUST equal the caller's own tenant id (the value /v1/me reports).
@@ -1256,7 +1765,7 @@ type DeleteTenantRequest struct {
 
 func (x *DeleteTenantRequest) Reset() {
 	*x = DeleteTenantRequest{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1268,7 +1777,7 @@ func (x *DeleteTenantRequest) String() string {
 func (*DeleteTenantRequest) ProtoMessage() {}
 
 func (x *DeleteTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[23]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1281,7 +1790,7 @@ func (x *DeleteTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTenantRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTenantRequest) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{23}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DeleteTenantRequest) GetConfirm() string {
@@ -1316,7 +1825,7 @@ type DeleteReport struct {
 
 func (x *DeleteReport) Reset() {
 	*x = DeleteReport{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1837,7 @@ func (x *DeleteReport) String() string {
 func (*DeleteReport) ProtoMessage() {}
 
 func (x *DeleteReport) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[24]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1850,7 @@ func (x *DeleteReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteReport.ProtoReflect.Descriptor instead.
 func (*DeleteReport) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{24}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *DeleteReport) GetTenantId() string {
@@ -1416,7 +1925,7 @@ type DeleteTenantResponse struct {
 
 func (x *DeleteTenantResponse) Reset() {
 	*x = DeleteTenantResponse{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1428,7 +1937,7 @@ func (x *DeleteTenantResponse) String() string {
 func (*DeleteTenantResponse) ProtoMessage() {}
 
 func (x *DeleteTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[25]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1441,7 +1950,7 @@ func (x *DeleteTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTenantResponse.ProtoReflect.Descriptor instead.
 func (*DeleteTenantResponse) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{25}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *DeleteTenantResponse) GetReport() *DeleteReport {
@@ -1459,7 +1968,7 @@ type ListAllInstancesRequest struct {
 
 func (x *ListAllInstancesRequest) Reset() {
 	*x = ListAllInstancesRequest{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[26]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1471,7 +1980,7 @@ func (x *ListAllInstancesRequest) String() string {
 func (*ListAllInstancesRequest) ProtoMessage() {}
 
 func (x *ListAllInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[26]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1484,7 +1993,7 @@ func (x *ListAllInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAllInstancesRequest.ProtoReflect.Descriptor instead.
 func (*ListAllInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{26}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{35}
 }
 
 type ListAllInstancesResponse struct {
@@ -1496,7 +2005,7 @@ type ListAllInstancesResponse struct {
 
 func (x *ListAllInstancesResponse) Reset() {
 	*x = ListAllInstancesResponse{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[27]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1508,7 +2017,7 @@ func (x *ListAllInstancesResponse) String() string {
 func (*ListAllInstancesResponse) ProtoMessage() {}
 
 func (x *ListAllInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[27]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1521,7 +2030,7 @@ func (x *ListAllInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAllInstancesResponse.ProtoReflect.Descriptor instead.
 func (*ListAllInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{27}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ListAllInstancesResponse) GetInstances() []*TenantInstance {
@@ -1544,7 +2053,7 @@ type TenantInstance struct {
 
 func (x *TenantInstance) Reset() {
 	*x = TenantInstance{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[28]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1556,7 +2065,7 @@ func (x *TenantInstance) String() string {
 func (*TenantInstance) ProtoMessage() {}
 
 func (x *TenantInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[28]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1569,7 +2078,7 @@ func (x *TenantInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantInstance.ProtoReflect.Descriptor instead.
 func (*TenantInstance) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{28}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *TenantInstance) GetTenantId() string {
@@ -1602,7 +2111,7 @@ type TenantUsage struct {
 
 func (x *TenantUsage) Reset() {
 	*x = TenantUsage{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[29]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1614,7 +2123,7 @@ func (x *TenantUsage) String() string {
 func (*TenantUsage) ProtoMessage() {}
 
 func (x *TenantUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[29]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1627,7 +2136,7 @@ func (x *TenantUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantUsage.ProtoReflect.Descriptor instead.
 func (*TenantUsage) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{29}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *TenantUsage) GetTenantId() string {
@@ -1677,7 +2186,7 @@ type ListTenantsRequest struct {
 
 func (x *ListTenantsRequest) Reset() {
 	*x = ListTenantsRequest{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[30]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1689,7 +2198,7 @@ func (x *ListTenantsRequest) String() string {
 func (*ListTenantsRequest) ProtoMessage() {}
 
 func (x *ListTenantsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[30]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1702,7 +2211,7 @@ func (x *ListTenantsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantsRequest.ProtoReflect.Descriptor instead.
 func (*ListTenantsRequest) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{30}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ListTenantsRequest) GetLimit() int32 {
@@ -1730,7 +2239,7 @@ type ListTenantsResponse struct {
 
 func (x *ListTenantsResponse) Reset() {
 	*x = ListTenantsResponse{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[31]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1742,7 +2251,7 @@ func (x *ListTenantsResponse) String() string {
 func (*ListTenantsResponse) ProtoMessage() {}
 
 func (x *ListTenantsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[31]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1755,7 +2264,7 @@ func (x *ListTenantsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantsResponse.ProtoReflect.Descriptor instead.
 func (*ListTenantsResponse) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{31}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ListTenantsResponse) GetTenants() []*TenantUsage {
@@ -1781,7 +2290,7 @@ type GetTenantUsageRequest struct {
 
 func (x *GetTenantUsageRequest) Reset() {
 	*x = GetTenantUsageRequest{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[32]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1793,7 +2302,7 @@ func (x *GetTenantUsageRequest) String() string {
 func (*GetTenantUsageRequest) ProtoMessage() {}
 
 func (x *GetTenantUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[32]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1806,7 +2315,7 @@ func (x *GetTenantUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantUsageRequest) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{32}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *GetTenantUsageRequest) GetTenantId() string {
@@ -1825,7 +2334,7 @@ type GetTenantUsageResponse struct {
 
 func (x *GetTenantUsageResponse) Reset() {
 	*x = GetTenantUsageResponse{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[33]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1837,7 +2346,7 @@ func (x *GetTenantUsageResponse) String() string {
 func (*GetTenantUsageResponse) ProtoMessage() {}
 
 func (x *GetTenantUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[33]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1850,7 +2359,7 @@ func (x *GetTenantUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantUsageResponse) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{33}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetTenantUsageResponse) GetUsage() *TenantUsage {
@@ -1871,7 +2380,7 @@ type SuspendTenantRequest struct {
 
 func (x *SuspendTenantRequest) Reset() {
 	*x = SuspendTenantRequest{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[34]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1883,7 +2392,7 @@ func (x *SuspendTenantRequest) String() string {
 func (*SuspendTenantRequest) ProtoMessage() {}
 
 func (x *SuspendTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[34]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1896,7 +2405,7 @@ func (x *SuspendTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendTenantRequest.ProtoReflect.Descriptor instead.
 func (*SuspendTenantRequest) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{34}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *SuspendTenantRequest) GetTenantId() string {
@@ -1922,7 +2431,7 @@ type SuspendTenantResponse struct {
 
 func (x *SuspendTenantResponse) Reset() {
 	*x = SuspendTenantResponse{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[35]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1934,7 +2443,7 @@ func (x *SuspendTenantResponse) String() string {
 func (*SuspendTenantResponse) ProtoMessage() {}
 
 func (x *SuspendTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[35]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1947,7 +2456,7 @@ func (x *SuspendTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendTenantResponse.ProtoReflect.Descriptor instead.
 func (*SuspendTenantResponse) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{35}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *SuspendTenantResponse) GetInstancesChanged() int64 {
@@ -1966,7 +2475,7 @@ type AdminDeleteTenantRequest struct {
 
 func (x *AdminDeleteTenantRequest) Reset() {
 	*x = AdminDeleteTenantRequest{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[36]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1978,7 +2487,7 @@ func (x *AdminDeleteTenantRequest) String() string {
 func (*AdminDeleteTenantRequest) ProtoMessage() {}
 
 func (x *AdminDeleteTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[36]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1991,7 +2500,7 @@ func (x *AdminDeleteTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminDeleteTenantRequest.ProtoReflect.Descriptor instead.
 func (*AdminDeleteTenantRequest) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{36}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *AdminDeleteTenantRequest) GetTenantId() string {
@@ -2010,7 +2519,7 @@ type AdminDeleteTenantResponse struct {
 
 func (x *AdminDeleteTenantResponse) Reset() {
 	*x = AdminDeleteTenantResponse{}
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[37]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2022,7 +2531,7 @@ func (x *AdminDeleteTenantResponse) String() string {
 func (*AdminDeleteTenantResponse) ProtoMessage() {}
 
 func (x *AdminDeleteTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[37]
+	mi := &file_asker_controlplane_v1_controlplane_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2035,7 +2544,7 @@ func (x *AdminDeleteTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminDeleteTenantResponse.ProtoReflect.Descriptor instead.
 func (*AdminDeleteTenantResponse) Descriptor() ([]byte, []int) {
-	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{37}
+	return file_asker_controlplane_v1_controlplane_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *AdminDeleteTenantResponse) GetReport() *DeleteReport {
@@ -2109,7 +2618,36 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\x05token\x18\x01 \x01(\fR\x05token\"H\n" +
 	"\x12DeleteTokenRequest\x122\n" +
 	"\x15connector_instance_id\x18\x01 \x01(\tR\x13connectorInstanceId\"\x15\n" +
-	"\x13DeleteTokenResponse\"/\n" +
+	"\x13DeleteTokenResponse\"\x1b\n" +
+	"\x19GetPersonalizationRequest\"\xb7\x01\n" +
+	"\x1aGetPersonalizationResponse\x12!\n" +
+	"\fprofile_json\x18\x01 \x01(\tR\vprofileJson\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x03R\aversion\x12!\n" +
+	"\fweights_json\x18\x03 \x01(\tR\vweightsJson\x12!\n" +
+	"\fsample_count\x18\x04 \x01(\x03R\vsampleCount\x12\x16\n" +
+	"\x06exists\x18\x05 \x01(\bR\x06exists\":\n" +
+	"\x15PutPreferencesRequest\x12!\n" +
+	"\fprofile_json\x18\x01 \x01(\tR\vprofileJson\"2\n" +
+	"\x16PutPreferencesResponse\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\x03R\aversion\"\xdf\x01\n" +
+	"\rFeedbackEvent\x12\x15\n" +
+	"\x06doc_id\x18\x01 \x01(\tR\x05docId\x12\x19\n" +
+	"\bdoc_type\x18\x02 \x01(\tR\adocType\x12!\n" +
+	"\fconnector_id\x18\x03 \x01(\tR\vconnectorId\x12\x18\n" +
+	"\asenders\x18\x04 \x03(\tR\asenders\x12\x16\n" +
+	"\x06topics\x18\x05 \x03(\tR\x06topics\x12\x16\n" +
+	"\x06action\x18\x06 \x01(\tR\x06action\x12\x19\n" +
+	"\bdwell_ms\x18\a \x01(\x03R\adwellMs\x12\x14\n" +
+	"\x05query\x18\b \x01(\tR\x05query\"S\n" +
+	"\x15RecordFeedbackRequest\x12:\n" +
+	"\x05event\x18\x01 \x01(\v2$.asker.controlplane.v1.FeedbackEventR\x05event\"\x87\x01\n" +
+	"\x16RecordFeedbackResponse\x12!\n" +
+	"\fweights_json\x18\x01 \x01(\tR\vweightsJson\x12!\n" +
+	"\fsample_count\x18\x02 \x01(\x03R\vsampleCount\x12'\n" +
+	"\x0flearning_paused\x18\x03 \x01(\bR\x0elearningPaused\"\x16\n" +
+	"\x14ResetLearningRequest\"B\n" +
+	"\x15ResetLearningResponse\x12)\n" +
+	"\x10feedback_deleted\x18\x01 \x01(\x03R\x0ffeedbackDeleted\"/\n" +
 	"\x13DeleteTenantRequest\x12\x18\n" +
 	"\aconfirm\x18\x01 \x01(\tR\aconfirm\"\xea\x02\n" +
 	"\fDeleteReport\x12\x1b\n" +
@@ -2169,7 +2707,7 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\tFULL_SYNC\x10\x02\x12\x0f\n" +
 	"\vINCREMENTAL\x10\x03\x12\n" +
 	"\n" +
-	"\x06FAILED\x10\x042\xf8\t\n" +
+	"\x06FAILED\x10\x042\xbd\r\n" +
 	"\x13ControlPlaneService\x12g\n" +
 	"\fEnsureTenant\x12*.asker.controlplane.v1.EnsureTenantRequest\x1a+.asker.controlplane.v1.EnsureTenantResponse\x12\x88\x01\n" +
 	"\x17CreateConnectorInstance\x125.asker.controlplane.v1.CreateConnectorInstanceRequest\x1a6.asker.controlplane.v1.CreateConnectorInstanceResponse\x12\x85\x01\n" +
@@ -2180,7 +2718,11 @@ const file_asker_controlplane_v1_controlplane_proto_rawDesc = "" +
 	"\fSetSyncState\x12*.asker.controlplane.v1.SetSyncStateRequest\x1a+.asker.controlplane.v1.SetSyncStateResponse\x12[\n" +
 	"\bPutToken\x12&.asker.controlplane.v1.PutTokenRequest\x1a'.asker.controlplane.v1.PutTokenResponse\x12[\n" +
 	"\bGetToken\x12&.asker.controlplane.v1.GetTokenRequest\x1a'.asker.controlplane.v1.GetTokenResponse\x12d\n" +
-	"\vDeleteToken\x12).asker.controlplane.v1.DeleteTokenRequest\x1a*.asker.controlplane.v1.DeleteTokenResponse\x12g\n" +
+	"\vDeleteToken\x12).asker.controlplane.v1.DeleteTokenRequest\x1a*.asker.controlplane.v1.DeleteTokenResponse\x12y\n" +
+	"\x12GetPersonalization\x120.asker.controlplane.v1.GetPersonalizationRequest\x1a1.asker.controlplane.v1.GetPersonalizationResponse\x12m\n" +
+	"\x0ePutPreferences\x12,.asker.controlplane.v1.PutPreferencesRequest\x1a-.asker.controlplane.v1.PutPreferencesResponse\x12m\n" +
+	"\x0eRecordFeedback\x12,.asker.controlplane.v1.RecordFeedbackRequest\x1a-.asker.controlplane.v1.RecordFeedbackResponse\x12j\n" +
+	"\rResetLearning\x12+.asker.controlplane.v1.ResetLearningRequest\x1a,.asker.controlplane.v1.ResetLearningResponse\x12g\n" +
 	"\fDeleteTenant\x12*.asker.controlplane.v1.DeleteTenantRequest\x1a+.asker.controlplane.v1.DeleteTenantResponse2\x87\x01\n" +
 	"\x10SchedulerService\x12s\n" +
 	"\x10ListAllInstances\x12..asker.controlplane.v1.ListAllInstancesRequest\x1a/.asker.controlplane.v1.ListAllInstancesResponse2\xc7\x03\n" +
@@ -2203,7 +2745,7 @@ func file_asker_controlplane_v1_controlplane_proto_rawDescGZIP() []byte {
 }
 
 var file_asker_controlplane_v1_controlplane_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_asker_controlplane_v1_controlplane_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_asker_controlplane_v1_controlplane_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_asker_controlplane_v1_controlplane_proto_goTypes = []any{
 	(ConnectorStatus)(0),                    // 0: asker.controlplane.v1.ConnectorStatus
 	(SyncPhase)(0),                          // 1: asker.controlplane.v1.SyncPhase
@@ -2230,82 +2772,100 @@ var file_asker_controlplane_v1_controlplane_proto_goTypes = []any{
 	(*GetTokenResponse)(nil),                // 22: asker.controlplane.v1.GetTokenResponse
 	(*DeleteTokenRequest)(nil),              // 23: asker.controlplane.v1.DeleteTokenRequest
 	(*DeleteTokenResponse)(nil),             // 24: asker.controlplane.v1.DeleteTokenResponse
-	(*DeleteTenantRequest)(nil),             // 25: asker.controlplane.v1.DeleteTenantRequest
-	(*DeleteReport)(nil),                    // 26: asker.controlplane.v1.DeleteReport
-	(*DeleteTenantResponse)(nil),            // 27: asker.controlplane.v1.DeleteTenantResponse
-	(*ListAllInstancesRequest)(nil),         // 28: asker.controlplane.v1.ListAllInstancesRequest
-	(*ListAllInstancesResponse)(nil),        // 29: asker.controlplane.v1.ListAllInstancesResponse
-	(*TenantInstance)(nil),                  // 30: asker.controlplane.v1.TenantInstance
-	(*TenantUsage)(nil),                     // 31: asker.controlplane.v1.TenantUsage
-	(*ListTenantsRequest)(nil),              // 32: asker.controlplane.v1.ListTenantsRequest
-	(*ListTenantsResponse)(nil),             // 33: asker.controlplane.v1.ListTenantsResponse
-	(*GetTenantUsageRequest)(nil),           // 34: asker.controlplane.v1.GetTenantUsageRequest
-	(*GetTenantUsageResponse)(nil),          // 35: asker.controlplane.v1.GetTenantUsageResponse
-	(*SuspendTenantRequest)(nil),            // 36: asker.controlplane.v1.SuspendTenantRequest
-	(*SuspendTenantResponse)(nil),           // 37: asker.controlplane.v1.SuspendTenantResponse
-	(*AdminDeleteTenantRequest)(nil),        // 38: asker.controlplane.v1.AdminDeleteTenantRequest
-	(*AdminDeleteTenantResponse)(nil),       // 39: asker.controlplane.v1.AdminDeleteTenantResponse
-	(*timestamppb.Timestamp)(nil),           // 40: google.protobuf.Timestamp
+	(*GetPersonalizationRequest)(nil),       // 25: asker.controlplane.v1.GetPersonalizationRequest
+	(*GetPersonalizationResponse)(nil),      // 26: asker.controlplane.v1.GetPersonalizationResponse
+	(*PutPreferencesRequest)(nil),           // 27: asker.controlplane.v1.PutPreferencesRequest
+	(*PutPreferencesResponse)(nil),          // 28: asker.controlplane.v1.PutPreferencesResponse
+	(*FeedbackEvent)(nil),                   // 29: asker.controlplane.v1.FeedbackEvent
+	(*RecordFeedbackRequest)(nil),           // 30: asker.controlplane.v1.RecordFeedbackRequest
+	(*RecordFeedbackResponse)(nil),          // 31: asker.controlplane.v1.RecordFeedbackResponse
+	(*ResetLearningRequest)(nil),            // 32: asker.controlplane.v1.ResetLearningRequest
+	(*ResetLearningResponse)(nil),           // 33: asker.controlplane.v1.ResetLearningResponse
+	(*DeleteTenantRequest)(nil),             // 34: asker.controlplane.v1.DeleteTenantRequest
+	(*DeleteReport)(nil),                    // 35: asker.controlplane.v1.DeleteReport
+	(*DeleteTenantResponse)(nil),            // 36: asker.controlplane.v1.DeleteTenantResponse
+	(*ListAllInstancesRequest)(nil),         // 37: asker.controlplane.v1.ListAllInstancesRequest
+	(*ListAllInstancesResponse)(nil),        // 38: asker.controlplane.v1.ListAllInstancesResponse
+	(*TenantInstance)(nil),                  // 39: asker.controlplane.v1.TenantInstance
+	(*TenantUsage)(nil),                     // 40: asker.controlplane.v1.TenantUsage
+	(*ListTenantsRequest)(nil),              // 41: asker.controlplane.v1.ListTenantsRequest
+	(*ListTenantsResponse)(nil),             // 42: asker.controlplane.v1.ListTenantsResponse
+	(*GetTenantUsageRequest)(nil),           // 43: asker.controlplane.v1.GetTenantUsageRequest
+	(*GetTenantUsageResponse)(nil),          // 44: asker.controlplane.v1.GetTenantUsageResponse
+	(*SuspendTenantRequest)(nil),            // 45: asker.controlplane.v1.SuspendTenantRequest
+	(*SuspendTenantResponse)(nil),           // 46: asker.controlplane.v1.SuspendTenantResponse
+	(*AdminDeleteTenantRequest)(nil),        // 47: asker.controlplane.v1.AdminDeleteTenantRequest
+	(*AdminDeleteTenantResponse)(nil),       // 48: asker.controlplane.v1.AdminDeleteTenantResponse
+	(*timestamppb.Timestamp)(nil),           // 49: google.protobuf.Timestamp
 }
 var file_asker_controlplane_v1_controlplane_proto_depIdxs = []int32{
-	40, // 0: asker.controlplane.v1.Tenant.created:type_name -> google.protobuf.Timestamp
+	49, // 0: asker.controlplane.v1.Tenant.created:type_name -> google.protobuf.Timestamp
 	2,  // 1: asker.controlplane.v1.EnsureTenantResponse.tenant:type_name -> asker.controlplane.v1.Tenant
 	0,  // 2: asker.controlplane.v1.ConnectorInstance.status:type_name -> asker.controlplane.v1.ConnectorStatus
-	40, // 3: asker.controlplane.v1.ConnectorInstance.created:type_name -> google.protobuf.Timestamp
-	40, // 4: asker.controlplane.v1.ConnectorInstance.updated:type_name -> google.protobuf.Timestamp
+	49, // 3: asker.controlplane.v1.ConnectorInstance.created:type_name -> google.protobuf.Timestamp
+	49, // 4: asker.controlplane.v1.ConnectorInstance.updated:type_name -> google.protobuf.Timestamp
 	5,  // 5: asker.controlplane.v1.CreateConnectorInstanceResponse.instance:type_name -> asker.controlplane.v1.ConnectorInstance
 	5,  // 6: asker.controlplane.v1.ListConnectorInstancesResponse.instances:type_name -> asker.controlplane.v1.ConnectorInstance
 	5,  // 7: asker.controlplane.v1.GetConnectorInstanceResponse.instance:type_name -> asker.controlplane.v1.ConnectorInstance
 	1,  // 8: asker.controlplane.v1.SyncState.phase:type_name -> asker.controlplane.v1.SyncPhase
-	40, // 9: asker.controlplane.v1.SyncState.last_sync_started:type_name -> google.protobuf.Timestamp
-	40, // 10: asker.controlplane.v1.SyncState.last_sync_completed:type_name -> google.protobuf.Timestamp
+	49, // 9: asker.controlplane.v1.SyncState.last_sync_started:type_name -> google.protobuf.Timestamp
+	49, // 10: asker.controlplane.v1.SyncState.last_sync_completed:type_name -> google.protobuf.Timestamp
 	14, // 11: asker.controlplane.v1.GetSyncStateResponse.state:type_name -> asker.controlplane.v1.SyncState
 	14, // 12: asker.controlplane.v1.SetSyncStateRequest.state:type_name -> asker.controlplane.v1.SyncState
 	14, // 13: asker.controlplane.v1.SetSyncStateResponse.state:type_name -> asker.controlplane.v1.SyncState
-	26, // 14: asker.controlplane.v1.DeleteTenantResponse.report:type_name -> asker.controlplane.v1.DeleteReport
-	30, // 15: asker.controlplane.v1.ListAllInstancesResponse.instances:type_name -> asker.controlplane.v1.TenantInstance
-	5,  // 16: asker.controlplane.v1.TenantInstance.instance:type_name -> asker.controlplane.v1.ConnectorInstance
-	40, // 17: asker.controlplane.v1.TenantUsage.created:type_name -> google.protobuf.Timestamp
-	31, // 18: asker.controlplane.v1.ListTenantsResponse.tenants:type_name -> asker.controlplane.v1.TenantUsage
-	31, // 19: asker.controlplane.v1.GetTenantUsageResponse.usage:type_name -> asker.controlplane.v1.TenantUsage
-	26, // 20: asker.controlplane.v1.AdminDeleteTenantResponse.report:type_name -> asker.controlplane.v1.DeleteReport
-	3,  // 21: asker.controlplane.v1.ControlPlaneService.EnsureTenant:input_type -> asker.controlplane.v1.EnsureTenantRequest
-	6,  // 22: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:input_type -> asker.controlplane.v1.CreateConnectorInstanceRequest
-	8,  // 23: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:input_type -> asker.controlplane.v1.ListConnectorInstancesRequest
-	10, // 24: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:input_type -> asker.controlplane.v1.GetConnectorInstanceRequest
-	12, // 25: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:input_type -> asker.controlplane.v1.DeleteConnectorInstanceRequest
-	15, // 26: asker.controlplane.v1.ControlPlaneService.GetSyncState:input_type -> asker.controlplane.v1.GetSyncStateRequest
-	17, // 27: asker.controlplane.v1.ControlPlaneService.SetSyncState:input_type -> asker.controlplane.v1.SetSyncStateRequest
-	19, // 28: asker.controlplane.v1.ControlPlaneService.PutToken:input_type -> asker.controlplane.v1.PutTokenRequest
-	21, // 29: asker.controlplane.v1.ControlPlaneService.GetToken:input_type -> asker.controlplane.v1.GetTokenRequest
-	23, // 30: asker.controlplane.v1.ControlPlaneService.DeleteToken:input_type -> asker.controlplane.v1.DeleteTokenRequest
-	25, // 31: asker.controlplane.v1.ControlPlaneService.DeleteTenant:input_type -> asker.controlplane.v1.DeleteTenantRequest
-	28, // 32: asker.controlplane.v1.SchedulerService.ListAllInstances:input_type -> asker.controlplane.v1.ListAllInstancesRequest
-	32, // 33: asker.controlplane.v1.AdminService.ListTenants:input_type -> asker.controlplane.v1.ListTenantsRequest
-	34, // 34: asker.controlplane.v1.AdminService.GetTenantUsage:input_type -> asker.controlplane.v1.GetTenantUsageRequest
-	36, // 35: asker.controlplane.v1.AdminService.SuspendTenant:input_type -> asker.controlplane.v1.SuspendTenantRequest
-	38, // 36: asker.controlplane.v1.AdminService.AdminDeleteTenant:input_type -> asker.controlplane.v1.AdminDeleteTenantRequest
-	4,  // 37: asker.controlplane.v1.ControlPlaneService.EnsureTenant:output_type -> asker.controlplane.v1.EnsureTenantResponse
-	7,  // 38: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:output_type -> asker.controlplane.v1.CreateConnectorInstanceResponse
-	9,  // 39: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:output_type -> asker.controlplane.v1.ListConnectorInstancesResponse
-	11, // 40: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:output_type -> asker.controlplane.v1.GetConnectorInstanceResponse
-	13, // 41: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:output_type -> asker.controlplane.v1.DeleteConnectorInstanceResponse
-	16, // 42: asker.controlplane.v1.ControlPlaneService.GetSyncState:output_type -> asker.controlplane.v1.GetSyncStateResponse
-	18, // 43: asker.controlplane.v1.ControlPlaneService.SetSyncState:output_type -> asker.controlplane.v1.SetSyncStateResponse
-	20, // 44: asker.controlplane.v1.ControlPlaneService.PutToken:output_type -> asker.controlplane.v1.PutTokenResponse
-	22, // 45: asker.controlplane.v1.ControlPlaneService.GetToken:output_type -> asker.controlplane.v1.GetTokenResponse
-	24, // 46: asker.controlplane.v1.ControlPlaneService.DeleteToken:output_type -> asker.controlplane.v1.DeleteTokenResponse
-	27, // 47: asker.controlplane.v1.ControlPlaneService.DeleteTenant:output_type -> asker.controlplane.v1.DeleteTenantResponse
-	29, // 48: asker.controlplane.v1.SchedulerService.ListAllInstances:output_type -> asker.controlplane.v1.ListAllInstancesResponse
-	33, // 49: asker.controlplane.v1.AdminService.ListTenants:output_type -> asker.controlplane.v1.ListTenantsResponse
-	35, // 50: asker.controlplane.v1.AdminService.GetTenantUsage:output_type -> asker.controlplane.v1.GetTenantUsageResponse
-	37, // 51: asker.controlplane.v1.AdminService.SuspendTenant:output_type -> asker.controlplane.v1.SuspendTenantResponse
-	39, // 52: asker.controlplane.v1.AdminService.AdminDeleteTenant:output_type -> asker.controlplane.v1.AdminDeleteTenantResponse
-	37, // [37:53] is the sub-list for method output_type
-	21, // [21:37] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	29, // 14: asker.controlplane.v1.RecordFeedbackRequest.event:type_name -> asker.controlplane.v1.FeedbackEvent
+	35, // 15: asker.controlplane.v1.DeleteTenantResponse.report:type_name -> asker.controlplane.v1.DeleteReport
+	39, // 16: asker.controlplane.v1.ListAllInstancesResponse.instances:type_name -> asker.controlplane.v1.TenantInstance
+	5,  // 17: asker.controlplane.v1.TenantInstance.instance:type_name -> asker.controlplane.v1.ConnectorInstance
+	49, // 18: asker.controlplane.v1.TenantUsage.created:type_name -> google.protobuf.Timestamp
+	40, // 19: asker.controlplane.v1.ListTenantsResponse.tenants:type_name -> asker.controlplane.v1.TenantUsage
+	40, // 20: asker.controlplane.v1.GetTenantUsageResponse.usage:type_name -> asker.controlplane.v1.TenantUsage
+	35, // 21: asker.controlplane.v1.AdminDeleteTenantResponse.report:type_name -> asker.controlplane.v1.DeleteReport
+	3,  // 22: asker.controlplane.v1.ControlPlaneService.EnsureTenant:input_type -> asker.controlplane.v1.EnsureTenantRequest
+	6,  // 23: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:input_type -> asker.controlplane.v1.CreateConnectorInstanceRequest
+	8,  // 24: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:input_type -> asker.controlplane.v1.ListConnectorInstancesRequest
+	10, // 25: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:input_type -> asker.controlplane.v1.GetConnectorInstanceRequest
+	12, // 26: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:input_type -> asker.controlplane.v1.DeleteConnectorInstanceRequest
+	15, // 27: asker.controlplane.v1.ControlPlaneService.GetSyncState:input_type -> asker.controlplane.v1.GetSyncStateRequest
+	17, // 28: asker.controlplane.v1.ControlPlaneService.SetSyncState:input_type -> asker.controlplane.v1.SetSyncStateRequest
+	19, // 29: asker.controlplane.v1.ControlPlaneService.PutToken:input_type -> asker.controlplane.v1.PutTokenRequest
+	21, // 30: asker.controlplane.v1.ControlPlaneService.GetToken:input_type -> asker.controlplane.v1.GetTokenRequest
+	23, // 31: asker.controlplane.v1.ControlPlaneService.DeleteToken:input_type -> asker.controlplane.v1.DeleteTokenRequest
+	25, // 32: asker.controlplane.v1.ControlPlaneService.GetPersonalization:input_type -> asker.controlplane.v1.GetPersonalizationRequest
+	27, // 33: asker.controlplane.v1.ControlPlaneService.PutPreferences:input_type -> asker.controlplane.v1.PutPreferencesRequest
+	30, // 34: asker.controlplane.v1.ControlPlaneService.RecordFeedback:input_type -> asker.controlplane.v1.RecordFeedbackRequest
+	32, // 35: asker.controlplane.v1.ControlPlaneService.ResetLearning:input_type -> asker.controlplane.v1.ResetLearningRequest
+	34, // 36: asker.controlplane.v1.ControlPlaneService.DeleteTenant:input_type -> asker.controlplane.v1.DeleteTenantRequest
+	37, // 37: asker.controlplane.v1.SchedulerService.ListAllInstances:input_type -> asker.controlplane.v1.ListAllInstancesRequest
+	41, // 38: asker.controlplane.v1.AdminService.ListTenants:input_type -> asker.controlplane.v1.ListTenantsRequest
+	43, // 39: asker.controlplane.v1.AdminService.GetTenantUsage:input_type -> asker.controlplane.v1.GetTenantUsageRequest
+	45, // 40: asker.controlplane.v1.AdminService.SuspendTenant:input_type -> asker.controlplane.v1.SuspendTenantRequest
+	47, // 41: asker.controlplane.v1.AdminService.AdminDeleteTenant:input_type -> asker.controlplane.v1.AdminDeleteTenantRequest
+	4,  // 42: asker.controlplane.v1.ControlPlaneService.EnsureTenant:output_type -> asker.controlplane.v1.EnsureTenantResponse
+	7,  // 43: asker.controlplane.v1.ControlPlaneService.CreateConnectorInstance:output_type -> asker.controlplane.v1.CreateConnectorInstanceResponse
+	9,  // 44: asker.controlplane.v1.ControlPlaneService.ListConnectorInstances:output_type -> asker.controlplane.v1.ListConnectorInstancesResponse
+	11, // 45: asker.controlplane.v1.ControlPlaneService.GetConnectorInstance:output_type -> asker.controlplane.v1.GetConnectorInstanceResponse
+	13, // 46: asker.controlplane.v1.ControlPlaneService.DeleteConnectorInstance:output_type -> asker.controlplane.v1.DeleteConnectorInstanceResponse
+	16, // 47: asker.controlplane.v1.ControlPlaneService.GetSyncState:output_type -> asker.controlplane.v1.GetSyncStateResponse
+	18, // 48: asker.controlplane.v1.ControlPlaneService.SetSyncState:output_type -> asker.controlplane.v1.SetSyncStateResponse
+	20, // 49: asker.controlplane.v1.ControlPlaneService.PutToken:output_type -> asker.controlplane.v1.PutTokenResponse
+	22, // 50: asker.controlplane.v1.ControlPlaneService.GetToken:output_type -> asker.controlplane.v1.GetTokenResponse
+	24, // 51: asker.controlplane.v1.ControlPlaneService.DeleteToken:output_type -> asker.controlplane.v1.DeleteTokenResponse
+	26, // 52: asker.controlplane.v1.ControlPlaneService.GetPersonalization:output_type -> asker.controlplane.v1.GetPersonalizationResponse
+	28, // 53: asker.controlplane.v1.ControlPlaneService.PutPreferences:output_type -> asker.controlplane.v1.PutPreferencesResponse
+	31, // 54: asker.controlplane.v1.ControlPlaneService.RecordFeedback:output_type -> asker.controlplane.v1.RecordFeedbackResponse
+	33, // 55: asker.controlplane.v1.ControlPlaneService.ResetLearning:output_type -> asker.controlplane.v1.ResetLearningResponse
+	36, // 56: asker.controlplane.v1.ControlPlaneService.DeleteTenant:output_type -> asker.controlplane.v1.DeleteTenantResponse
+	38, // 57: asker.controlplane.v1.SchedulerService.ListAllInstances:output_type -> asker.controlplane.v1.ListAllInstancesResponse
+	42, // 58: asker.controlplane.v1.AdminService.ListTenants:output_type -> asker.controlplane.v1.ListTenantsResponse
+	44, // 59: asker.controlplane.v1.AdminService.GetTenantUsage:output_type -> asker.controlplane.v1.GetTenantUsageResponse
+	46, // 60: asker.controlplane.v1.AdminService.SuspendTenant:output_type -> asker.controlplane.v1.SuspendTenantResponse
+	48, // 61: asker.controlplane.v1.AdminService.AdminDeleteTenant:output_type -> asker.controlplane.v1.AdminDeleteTenantResponse
+	42, // [42:62] is the sub-list for method output_type
+	22, // [22:42] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_asker_controlplane_v1_controlplane_proto_init() }
@@ -2319,7 +2879,7 @@ func file_asker_controlplane_v1_controlplane_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_asker_controlplane_v1_controlplane_proto_rawDesc), len(file_asker_controlplane_v1_controlplane_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   38,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

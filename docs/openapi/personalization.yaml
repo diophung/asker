@@ -1,0 +1,216 @@
+openapi: 3.0.3
+info:
+  title: Asker Personalization API (v3.2)
+  version: "3.2.0"
+  description: >
+    Per-user preferences (the Settings page) and behavioral feedback for Asker's
+    personalized, semantic search. Every endpoint is authenticated with the OIDC
+    bearer token; the tenant/user is derived ONLY from the verified token
+    (ADR-002) — no request field selects a tenant, so a user can only ever read
+    or write their OWN personalization data. Preferences are persisted durably
+    (control-plane Postgres, versioned) and write-through cached for the query
+    hot path. Search results additionally carry a "why it ranked" explanation
+    (see SearchHit.explanation in the gateway search response).
+servers:
+  - url: http://localhost:8080
+    description: Local dev gateway
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/preferences:
+    get:
+      summary: Get the caller's resolved preference profile
+      description: >
+        Returns the caller's saved profile, or cold-start defaults when nothing
+        has been saved (never 404). sample_count is how many behavioral feedback
+        events the learned model has incorporated.
+      responses:
+        "200":
+          description: The resolved profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile: { $ref: "#/components/schemas/Profile" }
+                  sample_count: { type: integer, format: int64 }
+        "401": { description: Missing/invalid bearer token. }
+    put:
+      summary: Replace the caller's preference profile
+      description: >
+        Validates and clamps the profile (sliders to [0,1], weights >= 0, list
+        sizes bounded), seeds self_emails from the verified email when omitted,
+        persists it (bumping a monotonic version that invalidates the caller's
+        cached result orders), and write-through caches it for the query path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Profile" }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: integer, format: int64 }
+        "400": { description: Malformed or oversized body. }
+        "401": { description: Missing/invalid bearer token. }
+
+  /v1/preferences/reset:
+    post:
+      summary: Reset what we've learned about the caller
+      description: >
+        Clears the caller's learned ranking model and behavioral feedback history
+        (the explicit preference profile is kept). A core transparency/autonomy
+        control (and a GDPR-style data right).
+      responses:
+        "200":
+          description: Reset done.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feedback_deleted: { type: integer, format: int64 }
+        "401": { description: Missing/invalid bearer token. }
+
+  /v1/preferences/export:
+    get:
+      summary: Export the caller's personalization data
+      description: Full data-rights export of the profile, learned model, and sample count.
+      responses:
+        "200":
+          description: The caller's personalization data.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile: { $ref: "#/components/schemas/Profile" }
+                  learned_model: { $ref: "#/components/schemas/LearnedModel" }
+                  sample_count: { type: integer, format: int64 }
+        "401": { description: Missing/invalid bearer token. }
+
+  /v1/feedback:
+    post:
+      summary: Record a behavioral feedback event
+      description: >
+        Records one interaction with a search result (implicit signal) and folds
+        it into the caller's online learning-to-rank model — unless learning is
+        paused, in which case the event is dropped. Best-effort; never blocks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FeedbackEvent" }
+      responses:
+        "200":
+          description: Recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sample_count: { type: integer, format: int64 }
+                  learning_paused: { type: boolean }
+        "400": { description: Missing action or malformed body. }
+        "401": { description: Missing/invalid bearer token. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Profile:
+      type: object
+      description: >
+        The resolved UserPreferenceProfile (platform/personalization.Profile).
+        Every field maps to a named ranking input — no setting is cosmetic.
+      properties:
+        version: { type: integer, format: int64, description: Monotonic; server-managed. }
+        source_weights:
+          type: object
+          additionalProperties: { type: number }
+          description: 'DocType enum name -> weight (1.0 neutral). e.g. {"EMAIL": 2.0}.'
+        important_people:
+          type: array
+          items: { type: string }
+          description: Emails/handles whose items are boosted.
+        topics:
+          type: array
+          items: { type: string }
+          description: Interest keywords boosted on match.
+        mute:
+          type: object
+          properties:
+            people: { type: array, items: { type: string } }
+            topics: { type: array, items: { type: string } }
+            sources: { type: array, items: { type: string }, description: DocType enum names. }
+        self_emails:
+          type: array
+          items: { type: string }
+          description: The user's own addresses (RSVP/addressed-to-you detection).
+        timezone: { type: string, description: 'IANA name; "" => UTC.' }
+        working_hours:
+          type: object
+          properties:
+            start_hour: { type: integer, minimum: 0, maximum: 23 }
+            end_hour: { type: integer, minimum: 1, maximum: 24 }
+        attention_sensitivity:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Signal-detection criterion (0=show everything, 1=only the critical few).
+        recency_vs_importance:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: 0=importance, 1=recency (time-decay weight).
+        novelty_vs_familiarity:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Exploration rate for MMR diversification.
+        learning_paused: { type: boolean, description: Freeze the learned model. }
+        weights:
+          type: object
+          description: Combined-score coefficients (partly user-tunable, partly learned).
+          properties:
+            semantic: { type: number }
+            preference: { type: number }
+            behavioral: { type: number }
+            attention: { type: number }
+            fatigue: { type: number }
+    LearnedModel:
+      type: object
+      description: The transparent logistic learning-to-rank model (read-only export).
+      properties:
+        weights:
+          type: object
+          additionalProperties: { type: number }
+          description: feature key (e.g. "from:alice@x") -> coefficient.
+        bias: { type: number }
+        samples: { type: integer, format: int64 }
+    FeedbackEvent:
+      type: object
+      required: [action]
+      properties:
+        doc_id: { type: string }
+        doc_type: { type: string, description: DocType enum name. }
+        connector_id: { type: string }
+        senders: { type: array, items: { type: string } }
+        topics: { type: array, items: { type: string } }
+        action:
+          type: string
+          description: >
+            click | open | reply | dwell | show_more (positive) or
+            dismiss | show_fewer (negative). Other values are recorded but do
+            not train the model.
+        dwell_ms: { type: integer, format: int64 }
+        query: { type: string }

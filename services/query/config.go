@@ -45,8 +45,25 @@ type queryConfig struct {
 	RecencyWeight float64 `env:"QUERY_RECENCY_WEIGHT" envDefault:"0.4"`
 	// RecencyHalfLife is the age at which a hit's recency contribution halves.
 	// 720h = 30 days: items within a month stay strongly boosted, year-old items
-	// contribute little. Only used when RecencyWeight > 0.
+	// contribute little. Only used when RecencyWeight > 0. Also the half-life of
+	// the recency bonus in the personalized re-rank (recency-vs-importance slider).
 	RecencyHalfLife time.Duration `env:"QUERY_RECENCY_HALFLIFE" envDefault:"720h"`
+
+	// --- Personalization (v3.2) ---------------------------------------------
+
+	// PersonalizationEnabled wires the Redis profile loader (main.go). When false
+	// the query path runs the non-personalized pipeline exactly as before — a
+	// rollback switch. Per-user profiles still cold-start to sensible defaults.
+	PersonalizationEnabled bool `env:"QUERY_PERSONALIZATION_ENABLED" envDefault:"true"`
+	// HybridRRF fuses a keyword arm and a vector arm with Reciprocal Rank Fusion
+	// on the personalized path (spec §1.4). Off => the personalized path reuses
+	// the single-pass hybrid retrieval. Personal corpora are tiny (exact
+	// streaming scan), so the extra arm is within budget.
+	HybridRRF bool `env:"QUERY_HYBRID_RRF" envDefault:"true"`
+	// CandidateCap is how many candidates the personalized path retrieves (at
+	// offset 0) before re-ranking down to the requested page. Larger => better
+	// recall for the re-ranker, more work. Clamped to [maxLimit, 1000].
+	CandidateCap int `env:"QUERY_CANDIDATE_CAP" envDefault:"100"`
 
 	// Empty endpoint means telemetry is a no-op.
 	OTLPEndpoint string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:""`
@@ -74,6 +91,12 @@ func loadConfig() (queryConfig, error) {
 	}
 	if cfg.RecencyWeight > 0 && cfg.RecencyHalfLife <= 0 {
 		return queryConfig{}, fmt.Errorf("config: QUERY_RECENCY_HALFLIFE must be > 0 when QUERY_RECENCY_WEIGHT > 0, got %s", cfg.RecencyHalfLife)
+	}
+	if cfg.CandidateCap < maxLimit {
+		cfg.CandidateCap = maxLimit
+	}
+	if cfg.CandidateCap > 1000 {
+		cfg.CandidateCap = 1000
 	}
 	return cfg, nil
 }

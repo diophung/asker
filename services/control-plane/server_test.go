@@ -145,6 +145,24 @@ func TestRPCsRequireTenant(t *testing.T) {
 			_, err := s.DeleteToken(ctx, &controlplanev1.DeleteTokenRequest{ConnectorInstanceId: id})
 			return err
 		},
+		"GetPersonalization": func() error {
+			_, err := s.GetPersonalization(ctx, &controlplanev1.GetPersonalizationRequest{})
+			return err
+		},
+		"PutPreferences": func() error {
+			_, err := s.PutPreferences(ctx, &controlplanev1.PutPreferencesRequest{ProfileJson: "{}"})
+			return err
+		},
+		"RecordFeedback": func() error {
+			_, err := s.RecordFeedback(ctx, &controlplanev1.RecordFeedbackRequest{
+				Event: &controlplanev1.FeedbackEvent{Action: "open"},
+			})
+			return err
+		},
+		"ResetLearning": func() error {
+			_, err := s.ResetLearning(ctx, &controlplanev1.ResetLearningRequest{})
+			return err
+		},
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {

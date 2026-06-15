@@ -41,6 +41,10 @@ message SearchRequest {
   int32 limit = 6;
   int32 offset = 7;
   SearchMode mode = 8;
+  // debug, when true, asks the server to include per-hit feature contributions
+  // (Hit.features) for observability. The gateway sets it from ?debug=1; it
+  // never affects ranking, only what is reported.
+  bool debug = 9;
 }
 
 message SearchResponse {
@@ -74,4 +78,13 @@ message Hit {
   string modality = 12;
   // Blob key of a thumbnail / poster frame to render (empty if none).
   string thumbnail_key = 13;
+  // explanation is a short, human-readable reason this hit ranked where it did
+  // (v3 personalization), e.g. "deadline in 2 days · from Sarah (important)".
+  // Empty when personalization is not active for the request. Surfaced to the
+  // user for trust (Peak-End / transparency) and for debugging the ranker.
+  string explanation = 14;
+  // features carries each scoring term's signed contribution to the final rank
+  // (semantic/preference/behavioral/attention/repetition), populated only when
+  // SearchRequest.debug is set. Reproducibility surface for the ranker.
+  map<string, double> features = 15;
 }

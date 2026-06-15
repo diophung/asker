@@ -71,6 +71,35 @@ type SyncState struct {
 	DocsEmitted         int64
 }
 
+// UserPreferences is a tenant's stored personalization profile (v3.2): the
+// opaque personalization.Profile JSON plus a monotonic version. Exists is false
+// when the tenant has never saved preferences.
+type UserPreferences struct {
+	ProfileJSON string
+	Version     int64
+	Exists      bool
+}
+
+// LearnedWeights is a tenant's stored learning-to-rank model (v3.2): the opaque
+// personalization.LearnedModel JSON plus the number of feedback events folded
+// in. Exists is false at cold start (no behavior learned yet).
+type LearnedWeights struct {
+	WeightsJSON string
+	SampleCount int64
+	Exists      bool
+}
+
+// FeedbackEvent is one stored behavioral interaction with a search result
+// (append-only implicit signal, v3.2).
+type FeedbackEvent struct {
+	DocID       string
+	DocType     string
+	ConnectorID string
+	Action      string
+	DwellMs     int64
+	Query       string
+}
+
 // Store is the control-plane persistence boundary. Two implementations exist:
 // memStore (unit tests) and pgStore (production, Postgres via pgx).
 //
@@ -170,4 +199,35 @@ type Store interface {
 	// the number changed. Admin-only, cross-tenant by design; the reversible
 	// abuse control behind AdminService.SuspendTenant.
 	SetTenantConnectorStatus(ctx context.Context, tenantID tenancy.TenantID, status string) (int64, error)
+
+	// --- Personalization (v3.2) ---------------------------------------------
+
+	// GetPersonalization returns the tenant's preference profile and learned
+	// model in one call (the gateway's GET/export and the Redis cache warm). A
+	// tenant with no saved data yields zero-value, Exists=false structs (the
+	// caller substitutes defaults) — never ErrNotFound.
+	GetPersonalization(ctx context.Context, tenantID tenancy.TenantID) (UserPreferences, LearnedWeights, error)
+
+	// PutPreferences upserts the tenant's profile JSON (already validated by the
+	// caller) and bumps its monotonic version, returning the new version. It
+	// implicitly ensures the tenant row exists (the identity is always a verified
+	// JWT, so registering it is exactly EnsureTenant).
+	PutPreferences(ctx context.Context, tenantID tenancy.TenantID, profileJSON string) (version int64, err error)
+
+	// AppendFeedback records one behavioral feedback event (append-only).
+	AppendFeedback(ctx context.Context, tenantID tenancy.TenantID, ev FeedbackEvent) error
+
+	// UpdateLearnedWeights atomically reads the tenant's learned model, applies
+	// update to its JSON under a row lock (so concurrent feedback for the same
+	// tenant cannot lose an update — the same TOCTOU rigor as the connector
+	// quota), and writes the result back. update receives the current weights
+	// JSON ("" when none) and sample count and returns the new ones; the LTR math
+	// itself lives in the caller (via platform/personalization) so the store
+	// stays domain-agnostic. It implicitly ensures the tenant row exists.
+	UpdateLearnedWeights(ctx context.Context, tenantID tenancy.TenantID, update func(curJSON string, curSamples int64) (newJSON string, newSamples int64, err error)) error
+
+	// ResetLearning clears the tenant's learned model and feedback log ("reset
+	// what you've learned about me"), returning how many feedback rows were
+	// deleted. The preference profile is left intact. Idempotent.
+	ResetLearning(ctx context.Context, tenantID tenancy.TenantID) (feedbackDeleted int64, err error)
 }

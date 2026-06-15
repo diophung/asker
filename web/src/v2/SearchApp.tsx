@@ -5,6 +5,7 @@ import {
   BACKEND_ENABLED,
   getRecentSearches,
   removeRecentSearch,
+  sendFeedback,
 } from "./backend";
 import { Settings } from "./Settings";
 import {
@@ -15,7 +16,7 @@ import {
 } from "./data";
 import type { Panel, SearchResult, SourceFilter } from "./types";
 import { KnowledgePanel } from "./KnowledgePanel";
-import { ResultItem } from "./ResultItem";
+import { ResultItem, type FeedbackAction } from "./ResultItem";
 import { SearchBox } from "./SearchBox";
 import { SignIn } from "./SignIn";
 import { SourceTabs } from "./SourceTabs";
@@ -148,6 +149,24 @@ export function SearchApp() {
     setRecents((prev) => prev.filter((r) => r !== text));
     void removeRecentSearch(text);
   }, []);
+
+  // "More/Fewer like this" on a result -> a behavioral signal the ranker learns
+  // from. Best-effort (sendFeedback never throws); carries the result's identity
+  // + the query so the backend can attribute the signal.
+  const handleFeedback = useCallback(
+    (result: SearchResult, action: FeedbackAction) => {
+      void sendFeedback({
+        doc_id: result.id,
+        doc_type: result.docType ?? "",
+        connector_id: result.connectorId ?? "",
+        senders: result.senders ?? [],
+        topics: result.topics ?? [],
+        action,
+        query,
+      });
+    },
+    [query],
+  );
 
   // Initial fetch: once authed (in backend mode) and on mount, run the URL's
   // query and load recents. Runs once (the ref guards re-entry after sign-in).
@@ -342,7 +361,12 @@ export function SearchApp() {
                 <MetaLine approx={meta.approx} seconds={meta.seconds} />
                 <div ref={resultsRef} className="mt-5 space-y-7">
                   {results.map((r) => (
-                    <ResultItem key={r.id} result={r} query={query} />
+                    <ResultItem
+                      key={r.id}
+                      result={r}
+                      query={query}
+                      onFeedback={BACKEND_ENABLED ? handleFeedback : undefined}
+                    />
                   ))}
                 </div>
               </>

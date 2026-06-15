@@ -41,7 +41,11 @@ type resultCache interface {
 // the plan) is never served for a request that now plans the CLIP arm, and
 // vice versa. Only non-degraded results are cached, so a CLIP-down result is
 // never stored; this key bit is the belt-and-suspenders namespace separation.
-func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest, clipArm bool) string {
+// profileVersion is the caller's personalization profile version (0 on the
+// non-personalized path). Folding it into the key means a preference change
+// (which bumps the version) invalidates this tenant's cached orders immediately,
+// rather than serving the old ranking until the 60s TTL expires (DECISIONS D4).
+func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest, clipArm bool, profileVersion int64) string {
 	types := make([]int32, 0, len(req.GetDocTypes()))
 	for _, t := range req.GetDocTypes() {
 		types = append(types, int32(t))
@@ -66,7 +70,7 @@ func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest, clipArm bool)
 	writeTimestampField(req.GetFromDate() != nil, req.GetFromDate().GetSeconds(), req.GetFromDate().GetNanos())
 	writeTimestampField(req.GetToDate() != nil, req.GetToDate().GetSeconds(), req.GetToDate().GetNanos())
 	b.WriteString(req.GetParticipant())
-	fmt.Fprintf(&b, "\x1f%d\x1f%d\x1f%d\x1f%t", req.GetLimit(), req.GetOffset(), req.GetMode(), clipArm)
+	fmt.Fprintf(&b, "\x1f%d\x1f%d\x1f%d\x1f%t\x1f%d", req.GetLimit(), req.GetOffset(), req.GetMode(), clipArm, profileVersion)
 
 	sum := sha256.Sum256([]byte(b.String()))
 	return "q:" + string(tenant) + ":" + hex.EncodeToString(sum[:])

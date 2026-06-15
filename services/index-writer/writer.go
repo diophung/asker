@@ -156,9 +156,15 @@ type vespaFields struct {
 	Participants    []string `json:"participants,omitempty"`
 	MetadataJSON    string   `json:"metadata_json"`
 	CreatedAt       int64    `json:"created_at"`
-	ModifiedAt      int64    `json:"modified_at"`
-	VersionEtag     string   `json:"version_etag"`
-	ACL             []string `json:"acl,omitempty"`
+	// EventStart/EventEnd are the event OCCURRENCE time (Unix epoch seconds),
+	// parsed from metadata["start"]/["end"] for calendar events; 0/omitted for
+	// non-event docs. The query path filters/orders schedule lookups on these
+	// (the correct field for "next week" — created_at is the authoring time).
+	EventStart  int64    `json:"event_start,omitempty"`
+	EventEnd    int64    `json:"event_end,omitempty"`
+	ModifiedAt  int64    `json:"modified_at"`
+	VersionEtag string   `json:"version_etag"`
+	ACL         []string `json:"acl,omitempty"`
 	// Media metadata from Document.media (MediaInfo); zero/omitted for text
 	// documents (ADR-013).
 	MediaDurationMs int64  `json:"media_duration_ms,omitempty"`
@@ -285,6 +291,8 @@ func (w *writer) buildFields(doc *askerv1.Document) (vespaFields, error) {
 		Participants:    participantStrings(doc.GetParticipants()),
 		MetadataJSON:    string(metaJSON),
 		CreatedAt:       created,
+		EventStart:      eventEpoch(meta["start"]),
+		EventEnd:        eventEpoch(meta["end"]),
 		ModifiedAt:      modified,
 		VersionEtag:     doc.GetVersionEtag(),
 		ACL:             doc.GetAcl().GetAllowedPrincipals(),
@@ -294,6 +302,26 @@ func (w *writer) buildFields(doc *askerv1.Document) (vespaFields, error) {
 		ThumbnailKey:    media.GetThumbnail().GetKey(),
 		TranscriptLang:  media.GetTranscriptLang(),
 	}, nil
+}
+
+// eventEpoch parses a calendar event start/end metadata value into Unix epoch
+// seconds, accepting RFC3339 (timed events), a YYYY-MM-DD date (all-day events),
+// or an already-epoch string. Returns 0 for empty/unparseable values so the
+// omitempty field drops out for non-event documents (v3.2, DECISIONS D11).
+func eventEpoch(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC().Unix()
+		}
+	}
+	if sec, err := strconv.ParseInt(s, 10, 64); err == nil && sec > 0 {
+		return sec
+	}
+	return 0
 }
 
 // chunkModality returns the chunk's modality, defaulting to "text" when unset

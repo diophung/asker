@@ -17,6 +17,62 @@ Newest entries go first.
 
 ---
 
+## 2026-06-14 — v3.2 Personalized, intent-aware semantic search (post-V1)
+
+- Done: **Built the v3.2 personalized-search feature end to end** (spec
+  `specs/asker-v3.2-personalized-search-engine-vectordb.md`) on the EXISTING Vespa
+  stack — the spec's "default to Qdrant" was overridden by its own "use the existing
+  infra" mandate (rationale + all decisions in `DECISIONS.md`). A pre-implementation
+  adversarial design review caught two decisive data-availability bugs (temporal
+  filter on the wrong date field; attention signals not in the index) which were
+  fixed for real, not papered over.
+  - **Shared model** `platform/personalization` (pure logic, 92% cover): resolved
+    `Profile` (+ defaults/clamp), online logistic **learning-to-rank** `LearnedModel`,
+    the combined relevance `Score`, and the Redis-key contract. Imported by the query
+    service (apply) and control-plane (update-on-feedback).
+  - **Query understanding + ranking** (`services/query`): temporal NL parsing
+    (`temporal.go`), intent classification (`intent.go`), attention/salience scorer
+    (`attention.go`, grounded in RSVP/upcoming/overdue/unread/important/addressed/
+    recency), RRF fusion (`rrf.go`), and the personalized re-rank with MMR
+    diversification + per-hit explanations (`personalize.go`, `scope.go`). All gated
+    behind a wired profile loader — the non-personalized path is byte-for-byte
+    unchanged (every existing query test still passes).
+  - **Occurrence-time fix (DECISIONS D11):** new `event_start`/`event_end` Vespa
+    attributes, populated by the index-writer from calendar `metadata["start"]`, so
+    "next week" filters when events OCCUR, not when they were authored.
+  - **Attention grounding (D12):** Gmail connector now emits `unread`/`important`
+    from message labels.
+  - **Persistence** (`services/control-plane`): migration `0002_personalization`
+    (`user_preferences`/`learned_weights`/`feedback_events`, FK-cascade for GDPR),
+    new `ControlPlaneService` RPCs (Get/Put preferences, RecordFeedback with the
+    atomic row-locked online update, ResetLearning), and the GDPR purge/residue +
+    Redis purge extended to the new tables/keys.
+  - **Gateway**: `/v1/preferences` (GET/PUT), `/v1/feedback`, `/v1/preferences/reset`,
+    `/v1/preferences/export`; profile validation + Redis write-through for the hot
+    path; search responses now carry `explanation` (+ `features` under `?debug=1`).
+  - **Web** (`web/src/v2`): Settings "Personalization" section (every preference field
+    + pause/reset/export), per-result "Why this?" explanation, and "More/Fewer like
+    this" feedback. `npm run build`/`test` (104)/`lint` green.
+  - **Tests**: unit (temporal/intent/attention/RRF/model/score), **acceptance** for
+    both canonical queries, **same-query-ranks-differently** for two users, and
+    **per-tenant personalization isolation** — via the in-process gRPC harness with a
+    fake profile loader + seeded Vespa fixtures (the idiomatic "e2e" here). Plus
+    control-plane + gateway personalization tests.
+  - **Validation:** `make build`/`vet` green; golangci-lint 0 issues; full `make test`
+    green; proto regenerated with no drift. `.env.example`, OpenAPI spec, README
+    section, and `DECISIONS.md` added.
+- Next: extend the bash live-stack e2e (calendar seeding in `tools/fake-gmail`) to run
+  the two canonical queries against the real Vespa stack (currently a Go-level
+  acceptance test; recorded as a follow-up in DECISIONS D10). Enrich more connectors
+  to emit `due`/`read_status` so overdue/unread attention applies beyond Gmail/Calendar.
+- Known issues:
+  - Personalized result-cache entries are keyed by profile VERSION (a preferences
+    change invalidates immediately); a learned-model change from feedback is NOT folded
+    into the key, so behavioral re-ranking reflects within the 60s cache TTL, not
+    instantly (documented trade-off, mirrors the recency-drift rationale).
+  - `event_start` only populates on a document's next (re)index; pre-existing calendar
+    docs are still covered by the post-retrieval occurrence filter until reindexed.
+
 ## 2026-06-14 — Full-page-load source tabs + backend recent searches + recency rank + People (post-V1)
 
 - Done: **Four user-requested search-UX changes shipped end to end and live on the dev stack

@@ -113,6 +113,11 @@ type vespaQuery struct {
 	From, To    time.Time
 	Participant string
 
+	// EventFrom/EventTo bound event_start (occurrence time) for a schedule
+	// lookup — the correct field for "what's on my calendar next week" (created_at
+	// is the authoring time). Zero means unbounded. (v3.2, DECISIONS D11)
+	EventFrom, EventTo time.Time
+
 	Hits, Offset int32
 }
 
@@ -194,6 +199,14 @@ func buildYQL(q vespaQuery) (string, error) {
 	}
 	if !q.To.IsZero() {
 		clauses = append(clauses, fmt.Sprintf("created_at <= %d", q.To.Unix()))
+	}
+	// event_start (occurrence time) range for schedule lookups (v3.2). The
+	// half-open [EventFrom, EventTo) window is rendered as >= From and < To.
+	if !q.EventFrom.IsZero() {
+		clauses = append(clauses, fmt.Sprintf("event_start >= %d", q.EventFrom.Unix()))
+	}
+	if !q.EventTo.IsZero() {
+		clauses = append(clauses, fmt.Sprintf("event_start < %d", q.EventTo.Unix()))
 	}
 	if q.Participant != "" {
 		lit, err := yqlStringLiteral(q.Participant)

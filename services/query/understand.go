@@ -40,6 +40,20 @@ type parsedQuery struct {
 	To   time.Time
 	// Participant filters by participant token (sender/attendee).
 	Participant string
+
+	// --- v3 query understanding (set only on the personalized path, scope.go) ---
+	// Intent is the classified query intent (schedule_lookup / needs_attention /
+	// find_item / freeform); intentFreeform (zero) on the non-personalized path.
+	Intent intentClass
+	// EventFrom/EventTo bound event_start (occurrence time) for a schedule
+	// lookup — the correct date field for "what's on my calendar next week"
+	// (created_at is the authoring time). Zero means unbounded.
+	EventFrom time.Time
+	EventTo   time.Time
+	// WinFrom/WinTo is the resolved temporal window the attention scorer uses for
+	// the needs-attention intent (upcoming-event proximity). Zero means none.
+	WinFrom time.Time
+	WinTo   time.Time
 }
 
 // hasFilters reports whether any filter dimension is set.

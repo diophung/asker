@@ -242,6 +242,13 @@ services:
       # CLIP text->image arm (M3, ADR-013); degrades gracefully if clip is down.
       CLIP_URL: "http://clip:9800"
       CLIP_DIM: ${CLIP_DIM:-512}
+      # v3.2 personalization: the per-user re-rank reads the resolved profile +
+      # learned model from Redis (written through by the gateway), falling back
+      # to cold-start defaults on a miss. ENABLED=false rolls back to the
+      # non-personalized pipeline; HYBRID_RRF fuses keyword+vector arms by RRF.
+      QUERY_PERSONALIZATION_ENABLED: ${QUERY_PERSONALIZATION_ENABLED:-true}
+      QUERY_HYBRID_RRF: ${QUERY_HYBRID_RRF:-true}
+      QUERY_CANDIDATE_CAP: ${QUERY_CANDIDATE_CAP:-100}
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
       vespa:

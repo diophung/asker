@@ -203,6 +203,13 @@ func (p *redisCachePurger) PurgeTenant(ctx context.Context, tenantID tenancy.Ten
 	patterns := []string{
 		"q:" + string(tenantID) + ":*",
 		"rl:" + string(tenantID) + ":*",
+		// Personalization read-cache + recent-search history (v3.2): the resolved
+		// profile, the learned model, and the recent-search list, all keyed by the
+		// tenant. The durable copies live in Postgres and are erased by the
+		// cascade; these are the Redis read-through/history keys.
+		"asker:pref:" + string(tenantID),
+		"asker:weights:" + string(tenantID),
+		"asker:recent:" + string(tenantID),
 	}
 	for _, pat := range patterns {
 		if err := p.scanDel(ctx, pat); err != nil {

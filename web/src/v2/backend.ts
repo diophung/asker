@@ -84,6 +84,238 @@ export async function deleteMyData(): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
+// --- Personalization (v3.2): the user's resolved preference profile, the
+// transparency controls, and the behavioral-feedback signal. The wire shape is
+// snake_case (mirrors platform/personalization/profile.go); the gateway clamps
+// every field, so the UI can send partial-ish profiles and trust the response.
+
+/** A DocType enum name used to key SourceWeights (1.0 when unset). */
+export type DocType =
+  | "EMAIL"
+  | "CHAT_MESSAGE"
+  | "FILE"
+  | "CALENDAR_EVENT"
+  | "WIKI_PAGE"
+  | "TICKET"
+  | "IMAGE"
+  | "VIDEO"
+  | "AUDIO";
+
+export interface WorkingHours {
+  start_hour: number;
+  end_hour: number;
+}
+
+export interface MuteList {
+  people: string[];
+  topics: string[];
+  sources: string[];
+}
+
+/** The combined-relevance-score coefficients (partly tunable, partly learned). */
+export interface ScoreWeights {
+  semantic: number;
+  preference: number;
+  behavioral: number;
+  attention: number;
+  fatigue: number;
+}
+
+/**
+ * The single resolved UserPreferenceProfile the ranker reads — every field maps
+ * to a named ranking input. Mirrors platform/personalization/profile.go.
+ */
+export interface Profile {
+  version: number;
+  source_weights: Partial<Record<DocType, number>>;
+  important_people: string[];
+  topics: string[];
+  mute: MuteList;
+  self_emails: string[];
+  timezone: string;
+  working_hours: WorkingHours;
+  /** Signal-detection criterion in [0,1]: 0 = show everything, 1 = critical few. */
+  attention_sensitivity: number;
+  /** [0,1]: 0 = importance, 1 = recency. */
+  recency_vs_importance: number;
+  /** [0,1]: 0 = familiar (exploit), 1 = novel (explore). */
+  novelty_vs_familiarity: number;
+  learning_paused: boolean;
+  weights: ScoreWeights;
+}
+
+/** Cold-start defaults mirroring personalization.DefaultProfile (Go). Used in
+ * mock mode (no backend) so the Settings page still renders sensibly. */
+export function defaultProfile(): Profile {
+  return {
+    version: 0,
+    source_weights: {},
+    important_people: [],
+    topics: [],
+    mute: { people: [], topics: [], sources: [] },
+    self_emails: [],
+    timezone: "",
+    working_hours: { start_hour: 9, end_hour: 17 },
+    attention_sensitivity: 0.5,
+    recency_vs_importance: 0.5,
+    novelty_vs_familiarity: 0.15,
+    learning_paused: false,
+    weights: {
+      semantic: 1.0,
+      preference: 0.6,
+      behavioral: 0.5,
+      attention: 0.8,
+      fatigue: 0.3,
+    },
+  };
+}
+
+export interface PreferencesResponse {
+  profile: Profile;
+  sampleCount: number;
+}
+
+// In-memory mock store so the UI round-trips edits when there's no backend.
+let mockProfile: Profile | null = null;
+let mockSampleCount = 0;
+
+/** GET /v1/preferences — the resolved profile + how many interactions were
+ * learned from. In mock mode returns (and persists) sensible defaults. */
+export async function getPreferences(): Promise<PreferencesResponse> {
+  if (!BACKEND_ENABLED) {
+    mockProfile ??= defaultProfile();
+    return { profile: mockProfile, sampleCount: mockSampleCount };
+  }
+  const token = await getToken();
+  const res = await fetch("/v1/preferences", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Couldn't load preferences (HTTP ${res.status})`);
+  }
+  const j = (await res.json()) as { profile: Profile; sample_count: number };
+  return { profile: j.profile, sampleCount: j.sample_count ?? 0 };
+}
+
+/** PUT /v1/preferences — validate + persist; returns the bumped version. */
+export async function savePreferences(profile: Profile): Promise<number> {
+  if (!BACKEND_ENABLED) {
+    mockProfile = { ...profile, version: profile.version + 1 };
+    return mockProfile.version;
+  }
+  const token = await getToken();
+  const res = await fetch("/v1/preferences", {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(profile),
+  });
+  if (!res.ok) {
+    throw new Error(`Couldn't save preferences (HTTP ${res.status})`);
+  }
+  const j = (await res.json()) as { version: number };
+  return j.version;
+}
+
+/** One behavioral interaction sent to POST /v1/feedback. */
+export interface FeedbackEvent {
+  doc_id: string;
+  doc_type: string;
+  connector_id: string;
+  senders: string[];
+  topics: string[];
+  action:
+    | "open"
+    | "click"
+    | "reply"
+    | "show_more"
+    | "dismiss"
+    | "show_fewer";
+  dwell_ms?: number;
+  query: string;
+}
+
+export interface FeedbackResponse {
+  sampleCount: number;
+  learningPaused: boolean;
+}
+
+/** POST /v1/feedback — record a behavioral event. Best-effort: never throws, so
+ * a failed signal can't break the result list. */
+export async function sendFeedback(ev: FeedbackEvent): Promise<FeedbackResponse> {
+  if (!BACKEND_ENABLED) {
+    mockSampleCount += 1;
+    return { sampleCount: mockSampleCount, learningPaused: false };
+  }
+  try {
+    const token = await getToken();
+    const res = await fetch("/v1/feedback", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ dwell_ms: 0, ...ev }),
+    });
+    if (!res.ok) {
+      return { sampleCount: 0, learningPaused: false };
+    }
+    const j = (await res.json()) as {
+      sample_count: number;
+      learning_paused: boolean;
+    };
+    return {
+      sampleCount: j.sample_count ?? 0,
+      learningPaused: j.learning_paused ?? false,
+    };
+  } catch {
+    return { sampleCount: 0, learningPaused: false };
+  }
+}
+
+/** POST /v1/preferences/reset — erase what we've learned; returns the count of
+ * feedback rows deleted. */
+export async function resetLearning(): Promise<number> {
+  if (!BACKEND_ENABLED) {
+    const deleted = mockSampleCount;
+    mockSampleCount = 0;
+    return deleted;
+  }
+  const token = await getToken();
+  const res = await fetch("/v1/preferences/reset", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Couldn't reset learning (HTTP ${res.status})`);
+  }
+  const j = (await res.json()) as { feedback_deleted: number };
+  return j.feedback_deleted ?? 0;
+}
+
+/** GET /v1/preferences/export — the full data-rights export (profile + learned
+ * model + sample count). */
+export async function exportPersonalization(): Promise<Record<string, unknown>> {
+  if (!BACKEND_ENABLED) {
+    mockProfile ??= defaultProfile();
+    return {
+      profile: mockProfile,
+      learned_model: {},
+      sample_count: mockSampleCount,
+    };
+  }
+  const token = await getToken();
+  const res = await fetch("/v1/preferences/export", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Couldn't export your data (HTTP ${res.status})`);
+  }
+  return (await res.json()) as Record<string, unknown>;
+}
+
 // --- The gateway /v1/search wire shape (mirrors web/src/api.ts Hit). ---------
 
 interface GatewayHit {
@@ -101,6 +333,9 @@ interface GatewayHit {
   end_ms: number;
   modality: string;
   thumbnail_key: string;
+  // v3 personalization: "why this ranked" + optional per-feature contributions.
+  explanation: string;
+  features?: Record<string, number>;
 }
 interface GatewayResponse {
   hits: GatewayHit[];
@@ -315,6 +550,12 @@ function mapHit(hit: GatewayHit): SearchResult {
   const when = relativeTime(hit.modified || hit.created);
   const snippet = sanitizeSnippet(hit.snippet) || "(no preview)";
   const title = hit.title || "(untitled)";
+  // Participant addresses for personalization feedback (the ranker keys
+  // important-people / sender-fatigue on these); raw addresses, not display
+  // names, so the backend can match them against the profile.
+  const senders = [md.from, md.sender, md.author, md.owner]
+    .filter((v): v is string => !!v)
+    .map((v) => v.trim());
   const base = {
     id: hit.doc_id,
     source,
@@ -323,6 +564,11 @@ function mapHit(hit: GatewayHit): SearchResult {
     snippet,
     haystack: "",
     url: linkFor(hit),
+    connectorId: hit.connector_id,
+    docType: hit.type,
+    senders,
+    topics: [] as string[],
+    explanation: hit.explanation ?? "",
   };
 
   switch (hit.type) {

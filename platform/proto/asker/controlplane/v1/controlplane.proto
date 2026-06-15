@@ -32,6 +32,16 @@ service ControlPlaneService {
   rpc GetToken(GetTokenRequest) returns (GetTokenResponse);
   rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
 
+  // Personalization (v3.2): the caller's preference profile + learned ranking
+  // model. profile_json / weights_json are opaque to the control plane (the
+  // platform/personalization library owns their schema); the control plane only
+  // persists them, versions the profile, and runs the online learning update.
+  // All scoped to the verified caller tenant.
+  rpc GetPersonalization(GetPersonalizationRequest) returns (GetPersonalizationResponse);
+  rpc PutPreferences(PutPreferencesRequest) returns (PutPreferencesResponse);
+  rpc RecordFeedback(RecordFeedbackRequest) returns (RecordFeedbackResponse);
+  rpc ResetLearning(ResetLearningRequest) returns (ResetLearningResponse);
+
   // DeleteTenant erases the CALLER's own tenant across every store (the GDPR
   // right-to-erasure cascade, M6). The tenant is taken from the verified caller
   // context (x-asker-tenant) — NEVER from the request — so a user can only ever
@@ -164,6 +174,78 @@ message DeleteTokenRequest {
 }
 
 message DeleteTokenResponse {}
+
+// --- Personalization (v3.2) -------------------------------------------------
+
+// GetPersonalizationRequest fetches the caller's resolved profile + learned
+// model (for the gateway's GET /v1/preferences and data-rights export, and to
+// warm the Redis read cache the query path uses).
+message GetPersonalizationRequest {}
+
+message GetPersonalizationResponse {
+  // profile_json is the personalization.Profile as JSON; empty when the user has
+  // never saved preferences (the caller substitutes DefaultProfile()).
+  string profile_json = 1;
+  // version is the monotonic preference version (0 when unset); folded into the
+  // query result-cache key so a preference change invalidates cached orders.
+  int64 version = 2;
+  // weights_json is the personalization.LearnedModel as JSON; empty when no
+  // behavior has been learned yet (cold start).
+  string weights_json = 3;
+  int64 sample_count = 4;
+  bool exists = 5;
+}
+
+message PutPreferencesRequest {
+  // profile_json is a personalization.Profile as JSON; the control plane stores
+  // it verbatim (the gateway has already validated/clamped it) and bumps version.
+  string profile_json = 1;
+}
+
+message PutPreferencesResponse {
+  int64 version = 1;
+}
+
+// FeedbackEvent is one observed interaction with a search result (implicit
+// behavioral signal). The control plane appends it and folds it into the
+// learned model via personalization.LearnedModel.Update — unless learning is
+// paused in the stored profile.
+message FeedbackEvent {
+  string doc_id = 1;
+  // doc_type is the DocType enum NAME (e.g. "EMAIL"); a learned model feature.
+  string doc_type = 2;
+  string connector_id = 3;
+  // senders/topics are the candidate's feature attributes captured by the UI at
+  // interaction time (the doc is not re-fetched server-side).
+  repeated string senders = 4;
+  repeated string topics = 5;
+  // action is the interaction kind: click/open/reply/dwell/show_more (positive)
+  // or dismiss/show_fewer (negative). Unknown actions are recorded but do not
+  // train the model.
+  string action = 6;
+  int64 dwell_ms = 7;
+  // query is the search text that produced the result (audit/analytics).
+  string query = 8;
+}
+
+message RecordFeedbackRequest {
+  FeedbackEvent event = 1;
+}
+
+message RecordFeedbackResponse {
+  // weights_json is the updated learned model (for the gateway to write through
+  // to the Redis read cache); empty when learning is paused (no update applied).
+  string weights_json = 1;
+  int64 sample_count = 2;
+  bool learning_paused = 3;
+}
+
+message ResetLearningRequest {}
+
+message ResetLearningResponse {
+  // feedback_deleted is how many stored feedback events were removed.
+  int64 feedback_deleted = 1;
+}
 
 message DeleteTenantRequest {
   // confirm MUST equal the caller's own tenant id (the value /v1/me reports).

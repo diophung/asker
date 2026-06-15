@@ -36,6 +36,10 @@ const (
 	ControlPlaneService_PutToken_FullMethodName                = "/asker.controlplane.v1.ControlPlaneService/PutToken"
 	ControlPlaneService_GetToken_FullMethodName                = "/asker.controlplane.v1.ControlPlaneService/GetToken"
 	ControlPlaneService_DeleteToken_FullMethodName             = "/asker.controlplane.v1.ControlPlaneService/DeleteToken"
+	ControlPlaneService_GetPersonalization_FullMethodName      = "/asker.controlplane.v1.ControlPlaneService/GetPersonalization"
+	ControlPlaneService_PutPreferences_FullMethodName          = "/asker.controlplane.v1.ControlPlaneService/PutPreferences"
+	ControlPlaneService_RecordFeedback_FullMethodName          = "/asker.controlplane.v1.ControlPlaneService/RecordFeedback"
+	ControlPlaneService_ResetLearning_FullMethodName           = "/asker.controlplane.v1.ControlPlaneService/ResetLearning"
 	ControlPlaneService_DeleteTenant_FullMethodName            = "/asker.controlplane.v1.ControlPlaneService/DeleteTenant"
 )
 
@@ -59,6 +63,15 @@ type ControlPlaneServiceClient interface {
 	PutToken(ctx context.Context, in *PutTokenRequest, opts ...grpc.CallOption) (*PutTokenResponse, error)
 	GetToken(ctx context.Context, in *GetTokenRequest, opts ...grpc.CallOption) (*GetTokenResponse, error)
 	DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error)
+	// Personalization (v3.2): the caller's preference profile + learned ranking
+	// model. profile_json / weights_json are opaque to the control plane (the
+	// platform/personalization library owns their schema); the control plane only
+	// persists them, versions the profile, and runs the online learning update.
+	// All scoped to the verified caller tenant.
+	GetPersonalization(ctx context.Context, in *GetPersonalizationRequest, opts ...grpc.CallOption) (*GetPersonalizationResponse, error)
+	PutPreferences(ctx context.Context, in *PutPreferencesRequest, opts ...grpc.CallOption) (*PutPreferencesResponse, error)
+	RecordFeedback(ctx context.Context, in *RecordFeedbackRequest, opts ...grpc.CallOption) (*RecordFeedbackResponse, error)
+	ResetLearning(ctx context.Context, in *ResetLearningRequest, opts ...grpc.CallOption) (*ResetLearningResponse, error)
 	// DeleteTenant erases the CALLER's own tenant across every store (the GDPR
 	// right-to-erasure cascade, M6). The tenant is taken from the verified caller
 	// context (x-asker-tenant) — NEVER from the request — so a user can only ever
@@ -179,6 +192,46 @@ func (c *controlPlaneServiceClient) DeleteToken(ctx context.Context, in *DeleteT
 	return out, nil
 }
 
+func (c *controlPlaneServiceClient) GetPersonalization(ctx context.Context, in *GetPersonalizationRequest, opts ...grpc.CallOption) (*GetPersonalizationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPersonalizationResponse)
+	err := c.cc.Invoke(ctx, ControlPlaneService_GetPersonalization_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneServiceClient) PutPreferences(ctx context.Context, in *PutPreferencesRequest, opts ...grpc.CallOption) (*PutPreferencesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutPreferencesResponse)
+	err := c.cc.Invoke(ctx, ControlPlaneService_PutPreferences_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneServiceClient) RecordFeedback(ctx context.Context, in *RecordFeedbackRequest, opts ...grpc.CallOption) (*RecordFeedbackResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordFeedbackResponse)
+	err := c.cc.Invoke(ctx, ControlPlaneService_RecordFeedback_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneServiceClient) ResetLearning(ctx context.Context, in *ResetLearningRequest, opts ...grpc.CallOption) (*ResetLearningResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResetLearningResponse)
+	err := c.cc.Invoke(ctx, ControlPlaneService_ResetLearning_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlPlaneServiceClient) DeleteTenant(ctx context.Context, in *DeleteTenantRequest, opts ...grpc.CallOption) (*DeleteTenantResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteTenantResponse)
@@ -209,6 +262,15 @@ type ControlPlaneServiceServer interface {
 	PutToken(context.Context, *PutTokenRequest) (*PutTokenResponse, error)
 	GetToken(context.Context, *GetTokenRequest) (*GetTokenResponse, error)
 	DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error)
+	// Personalization (v3.2): the caller's preference profile + learned ranking
+	// model. profile_json / weights_json are opaque to the control plane (the
+	// platform/personalization library owns their schema); the control plane only
+	// persists them, versions the profile, and runs the online learning update.
+	// All scoped to the verified caller tenant.
+	GetPersonalization(context.Context, *GetPersonalizationRequest) (*GetPersonalizationResponse, error)
+	PutPreferences(context.Context, *PutPreferencesRequest) (*PutPreferencesResponse, error)
+	RecordFeedback(context.Context, *RecordFeedbackRequest) (*RecordFeedbackResponse, error)
+	ResetLearning(context.Context, *ResetLearningRequest) (*ResetLearningResponse, error)
 	// DeleteTenant erases the CALLER's own tenant across every store (the GDPR
 	// right-to-erasure cascade, M6). The tenant is taken from the verified caller
 	// context (x-asker-tenant) — NEVER from the request — so a user can only ever
@@ -258,6 +320,18 @@ func (UnimplementedControlPlaneServiceServer) GetToken(context.Context, *GetToke
 }
 func (UnimplementedControlPlaneServiceServer) DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteToken not implemented")
+}
+func (UnimplementedControlPlaneServiceServer) GetPersonalization(context.Context, *GetPersonalizationRequest) (*GetPersonalizationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPersonalization not implemented")
+}
+func (UnimplementedControlPlaneServiceServer) PutPreferences(context.Context, *PutPreferencesRequest) (*PutPreferencesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutPreferences not implemented")
+}
+func (UnimplementedControlPlaneServiceServer) RecordFeedback(context.Context, *RecordFeedbackRequest) (*RecordFeedbackResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordFeedback not implemented")
+}
+func (UnimplementedControlPlaneServiceServer) ResetLearning(context.Context, *ResetLearningRequest) (*ResetLearningResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResetLearning not implemented")
 }
 func (UnimplementedControlPlaneServiceServer) DeleteTenant(context.Context, *DeleteTenantRequest) (*DeleteTenantResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteTenant not implemented")
@@ -463,6 +537,78 @@ func _ControlPlaneService_DeleteToken_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlaneService_GetPersonalization_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPersonalizationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServiceServer).GetPersonalization(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlaneService_GetPersonalization_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServiceServer).GetPersonalization(ctx, req.(*GetPersonalizationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlaneService_PutPreferences_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutPreferencesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServiceServer).PutPreferences(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlaneService_PutPreferences_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServiceServer).PutPreferences(ctx, req.(*PutPreferencesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlaneService_RecordFeedback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordFeedbackRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServiceServer).RecordFeedback(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlaneService_RecordFeedback_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServiceServer).RecordFeedback(ctx, req.(*RecordFeedbackRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlaneService_ResetLearning_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResetLearningRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServiceServer).ResetLearning(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlaneService_ResetLearning_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServiceServer).ResetLearning(ctx, req.(*ResetLearningRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ControlPlaneService_DeleteTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteTenantRequest)
 	if err := dec(in); err != nil {
@@ -527,6 +673,22 @@ var ControlPlaneService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteToken",
 			Handler:    _ControlPlaneService_DeleteToken_Handler,
+		},
+		{
+			MethodName: "GetPersonalization",
+			Handler:    _ControlPlaneService_GetPersonalization_Handler,
+		},
+		{
+			MethodName: "PutPreferences",
+			Handler:    _ControlPlaneService_PutPreferences_Handler,
+		},
+		{
+			MethodName: "RecordFeedback",
+			Handler:    _ControlPlaneService_RecordFeedback_Handler,
+		},
+		{
+			MethodName: "ResetLearning",
+			Handler:    _ControlPlaneService_ResetLearning_Handler,
 		},
 		{
 			MethodName: "DeleteTenant",
