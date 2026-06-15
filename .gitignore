@@ -4,6 +4,8 @@ coverage.out
 *.test
 *.out
 .env
+# Python virtualenvs (e.g. services/enrich/.venv for running the enrich tests).
+.venv/
 .env.local
 /web/node_modules/
 /web/dist/

@@ -428,6 +428,12 @@ services:
         "4096",
         "--max-concurrent-requests",
         "32",
+        # Truncate inputs longer than the model's max sequence length to that
+        # length instead of rejecting them with HTTP 413. Without this, a chunk
+        # over ~512 tokens fails embedding and the enrich worker dead-letters the
+        # whole document, so it never reaches the index — not even keyword search.
+        # The model only attends to its first max-seq-length tokens anyway.
+        "--auto-truncate",
       ]
     volumes:
       - tei-cache:/data # HF model cache (HUGGINGFACE_HUB_CACHE=/data in the image)

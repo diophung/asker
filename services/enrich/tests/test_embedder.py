@@ -5,7 +5,12 @@ import json
 import httpx
 import pytest
 
-from enrich.embedder import DimensionMismatchError, Embedder, EmbeddingError
+from enrich.embedder import (
+    MAX_INPUT_CHARS,
+    DimensionMismatchError,
+    Embedder,
+    EmbeddingError,
+)
 
 DIM = 4
 
@@ -44,6 +49,19 @@ async def test_embed_batches_large_inputs_across_calls():
     vectors = await embedder.embed(texts)
     assert len(vectors) == 8
     assert [len(c) for c in calls] == [6, 2]
+
+
+async def test_embed_truncates_oversized_input_to_avoid_413():
+    # A runaway chunk (e.g. base64/minified blob the chunker couldn't split)
+    # must be truncated before it reaches TEI, or TEI returns 413 and the whole
+    # document is dead-lettered (never indexed, not even keyword-searchable).
+    calls: list[list[str]] = []
+    embedder = _make_embedder(_ok_handler(calls))
+    huge = "x" * 500_000
+    vectors = await embedder.embed([huge])
+    assert len(vectors) == 1
+    assert len(calls) == 1 and len(calls[0]) == 1
+    assert len(calls[0][0]) == MAX_INPUT_CHARS  # capped, not the raw 500 KB
 
 
 async def test_embed_rejects_wrong_dimension():
