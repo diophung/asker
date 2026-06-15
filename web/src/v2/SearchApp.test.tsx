@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SearchApp } from "./SearchApp";
 
@@ -12,7 +18,11 @@ beforeEach(() => {
 
 function typeAndSearch(query: string) {
   fireEvent.change(screen.getByRole("combobox"), { target: { value: query } });
-  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  // The home page also has a "Search" CTA button outside the box; scope to the
+  // search landmark so this clicks the in-box Search button unambiguously.
+  fireEvent.click(
+    within(screen.getByRole("search")).getByRole("button", { name: "Search" }),
+  );
 }
 
 describe("SearchApp", () => {

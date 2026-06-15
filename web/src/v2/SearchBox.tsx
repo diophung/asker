@@ -8,6 +8,7 @@ import {
 import { Clock, FileText, Mic, Search, X } from "lucide-react";
 import type { Suggestion } from "./types";
 import { Avatar } from "./ui";
+import { useVoiceInput } from "./useVoiceInput";
 
 export interface SearchBoxProps {
   value: string;
@@ -65,6 +66,19 @@ export function SearchBox({
     submit(s.text);
   }
 
+  // Voice input (Web Speech API): dictated words stream into the box as you
+  // speak; the search runs automatically when you stop talking.
+  const voice = useVoiceInput({
+    onTranscript: (text) => {
+      onChange(text);
+      setActive(-1);
+      setOpen(true);
+    },
+    onFinal: (text) => {
+      submit(text);
+    },
+  });
+
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Escape") {
       setOpen(false);
@@ -99,7 +113,14 @@ export function SearchBox({
           variant === "home" ? "h-12" : "h-11",
         ].join(" ")}
       >
-        <Search aria-hidden="true" className="size-5 shrink-0 text-gmuted" />
+        <button
+          type="submit"
+          aria-label="Search"
+          onMouseDown={(e) => e.preventDefault()}
+          className="shrink-0 rounded-full p-0.5 text-gmuted hover:text-gblue"
+        >
+          <Search aria-hidden="true" className="size-5" />
+        </button>
         <input
           ref={inputRef}
           type="text"
@@ -139,13 +160,30 @@ export function SearchBox({
             <X className="size-4" />
           </button>
         )}
-        <span
-          aria-hidden="true"
-          className="size-5 shrink-0 text-gblue/90"
-          title="Voice search"
-        >
-          <Mic className="size-5" />
-        </span>
+        {voice.supported && (
+          <button
+            type="button"
+            aria-label={voice.listening ? "Stop voice input" : "Search by voice"}
+            aria-pressed={voice.listening}
+            title={
+              voice.error !== ""
+                ? voice.error
+                : voice.listening
+                  ? "Listening…"
+                  : "Search by voice"
+            }
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={voice.toggle}
+            className={[
+              "shrink-0 rounded-full p-1 transition-colors",
+              voice.listening
+                ? "animate-pulse bg-gblue/10 text-[#c5221f]"
+                : "text-gblue/90 hover:bg-gbg-soft",
+            ].join(" ")}
+          >
+            <Mic className="size-5" />
+          </button>
+        )}
       </form>
 
       {showList && (
