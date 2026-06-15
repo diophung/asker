@@ -49,8 +49,8 @@ type searchResponseJSON struct {
 	Cached   bool            `json:"cached"`
 }
 
-// handleSearch proxies GET /v1/search to the QueryService. The tenant is NOT
-// handled here: it rides the request context into the gRPC client
+// handleSearch proxies GET /v1/search (the "All" tab) to the QueryService. The
+// tenant is NOT handled here: it rides the request context into the gRPC client
 // interceptor, which fails closed without one.
 func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 	req, err := parseSearchRequest(r.URL.Query(), d.maxQueryChars)
@@ -63,6 +63,51 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		d.upstreamError(w, r, "QueryService.Search", err)
 		return
 	}
+	d.recordRecent(r.Context(), req.GetQuery())
+	writeJSON(w, http.StatusOK, restSearchResponse(resp))
+}
+
+// sourceDocTypes maps a /v1/search/{source} path segment to the DocType filter
+// that backs that source tab (mirrors the web SOURCE_TYPES). The "all" tab is
+// the unfiltered /v1/search route; "people" is special-cased to the aggregation
+// handler (people.go) and is intentionally absent here.
+var sourceDocTypes = map[string][]documentv1.DocType{
+	"email":    {documentv1.DocType_EMAIL},
+	"files":    {documentv1.DocType_FILE, documentv1.DocType_WIKI_PAGE, documentv1.DocType_TICKET},
+	"messages": {documentv1.DocType_CHAT_MESSAGE},
+	"calendar": {documentv1.DocType_CALENDAR_EVENT},
+	"photos":   {documentv1.DocType_IMAGE, documentv1.DocType_VIDEO, documentv1.DocType_AUDIO},
+}
+
+// handleSourceSearch serves GET /v1/search/{source}: a per-tab search endpoint.
+// The path segment IS the type filter, so each tab is genuinely served by its
+// own endpoint rather than a client-side filter (the v2 UI navigates here on a
+// full page load). The tenant still rides the request context as for /v1/search.
+func (d *deps) handleSourceSearch(w http.ResponseWriter, r *http.Request) {
+	source := r.PathValue("source")
+	if source == "people" {
+		d.handlePeopleSearch(w, r)
+		return
+	}
+	types, ok := sourceDocTypes[source]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown source"})
+		return
+	}
+	req, err := parseSearchRequest(r.URL.Query(), d.maxQueryChars)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// The endpoint defines the type filter; any types= param is overridden so a
+	// tab's results can never be widened past its source.
+	req.DocTypes = types
+	resp, err := d.query.Search(r.Context(), req)
+	if err != nil {
+		d.upstreamError(w, r, "QueryService.Search", err)
+		return
+	}
+	d.recordRecent(r.Context(), req.GetQuery())
 	writeJSON(w, http.StatusOK, restSearchResponse(resp))
 }
 

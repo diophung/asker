@@ -1,13 +1,21 @@
 // DEV-ONLY auth for the v2 UI. The v2 dev port is not a registered Keycloak
 // redirect URI, so the production OIDC redirect flow (src/auth.ts) can't run
 // here. Instead we sign in with the resource-owner password grant through the
-// Vite dev proxy (/kc -> Keycloak). Session lives in memory only (the spec bans
-// localStorage/sessionStorage), so a reload signs out. NEVER ship this — in
-// production the seam swaps back to the real OIDC token.
+// Vite dev proxy (/kc -> Keycloak). NEVER ship this — in production the seam
+// swaps back to the real OIDC token.
+//
+// SESSION PERSISTENCE (DEV-ONLY relaxation): the source tabs do a full page
+// load per tab, which would drop an in-memory session and sign the user out on
+// every tab switch. So the dev session is mirrored into sessionStorage: it
+// survives reloads/navigations within the tab and is cleared when the tab
+// closes. This intentionally relaxes the v2 spec's "no localStorage/
+// sessionStorage" rule (written for the no-backend mock); the real OIDC seam
+// holds tokens differently. The key is namespaced and removed on sign-out.
 
 const env = import.meta.env;
 const TOKEN_PATH = "/kc/realms/asker/protocol/openid-connect/token";
 const CLIENT_ID = "asker-web";
+const STORAGE_KEY = "asker.dev.session";
 
 /** Prefill for the dev sign-in form. */
 export const DEV_USER = env.VITE_DEV_USER ?? "alice";
@@ -20,7 +28,35 @@ interface Session {
   user: string;
 }
 
-let session: Session | null = null;
+function loadStoredSession(): Session | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const s = JSON.parse(raw) as Partial<Session>;
+    if (typeof s.token === "string" && typeof s.refresh === "string" && typeof s.expiresAt === "number") {
+      return { token: s.token, refresh: s.refresh, expiresAt: s.expiresAt, user: s.user ?? "you" };
+    }
+  } catch {
+    // Unparseable / unavailable storage: fall back to a fresh (signed-out) state.
+  }
+  return null;
+}
+
+function persistSession(): void {
+  try {
+    if (session) {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    } else {
+      sessionStorage.removeItem(STORAGE_KEY);
+    }
+  } catch {
+    // sessionStorage unavailable (private mode etc.): degrade to in-memory only.
+  }
+}
+
+let session: Session | null = loadStoredSession();
 const subscribers = new Set<() => void>();
 
 function notify(): void {
@@ -78,6 +114,7 @@ async function grant(body: URLSearchParams): Promise<void> {
     expiresAt: Date.now() + json.expires_in * 1000,
     user: userOf(json.access_token),
   };
+  persistSession();
 }
 
 export async function signIn(username: string, password: string): Promise<void> {
@@ -94,6 +131,7 @@ export async function signIn(username: string, password: string): Promise<void> 
 
 export function signOut(): void {
   session = null;
+  persistSession();
   notify();
 }
 
@@ -113,6 +151,7 @@ export async function getToken(): Promise<string> {
       );
     } catch {
       session = null;
+      persistSession();
       notify();
       throw new Error("session expired — please sign in again");
     }

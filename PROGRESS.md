@@ -17,6 +17,73 @@ Newest entries go first.
 
 ---
 
+## 2026-06-14 — Full-page-load source tabs + backend recent searches + recency rank + People (post-V1)
+
+- Done: **Four user-requested search-UX changes shipped end to end and live on the dev stack
+  (:13001), plus a tab-row CSS fix.** Built coherently across query/gateway/web, then an
+  adversarial multi-agent review (6 dimensions, every finding skeptic-verified): 2 confirmed
+  (both minor, both in People aggregation) — both fixed.
+  - **(1) Full page load between source tabs, each its own endpoint.** New gateway route
+    `GET /v1/search/{source}` (`services/gateway/search.go` `handleSourceSearch` + `sourceDocTypes`):
+    email→EMAIL, files→FILE/WIKI_PAGE/TICKET, messages→CHAT_MESSAGE, calendar→CALENDAR_EVENT,
+    photos→IMAGE/VIDEO/AUDIO (the path segment IS the type filter — overrides any `types=`).
+    Web: `web/src/v2/router.ts` (parse/build URLs), `SourceTabs.tsx` rebuilt as real `<a href>`
+    links (a true document reload per tab; cmd/middle-click works); `SearchApp.tsx` reconstructs
+    state from the URL on load. The home→results motion stays a SOFT `history.pushState` glide
+    (the spec forbids hard-swapping it); only tab switches are full loads. `popstate` restores the
+    soft transitions. **Auth across reload:** the dev session is mirrored into `sessionStorage`
+    (`web/src/v2/auth.ts`) so the reloads don't sign the user out — a DEV-ONLY relaxation of the
+    v2 spec's "no localStorage/sessionStorage" rule (the user explicitly chose this), cleared on
+    sign-out, namespaced.
+  - **(2) Recent searches, backend-stored per tenant.** `services/gateway/recent.go`
+    (`recentSearchStore`) over a Redis list (`redis.go` LREM/LPUSH/LTRIM/EXPIRE → most-recent-first,
+    deduped, capped 20, 90d TTL). Routes: `GET /v1/searches/recent`, `POST /v1/searches`,
+    `DELETE /v1/searches` (`?q=` removes one, else clears). Auto-recorded on every search
+    (best-effort, nil-safe, never fails the search; the list endpoint degrades to `[]` on a store
+    outage). Keyed by the **verified-token tenant only** — tenant-isolation tested. Web: dropdown
+    shows real recents with a Remove (✕); `data.ts` `getSuggestions(query, recents?)`.
+  - **(3) "Most recent, most relevant first" re-rank.** `services/query/rerank.go`
+    `rerankByRecency` blends min-max-normalized relevance (0.6) with an exponential recency decay
+    (0.4, 30-day half-life) over the retrieved page, before caching (`server.go`). Config
+    `QUERY_RECENCY_WEIGHT` / `QUERY_RECENCY_HALFLIFE`; **off by default in `newServer`** (so the
+    existing query tests stay valid), set from config in `main.go`. Live spot-check confirms the
+    blend orders the result cluster by recency+relevance rather than raw score.
+  - **(4) Derived People endpoint.** `services/gateway/people.go` aggregates contacts (email
+    from/to/cc, chat sender, calendar organizer + `response_status:*` attendees) from a broad
+    tenant-scoped search over the human-bearing types (scan window 100, not the UI page size);
+    name-match-first with a relatedness fallback for topic queries; ranked by frequency
+    (`log1p`) + recency. Web `backend.ts` `searchPeople`/`mapPerson` → rendered via the existing
+    person row.
+  - **(5) Tab-row scrollbar fix.** `web/src/v2/v2.css` `.no-scrollbar` hides the horizontal
+    scrollbar under the source tabs while keeping mobile scrollability (the reported bug).
+  - **Review fixes (both in `people.go`, both minor):** (a) the people sort tiebreak was not fully
+    discriminating — distinct people sharing a score AND a display name (e.g. `john@team1.com` vs
+    `john@team2.com`, both render "john") could flip order and churn at the top-20 cutoff under
+    Go's randomized map iteration → added a final `email` tiebreak (now deterministic, tested).
+    (b) `mail.ParseAddressList` rejects the WHOLE to/cc list if any one entry is malformed (an
+    unquoted-comma display name like `Lastname, Firstname <a@x>` is common) — it collapsed the
+    list into one junk contact and dropped valid recipients → `parsePeople` now salvages the
+    parseable comma-fragments (recovers real addresses, drops strays), tested.
+  - **Validation:** `make build`/`vet`/`test`/`lint` all green (gateway 82.6%, query 90.2%,
+    golangci-lint 0 issues); web `npm run build` + 94 vitest tests + eslint all green. Rebuilt the
+    web/gateway/query images and restarted them; verified live on :13001 — per-source filtering
+    (459 EMAIL hits, all EMAIL), unknown source→404, derived People (ranked by frequency+recency),
+    recent-search record/list/dedup/delete-one/clear, SPA fallback for tab URLs (200), and the
+    re-rank ordering.
+- Next: optional — per-tab result counts (dropped under full-page-load since each page only fetches
+  its own source; would need a counts endpoint or parallel type-filtered searches); a richer People
+  card (role/org/shared-docs) once a real person index exists; swap the dev sessionStorage seam back
+  to the OIDC redirect flow for a real prod deploy (still tracked from the prior entry).
+- Known issues:
+  - **Restart `web` AFTER `gateway`, not together.** nginx resolves the `gateway` upstream at
+    config-load time, so `docker compose up -d web gateway` can race → `nginx: [emerg] host not
+    found in upstream "gateway"` and the web container exits. Restarting `web` alone once the
+    gateway is healthy fixes it (pre-existing `web/nginx.conf` behavior, not new).
+  - The dev session in `sessionStorage` is the password-grant token (dev-only, 127.0.0.1, namespaced,
+    cleared on sign-out / tab close). MUST NOT ship; the prod OIDC seam holds tokens differently.
+  - Recency re-rank operates on the retrieved page (offset 0 = the UI's only page); deeper
+    pagination reorders within each page — acceptable and documented in `rerank.go`.
+
 ## 2026-06-14 — Deploy v2 (Google-style) UI + disable dev rate limiting (post-V1)
 
 - Done: **The v2 search UI is now the deployed web app, and the dev-stack API rate limit is off.**

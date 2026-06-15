@@ -384,14 +384,18 @@ const RECENT_SEARCHES = [
 const PEOPLE = CORPUS.filter((r): r is PersonResult => r.type === "person");
 const DOCS = CORPUS.filter((r) => r.type === "file");
 
-export function getSuggestions(query: string): Suggestion[] {
+export function getSuggestions(query: string, recents?: string[]): Suggestion[] {
   const q = query.trim().toLowerCase();
   const out: Suggestion[] = [];
 
-  const recents = q
-    ? RECENT_SEARCHES.filter((r) => r.includes(q) && r !== q)
-    : RECENT_SEARCHES;
-  for (const text of recents.slice(0, 3)) {
+  // In backend mode the caller passes the tenant's real recent searches; the
+  // mock corpus falls back to a canned list. Filter by the typed prefix (and
+  // drop an exact match of what's already typed), like Google.
+  const source = recents ?? RECENT_SEARCHES;
+  const matching = q
+    ? source.filter((r) => r.toLowerCase().includes(q) && r.toLowerCase() !== q)
+    : source;
+  for (const text of matching.slice(0, 5)) {
     out.push({ kind: "recent", text });
   }
 

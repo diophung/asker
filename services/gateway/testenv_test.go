@@ -97,6 +97,80 @@ func (f *fakeCounter) callCount() int {
 	return f.calls
 }
 
+// fakeRecent is an in-memory recentSearchStore: most-recent-first, deduped,
+// capped — mirroring the Redis list semantics so handler tests are realistic.
+type fakeRecent struct {
+	mu   sync.Mutex
+	data map[string][]string // key -> list (front = newest)
+	err  error
+}
+
+func newFakeRecent() *fakeRecent { return &fakeRecent{data: map[string][]string{}} }
+
+func (f *fakeRecent) RecordRecent(_ context.Context, key, value string, maxN int, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	out := []string{value}
+	for _, v := range f.data[key] {
+		if v != value {
+			out = append(out, v)
+		}
+	}
+	if len(out) > maxN {
+		out = out[:maxN]
+	}
+	f.data[key] = out
+	return nil
+}
+
+func (f *fakeRecent) RecentList(_ context.Context, key string, n int) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	list := f.data[key]
+	if n < len(list) {
+		list = list[:n]
+	}
+	return append([]string(nil), list...), nil
+}
+
+func (f *fakeRecent) RemoveRecent(_ context.Context, key, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	out := []string{}
+	for _, v := range f.data[key] {
+		if v != value {
+			out = append(out, v)
+		}
+	}
+	f.data[key] = out
+	return nil
+}
+
+func (f *fakeRecent) ClearRecent(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	delete(f.data, key)
+	return nil
+}
+
+func (f *fakeRecent) snapshot(key string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.data[key]...)
+}
+
 // fakeQuery captures the tenant (as installed by the REAL tenancygrpc server
 // interceptor) and the request, then plays back a canned response.
 type fakeQuery struct {
@@ -383,6 +457,7 @@ type testEnv struct {
 	control *fakeControlPlane
 	admin   *fakeAdmin
 	counter *fakeCounter
+	recent  *fakeRecent
 	deps    *deps
 	cfg     gatewayConfig
 }
@@ -396,6 +471,7 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 	conn := startGRPCBackends(t, query, control, admin)
 
 	counter := &fakeCounter{}
+	recent := newFakeRecent()
 	cfg := testGatewayConfig(idp.jwks.URL)
 	d := &deps{
 		query:          queryv1.NewQueryServiceClient(conn),
@@ -405,6 +481,7 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 		hubClient:      &http.Client{Timeout: 5 * time.Second},
 		mediaClient:    &http.Client{Timeout: 5 * time.Second},
 		counter:        counter,
+		recent:         recent,
 		maxUploadBytes: cfg.MaxUploadMB << 20,
 		maxMediaBytes:  cfg.MaxMediaMB << 20,
 		oidcAudience:   cfg.OIDCAudience,
@@ -423,6 +500,7 @@ func newTestEnv(t *testing.T, opts ...func(cfg *gatewayConfig, d *deps)) *testEn
 		control: control,
 		admin:   admin,
 		counter: counter,
+		recent:  recent,
 		deps:    d,
 		cfg:     cfg,
 	}

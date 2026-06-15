@@ -36,6 +36,18 @@ type queryConfig struct {
 	// dropped (degraded="clip-unavailable") — text retrieval is unaffected
 	// (ADR-006: never fail closed).
 	ClipTimeout time.Duration `env:"QUERY_CLIP_TIMEOUT" envDefault:"2s"`
+
+	// RecencyWeight blends freshness into ranking ("most recent, most relevant
+	// first"): the retrieved page is re-ordered by
+	// (1-w)*normRelevance + w*recency, where recency decays with RecencyHalfLife.
+	// w in [0,1]; 0 disables the blend (pure relevance). Default 0.4 keeps
+	// relevance leading while fresh results clearly rise (rerank.go).
+	RecencyWeight float64 `env:"QUERY_RECENCY_WEIGHT" envDefault:"0.4"`
+	// RecencyHalfLife is the age at which a hit's recency contribution halves.
+	// 720h = 30 days: items within a month stay strongly boosted, year-old items
+	// contribute little. Only used when RecencyWeight > 0.
+	RecencyHalfLife time.Duration `env:"QUERY_RECENCY_HALFLIFE" envDefault:"720h"`
+
 	// Empty endpoint means telemetry is a no-op.
 	OTLPEndpoint string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:""`
 }
@@ -56,6 +68,12 @@ func loadConfig() (queryConfig, error) {
 	}
 	if cfg.ClipTimeout <= 0 {
 		return queryConfig{}, fmt.Errorf("config: QUERY_CLIP_TIMEOUT must be > 0, got %s", cfg.ClipTimeout)
+	}
+	if cfg.RecencyWeight < 0 || cfg.RecencyWeight > 1 {
+		return queryConfig{}, fmt.Errorf("config: QUERY_RECENCY_WEIGHT must be in [0,1], got %v", cfg.RecencyWeight)
+	}
+	if cfg.RecencyWeight > 0 && cfg.RecencyHalfLife <= 0 {
+		return queryConfig{}, fmt.Errorf("config: QUERY_RECENCY_HALFLIFE must be > 0 when QUERY_RECENCY_WEIGHT > 0, got %s", cfg.RecencyHalfLife)
 	}
 	return cfg, nil
 }
