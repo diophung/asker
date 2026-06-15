@@ -169,6 +169,25 @@ func TestFeatureKeysBuild(t *testing.T) {
 	}
 }
 
+// TestFeatureKeysSenderNormalization guards the train/score key mismatch: a
+// feedback event carries the raw "Name <email>" header while the query path
+// extracts the bare email; both MUST produce the same from: feature so the
+// learned per-sender signal actually applies at ranking time.
+func TestFeatureKeysSenderNormalization(t *testing.T) {
+	header := FeatureKeys("EMAIL", "gmail", []string{"Sharebird Events <mail@events.sharebird.com>"}, nil)
+	bare := FeatureKeys("EMAIL", "gmail", []string{"mail@events.sharebird.com"}, nil)
+	want := "from:mail@events.sharebird.com"
+	if len(header) < 3 || header[2] != want {
+		t.Errorf("header-form sender = %v, want %q", header, want)
+	}
+	if len(bare) < 3 || bare[2] != want {
+		t.Errorf("bare-email sender = %v, want %q", bare, want)
+	}
+	if header[2] != bare[2] {
+		t.Errorf("header and bare senders produced different keys: %q vs %q", header[2], bare[2])
+	}
+}
+
 func TestEmptyModelPredictsNeutral(t *testing.T) {
 	var m LearnedModel
 	if got := m.Predict([]string{"type:EMAIL"}); math.Abs(got-0.5) > 1e-9 {

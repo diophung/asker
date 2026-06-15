@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
+  Check,
   CornerUpLeft,
   Heart,
   Info,
@@ -27,9 +28,20 @@ function WhyAndFeedback({
   onFeedback?: ResultFeedback;
 }) {
   const why = result.explanation?.trim();
+  // Track the chosen action so a click gives immediate, visible confirmation —
+  // without it the feedback fires silently (HTTP 200, no UI change) and reads as
+  // "nothing happened". One choice per result; re-clicking is a no-op.
+  const [acked, setAcked] = useState<FeedbackAction | null>(null);
   if (!why && !onFeedback) {
     return null;
   }
+  const ack = (action: FeedbackAction) => {
+    if (acked || !onFeedback) {
+      return;
+    }
+    onFeedback(result, action);
+    setAcked(action);
+  };
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
       {why ? (
@@ -42,24 +54,36 @@ function WhyAndFeedback({
         </span>
       ) : null}
       {onFeedback ? (
-        <span className="inline-flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => onFeedback(result, "show_more")}
-            aria-label="More results like this"
-            className="inline-flex items-center gap-1 rounded-full border border-gline px-2.5 py-1 text-[12px] text-gmuted hover:bg-gbg-soft hover:text-gblue"
+        acked ? (
+          <span
+            role="status"
+            className="inline-flex items-center gap-1 text-[12px] text-gprov"
           >
-            <ThumbsUp aria-hidden="true" className="size-3.5" /> More like this
-          </button>
-          <button
-            type="button"
-            onClick={() => onFeedback(result, "show_fewer")}
-            aria-label="Fewer results like this"
-            className="inline-flex items-center gap-1 rounded-full border border-gline px-2.5 py-1 text-[12px] text-gmuted hover:bg-gbg-soft hover:text-[#c5221f]"
-          >
-            <ThumbsDown aria-hidden="true" className="size-3.5" /> Fewer like this
-          </button>
-        </span>
+            <Check aria-hidden="true" className="size-3.5 shrink-0" />
+            {acked === "show_more"
+              ? "Thanks — we'll show more like this"
+              : "Thanks — we'll show fewer like this"}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => ack("show_more")}
+              aria-label="More results like this"
+              className="inline-flex items-center gap-1 rounded-full border border-gline px-2.5 py-1 text-[12px] text-gmuted hover:bg-gbg-soft hover:text-gblue"
+            >
+              <ThumbsUp aria-hidden="true" className="size-3.5" /> More like this
+            </button>
+            <button
+              type="button"
+              onClick={() => ack("show_fewer")}
+              aria-label="Fewer results like this"
+              className="inline-flex items-center gap-1 rounded-full border border-gline px-2.5 py-1 text-[12px] text-gmuted hover:bg-gbg-soft hover:text-[#c5221f]"
+            >
+              <ThumbsDown aria-hidden="true" className="size-3.5" /> Fewer like this
+            </button>
+          </span>
+        )
       ) : null}
     </div>
   );

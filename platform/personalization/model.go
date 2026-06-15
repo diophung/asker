@@ -127,8 +127,8 @@ func FeatureKeys(docType, connectorID string, senders, topics []string) []string
 		out = append(out, featSrcPrefix+src)
 	}
 	for _, s := range senders {
-		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
-			out = append(out, featFromPrefix+s)
+		if k := senderKey(s); k != "" {
+			out = append(out, featFromPrefix+k)
 		}
 	}
 	for _, t := range topics {
@@ -174,6 +174,23 @@ func LabelForAction(action string) (label float64, ok bool) {
 	default:
 		return 0, false
 	}
+}
+
+// senderKey normalizes a participant string to a stable feature key: the bare
+// lower-cased email address. A sender arrives in two forms that MUST map to the
+// same feature so the learned signal generalizes — the query path extracts the
+// email from the indexed "from" metadata, while a feedback event from the web
+// carries the raw "Name <email>" header. Without this, training on
+// "Sharebird Events <mail@x>" would never match scoring on "mail@x". A value
+// with no angle-bracket address falls back to its trimmed, lower-cased self.
+func senderKey(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '<'); i >= 0 {
+		if j := strings.IndexByte(s[i:], '>'); j > 1 {
+			s = s[i+1 : i+j]
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func sigmoid(z float64) float64 {
