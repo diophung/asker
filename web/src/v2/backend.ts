@@ -170,6 +170,58 @@ export function defaultProfile(): Profile {
   };
 }
 
+/** ProfileWire is the profile as it arrives on the wire: Go serializes empty
+ * slices/maps as `null`, so every array/object field can be null even though the
+ * Profile type models them as non-null. normalizeProfile bridges the two. */
+interface ProfileWire {
+  version?: number | null;
+  source_weights?: Partial<Record<DocType, number>> | null;
+  important_people?: string[] | null;
+  topics?: string[] | null;
+  mute?: {
+    people?: string[] | null;
+    topics?: string[] | null;
+    sources?: DocType[] | null;
+  } | null;
+  self_emails?: string[] | null;
+  timezone?: string | null;
+  working_hours?: WorkingHours | null;
+  attention_sensitivity?: number | null;
+  recency_vs_importance?: number | null;
+  novelty_vs_familiarity?: number | null;
+  learning_paused?: boolean | null;
+  weights?: ScoreWeights | null;
+}
+
+/** normalizeProfile coerces a wire profile (with possibly-null arrays/objects)
+ * into a fully-populated Profile, falling back to cold-start defaults for any
+ * missing field. Without this the Settings page calls .map()/.includes() on a
+ * null array (the cold-start response) and renders a blank screen. */
+export function normalizeProfile(raw: ProfileWire | null | undefined): Profile {
+  const d = defaultProfile();
+  const r = raw ?? {};
+  const mute = r.mute ?? {};
+  return {
+    version: r.version ?? 0,
+    source_weights: r.source_weights ?? {},
+    important_people: r.important_people ?? [],
+    topics: r.topics ?? [],
+    mute: {
+      people: mute.people ?? [],
+      topics: mute.topics ?? [],
+      sources: mute.sources ?? [],
+    },
+    self_emails: r.self_emails ?? [],
+    timezone: r.timezone ?? "",
+    working_hours: r.working_hours ?? d.working_hours,
+    attention_sensitivity: r.attention_sensitivity ?? d.attention_sensitivity,
+    recency_vs_importance: r.recency_vs_importance ?? d.recency_vs_importance,
+    novelty_vs_familiarity: r.novelty_vs_familiarity ?? d.novelty_vs_familiarity,
+    learning_paused: r.learning_paused ?? false,
+    weights: r.weights ?? d.weights,
+  };
+}
+
 export interface PreferencesResponse {
   profile: Profile;
   sampleCount: number;
@@ -193,8 +245,10 @@ export async function getPreferences(): Promise<PreferencesResponse> {
   if (!res.ok) {
     throw new Error(`Couldn't load preferences (HTTP ${res.status})`);
   }
-  const j = (await res.json()) as { profile: Profile; sample_count: number };
-  return { profile: j.profile, sampleCount: j.sample_count ?? 0 };
+  const j = (await res.json()) as { profile?: ProfileWire | null; sample_count?: number };
+  // Go serializes empty arrays as null; normalize so the Settings UI never
+  // dereferences a null array (the cold-start blank-screen bug).
+  return { profile: normalizeProfile(j.profile), sampleCount: j.sample_count ?? 0 };
 }
 
 /** PUT /v1/preferences — validate + persist; returns the bumped version. */
