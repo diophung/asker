@@ -76,6 +76,55 @@ func TestParseTemporalWindows(t *testing.T) {
 	}
 }
 
+func TestParseTemporalRelativeExpressions(t *testing.T) {
+	loc := time.UTC
+	// Wednesday 2026-06-10 14:00 UTC; week starts Mon 2026-06-08.
+	now := time.Date(2026, 6, 10, 14, 0, 0, 0, loc)
+	day := func(d int) time.Time { return time.Date(2026, 6, d, 0, 0, 0, 0, loc) }
+
+	cases := []struct {
+		name             string
+		text             string
+		wantFrom, wantTo time.Time
+		wantStrip        string
+	}{
+		{"this weekend", "what's on this weekend", day(13), day(15), "what's on"},
+		{"next weekend", "plans next weekend", day(20), day(22), "plans"},
+		{"in N days", "my calendar in 3 days", day(13), day(14), "my calendar"},
+		{"N days from now", "meetings 2 days from now", day(12), day(13), "meetings"},
+		{"a week from now", "calendar a week from now", day(17), day(18), "calendar"},
+		{"in a week", "what's on in a week", day(17), day(18), "what's on"},
+		{"next N days", "events next 3 days", day(10), day(13), "events"},
+		{"rest of the week", "my calendar for the rest of the week", day(10), day(15), "my calendar for the"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			win, stripped, ok := parseTemporal(tc.text, loc, now)
+			if !ok {
+				t.Fatalf("parseTemporal(%q) returned ok=false", tc.text)
+			}
+			if !win.From.Equal(tc.wantFrom) || !win.To.Equal(tc.wantTo) {
+				t.Errorf("window = [%s,%s), want [%s,%s)", win.From, win.To, tc.wantFrom, tc.wantTo)
+			}
+			if stripped != tc.wantStrip {
+				t.Errorf("stripped = %q, want %q", stripped, tc.wantStrip)
+			}
+		})
+	}
+}
+
+// "this weekend" must win over its "this week" substring.
+func TestParseTemporalWeekendBeatsWeek(t *testing.T) {
+	now := time.Date(2026, 6, 10, 14, 0, 0, 0, time.UTC)
+	win, _, ok := parseTemporal("this weekend", time.UTC, now)
+	if !ok {
+		t.Fatal("expected a match")
+	}
+	if !win.From.Equal(time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("this weekend resolved to %s, want 2026-06-13 (Sat)", win.From)
+	}
+}
+
 func TestParseTemporalNoMatch(t *testing.T) {
 	win, stripped, ok := parseTemporal("quarterly revenue report", time.UTC, time.Now())
 	if ok {

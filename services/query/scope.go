@@ -32,6 +32,18 @@ func scopeQuery(plan parsedQuery, profile personalization.Profile, now time.Time
 		plan.WinFrom, plan.WinTo = win.From, win.To
 	}
 
+	// Promote a bare temporal query ("next week", "tomorrow") or a soft
+	// availability query ("what's coming up", "am I busy") with no other content
+	// to a schedule lookup: it means "show my calendar", not a keyword search for
+	// the leftover words (which finds nothing). The empty-residual guard means a
+	// real content query that merely contains a soft cue ("busy season report")
+	// is never reclassified.
+	if (plan.Intent == intentFindItem || plan.Intent == intentFreeform) &&
+		contentResidual(strings.ToLower(plan.Text)) == "" &&
+		(hasWin || hasScheduleSignal(plan.Text)) {
+		plan.Intent = intentScheduleLookup
+	}
+
 	switch plan.Intent {
 	case intentScheduleLookup:
 		if len(plan.DocTypes) == 0 {
@@ -39,6 +51,12 @@ func scopeQuery(plan parsedQuery, profile personalization.Profile, now time.Time
 		}
 		if hasWin {
 			plan.EventFrom, plan.EventTo = win.From, win.To
+		} else {
+			// No explicit window: "my calendar" / "upcoming meetings" mean what is
+			// ahead, not the entire history. Bound occurrence time to today onward
+			// so the list is upcoming-first (sortByEventStart is ascending) and
+			// never surfaces decade-old events.
+			plan.EventFrom = startOfDay(now, profile.Location())
 		}
 		if contentResidual(strings.ToLower(plan.Text)) == "" {
 			plan.Text = "" // pure intent: list the window, do not keyword-match

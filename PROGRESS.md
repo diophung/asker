@@ -17,6 +17,47 @@ Newest entries go first.
 
 ---
 
+## 2026-06-15 — NLP query-understanding hardening (calendar/temporal)
+
+- Done: **Fixed natural-language calendar/temporal understanding**, driven by an
+  adversarial NLP-robustness probe (4 agents, ~40 phrasings) against the live gateway.
+  Two root causes, both fixed:
+  - **Data (one-time):** the 16,082 pre-existing `CALENDAR_EVENT` docs were indexed
+    before the `event_start` attribute existed, so every schedule-window filter excluded
+    them ("calendar next week" → 0). Backfilled `event_start`/`event_end` from
+    `metadata.start/end` via Vespa partial updates (16,051 updated, 31 skipped, ~52s, no
+    re-embed). Committed the migration as a documented runbook:
+    `tools/backfill-event-start/`.
+  - **Code (`services/query`):** (1) `temporal.go` — added "this/next weekend" (fixed the
+    latent "this week" substring shadow) and parametric relative expressions
+    ("in N days", "N days from now", "a week from now", "in a week", "next N days",
+    "rest of the week") via regex patterns. (2) `intent.go` — `contentResidual` now drops
+    possessive remnants and stray <2-char tokens ("next week's" → "'s" → ""), so
+    "next week's agenda"/"show me next week's calendar" list the window (13) instead of
+    over-constraining to 2; added soft availability cues (`scheduleSignals`:
+    coming-up/upcoming/happening/busy/free) used ONLY when the content residual is empty,
+    so "busy season sales report" stays a content search. (3) `scope.go` — bare temporal
+    ("next week") or soft-cue ("what's coming up", "am I busy next week") queries now
+    promote to a schedule lookup; **window-less schedule lookups default to UPCOMING
+    (`event_start >= today)`** instead of returning the entire history. (4) `vespa.go` —
+    filter-only schedule lookups now `order by event_start asc`, so the candidate cap
+    captures the SOONEST events (unbounded "my calendar"/"upcoming meetings" now start
+    today, not months out).
+  - Verified live: every probe FAIL/WEAK now passes (next week=13, this week=17,
+    tomorrow=4, "a week from now"=1 @06-22, "in 3 days"=2 @06-18, "upcoming meetings"/
+    "my calendar"/"my schedule" upcoming-first from today; "what needs my attention"
+    unaffected at ~55; content queries unaffected). New tests in
+    `temporal_test.go`/`intent_test.go`/`vespa_test.go` + new `scope_test.go`. `make vet`,
+    `make lint` (0 issues), `make test` all green (query 86.2%, personalization 92.3%).
+- Next: redeploy notes — only the `query` image changed (rebuilt + restarted). Consider
+  emitting `metadata["unread"]/["important"]` from the Gmail connector (the attention
+  scorer already consumes them) to sharpen "unread important emails".
+- Known issues: attention-intent queries are intentionally time-agnostic, so temporal
+  windows ("...today" vs "...this week") barely change their result counts — defensible
+  (attention = unresolved-regardless-of-date) but flagged "weak" by the probe; revisit if
+  users expect attention to be date-scoped. The `event_start` backfill is a stopgap for
+  the pre-v3.2 corpus; new docs get it from the index writer and re-index re-drives it.
+
 ## 2026-06-14 — v3.2 Personalized, intent-aware semantic search (post-V1)
 
 - Done: **Built the v3.2 personalized-search feature end to end** (spec

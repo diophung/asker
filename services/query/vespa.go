@@ -216,7 +216,19 @@ func buildYQL(q vespaQuery) (string, error) {
 		clauses = append(clauses, "participants contains ({substring:true}"+lit+")")
 	}
 
-	return "select * from sources * where " + strings.Join(clauses, " and "), nil
+	yql := "select * from sources * where " + strings.Join(clauses, " and ")
+
+	// Filter-only schedule lookups ("what's on my calendar", "upcoming meetings")
+	// list events by occurrence time. Order by event_start ASCENDING in Vespa so
+	// the candidate cap captures the SOONEST events — without this an unbounded
+	// upcoming lookup returns an arbitrary cap-sized sample (which, once re-sorted
+	// client-side, starts months out instead of today). EventFrom is set only for
+	// schedule lookups, so this never reorders a generic filter-only search (e.g.
+	// an empty query with a type filter on email, where event_start is 0).
+	if q.Kind == retrieveFilterOnly && !q.EventFrom.IsZero() {
+		yql += " order by event_start asc"
+	}
+	return yql, nil
 }
 
 // yqlStringLiteral renders s as a double-quoted YQL string literal.

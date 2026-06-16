@@ -40,6 +40,9 @@ func TestContentResidual(t *testing.T) {
 		{"calendar about budget", "budget"},     // substantive content survives
 		{"meetings with the acme team", "acme"}, // "team"? team is not a stopword -> kept
 		{"the a an on my", ""},                  // all stopwords
+		{"'s agenda", ""},                       // possessive remnant ("next week's" -> "'s") drops
+		{"am i busy", ""},                       // availability framing is pure intent
+		{"busy season report", "season report"}, // soft cue + real content -> content survives
 	}
 	for _, tc := range cases {
 		got := contentResidual(tc.text)

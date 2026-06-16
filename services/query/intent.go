@@ -94,28 +94,48 @@ var intentStopwords = map[string]bool{
 	"do": true, "does": true, "have": true, "has": true, "to": true, "of": true,
 	"for": true, "should": true, "this": true, "that": true, "any": true, "show": true,
 	"list": true, "find": true, "get": true, "all": true, "with": true, "and": true,
-	"about": true,
-	// intent words (calendar / attention)
-	"calendar": true, "schedule": true, "agenda": true, "meeting": true, "meetings": true,
-	"appointment": true, "appointments": true, "event": true, "events": true,
+	"about": true, "am": true, "at": true, "anything": true, "everything": true,
+	"something": true, "going": true, "there": true, "tell": true, "see": true,
+	// intent words (calendar / attention / availability framing)
+	"calendar": true, "schedule": true, "scheduled": true, "agenda": true, "meeting": true,
+	"meetings": true, "appointment": true, "appointments": true, "event": true, "events": true,
 	"attention": true, "needs": true, "need": true, "action": true, "items": true,
 	"item": true, "todo": true, "urgent": true, "focus": true, "upcoming": true,
+	"coming": true, "up": true, "happening": true, "busy": true, "free": true,
+	"available": true,
 }
 
 // contentResidual returns the query text with intent/stopword tokens removed,
 // i.e. the substantive content words. An empty result means the query was pure
-// intent ("what's on my calendar") and a schedule lookup should list the whole
-// window rather than keyword-match it.
+// intent ("what's on my calendar", "next week's agenda") and a schedule lookup
+// should list the whole window rather than keyword-match it. Tokens shorter than
+// two characters after trimming punctuation are dropped too — this discards
+// possessive remnants ("week's" -> "s") and stray single letters that would
+// otherwise over-constrain a pure-intent lookup; they are not searchable content.
 func contentResidual(text string) string {
 	var out []string
 	for _, tok := range strings.Fields(text) {
-		clean := strings.Trim(strings.ToLower(tok), ".,?!:;\"'")
-		if clean == "" || intentStopwords[clean] {
+		clean := strings.Trim(strings.ToLower(tok), ".,?!:;\"'`’")
+		if len(clean) < 2 || intentStopwords[clean] {
 			continue
 		}
 		out = append(out, tok)
 	}
 	return strings.Join(out, " ")
+}
+
+// scheduleSignals are softer availability/“what’s ahead” cues. Unlike
+// scheduleKeywords they do NOT classify a query as a schedule lookup on their
+// own (they collide with content — "busy season", "free trial"). scopeQuery
+// promotes to schedule_lookup only when one is present AND the content residual
+// is empty, so a real content query that merely contains one is unaffected.
+var scheduleSignals = []string{
+	"coming up", "upcoming", "happening", "busy", "free", "available",
+}
+
+// hasScheduleSignal reports whether text contains a soft schedule cue.
+func hasScheduleSignal(text string) bool {
+	return containsAny(strings.ToLower(text), scheduleSignals)
 }
 
 func containsAny(haystack string, needles []string) bool {

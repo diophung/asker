@@ -1,6 +1,8 @@
 package main
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,6 +37,16 @@ type temporalPhrase struct {
 // and "this weekend" over "this week"); the first match in the query text is
 // used and stripped from the residual text.
 var temporalPhrases = []temporalPhrase{
+	// Weekend phrases MUST precede the "this week"/"next week" entries: "this
+	// weekend" contains the substring "this week", so it has to match first.
+	{"this weekend", func(now time.Time, loc *time.Location) timeWindow {
+		sat := startOfWeek(now, loc).AddDate(0, 0, 5) // Mon + 5 = Sat
+		return timeWindow{sat, sat.AddDate(0, 0, 2)}  // Sat..Mon
+	}},
+	{"next weekend", func(now time.Time, loc *time.Location) timeWindow {
+		sat := startOfWeek(now, loc).AddDate(0, 0, 12) // next week's Sat
+		return timeWindow{sat, sat.AddDate(0, 0, 2)}
+	}},
 	{"next week", func(now time.Time, loc *time.Location) timeWindow {
 		start := startOfWeek(now, loc).AddDate(0, 0, 7)
 		return timeWindow{start, start.AddDate(0, 0, 7)}
@@ -77,22 +89,83 @@ var temporalPhrases = []temporalPhrase{
 	}},
 }
 
+// temporalPattern is a parametric time expression ("in N days", "a week from
+// now") matched by regexp. The window func receives the regexp submatch groups
+// (groups[0] is the whole match) so it can read a captured count.
+type temporalPattern struct {
+	re     *regexp.Regexp
+	window func(groups []string, now time.Time, loc *time.Location) timeWindow
+}
+
+// temporalPatterns handle relative expressions the fixed list cannot enumerate.
+// They are tried after the fixed phrases (which cover the common absolute terms)
+// and matched in order; the first hit wins. None of these overlap a fixed phrase
+// (the fixed list has only "this/next/last week", never "a week from now" etc.).
+var temporalPatterns = []temporalPattern{
+	// "3 days from now" / "in 3 days" -> the single day N days out.
+	{regexp.MustCompile(`\b(\d+)\s+days?\s+from\s+now\b`), nDaysOut},
+	{regexp.MustCompile(`\bin\s+(\d+)\s+days?\b`), nDaysOut},
+	// "a week from now" / "in a week" -> the single day 7 days out.
+	{regexp.MustCompile(`\b(?:a|one)\s+weeks?\s+from\s+now\b`), weekFromNow},
+	{regexp.MustCompile(`\bin\s+(?:a|one)\s+week\b`), weekFromNow},
+	// "next 3 days" / "in the next 3 days" -> [today, today+N).
+	{regexp.MustCompile(`\b(?:in\s+the\s+)?next\s+(\d+)\s+days?\b`), nextNDays},
+	// "rest of the/this week" -> [today, end of this week).
+	{regexp.MustCompile(`\brest\s+of\s+(?:the|this)\s+week\b`), restOfWeek},
+}
+
+func nDaysOut(groups []string, now time.Time, loc *time.Location) timeWindow {
+	n, _ := strconv.Atoi(groups[1])
+	start := startOfDay(now, loc).AddDate(0, 0, n)
+	return timeWindow{start, start.AddDate(0, 0, 1)}
+}
+
+func weekFromNow(_ []string, now time.Time, loc *time.Location) timeWindow {
+	start := startOfDay(now, loc).AddDate(0, 0, 7)
+	return timeWindow{start, start.AddDate(0, 0, 1)}
+}
+
+func nextNDays(groups []string, now time.Time, loc *time.Location) timeWindow {
+	n, _ := strconv.Atoi(groups[1])
+	if n < 1 {
+		n = 1
+	}
+	start := startOfDay(now, loc)
+	return timeWindow{start, start.AddDate(0, 0, n)}
+}
+
+func restOfWeek(_ []string, now time.Time, loc *time.Location) timeWindow {
+	return timeWindow{startOfDay(now, loc), startOfWeek(now, loc).AddDate(0, 0, 7)}
+}
+
 // parseTemporal finds the first recognized time phrase in text and returns its
 // resolved window (in loc, relative to now), the text with that phrase removed,
 // and ok=true. With no recognized phrase it returns the text unchanged and
-// ok=false. Matching is case-insensitive and phrase-longest-first.
+// ok=false. Matching is case-insensitive: fixed phrases first (longest-first),
+// then the parametric patterns ("in N days", "a week from now").
 func parseTemporal(text string, loc *time.Location, now time.Time) (timeWindow, string, bool) {
 	if loc == nil {
 		loc = time.UTC
 	}
+	nowL := now.In(loc)
 	lower := strings.ToLower(text)
 	for _, tp := range temporalPhrases {
 		idx := strings.Index(lower, tp.phrase)
 		if idx < 0 {
 			continue
 		}
-		win := tp.window(now.In(loc), loc)
+		win := tp.window(nowL, loc)
 		stripped := text[:idx] + text[idx+len(tp.phrase):]
+		return win, normalizeSpaces(stripped), true
+	}
+	for _, tp := range temporalPatterns {
+		span := tp.re.FindStringIndex(lower)
+		if span == nil {
+			continue
+		}
+		groups := tp.re.FindStringSubmatch(lower)
+		win := tp.window(groups, nowL, loc)
+		stripped := text[:span[0]] + text[span[1]:]
 		return win, normalizeSpaces(stripped), true
 	}
 	return timeWindow{}, text, false
