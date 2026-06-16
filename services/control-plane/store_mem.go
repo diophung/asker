@@ -20,6 +20,10 @@ type memStore struct {
 	instances map[string]ConnectorInstance
 	syncs     map[string]SyncState
 	tokens    map[string]memToken
+	// Personalization (v3.2), all tenant-keyed.
+	prefs    map[tenancy.TenantID]UserPreferences
+	weights  map[tenancy.TenantID]LearnedWeights
+	feedback map[tenancy.TenantID][]FeedbackEvent
 }
 
 type memToken struct {
@@ -35,6 +39,9 @@ func newMemStore() *memStore {
 		instances: make(map[string]ConnectorInstance),
 		syncs:     make(map[string]SyncState),
 		tokens:    make(map[string]memToken),
+		prefs:     make(map[tenancy.TenantID]UserPreferences),
+		weights:   make(map[tenancy.TenantID]LearnedWeights),
+		feedback:  make(map[tenancy.TenantID][]FeedbackEvent),
 	}
 }
 
@@ -266,6 +273,10 @@ func (m *memStore) PurgeTenant(ctx context.Context, tenantID tenancy.TenantID) (
 		delete(m.syncs, id)
 	}
 	delete(m.tenants, tenantID)
+	// Personalization (v3.2): erased with the tenant (mirrors the FK cascade).
+	delete(m.prefs, tenantID)
+	delete(m.weights, tenantID)
+	delete(m.feedback, tenantID)
 	return counts, nil
 }
 
@@ -287,6 +298,15 @@ func (m *memStore) TenantResidue(ctx context.Context, tenantID tenancy.TenantID)
 		if tok.tenantID == tenantID {
 			return false, nil
 		}
+	}
+	if _, ok := m.prefs[tenantID]; ok {
+		return false, nil
+	}
+	if _, ok := m.weights[tenantID]; ok {
+		return false, nil
+	}
+	if len(m.feedback[tenantID]) > 0 {
+		return false, nil
 	}
 	return true, nil
 }
@@ -366,6 +386,78 @@ func (m *memStore) SetTenantConnectorStatus(ctx context.Context, tenantID tenanc
 		}
 	}
 	return changed, nil
+}
+
+// --- Personalization (v3.2) -------------------------------------------------
+
+func (m *memStore) GetPersonalization(ctx context.Context, tenantID tenancy.TenantID) (UserPreferences, LearnedWeights, error) {
+	if err := ctx.Err(); err != nil {
+		return UserPreferences{}, LearnedWeights{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.prefs[tenantID], m.weights[tenantID], nil
+}
+
+func (m *memStore) PutPreferences(ctx context.Context, tenantID tenancy.TenantID, profileJSON string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.tenants[tenantID]; !ok {
+		m.tenants[tenantID] = time.Now().UTC()
+	}
+	cur := m.prefs[tenantID]
+	version := cur.Version + 1
+	if version < 1 {
+		version = 1
+	}
+	m.prefs[tenantID] = UserPreferences{ProfileJSON: profileJSON, Version: version, Exists: true}
+	return version, nil
+}
+
+func (m *memStore) AppendFeedback(ctx context.Context, tenantID tenancy.TenantID, ev FeedbackEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.tenants[tenantID]; !ok {
+		m.tenants[tenantID] = time.Now().UTC()
+	}
+	m.feedback[tenantID] = append(m.feedback[tenantID], ev)
+	return nil
+}
+
+func (m *memStore) UpdateLearnedWeights(ctx context.Context, tenantID tenancy.TenantID, update func(string, int64) (string, int64, error)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.tenants[tenantID]; !ok {
+		m.tenants[tenantID] = time.Now().UTC()
+	}
+	cur := m.weights[tenantID]
+	newJSON, newSamples, err := update(cur.WeightsJSON, cur.SampleCount)
+	if err != nil {
+		return err
+	}
+	m.weights[tenantID] = LearnedWeights{WeightsJSON: newJSON, SampleCount: newSamples, Exists: true}
+	return nil
+}
+
+func (m *memStore) ResetLearning(ctx context.Context, tenantID tenancy.TenantID) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := int64(len(m.feedback[tenantID]))
+	delete(m.weights, tenantID)
+	delete(m.feedback, tenantID)
+	return n, nil
 }
 
 // ownedInstance returns the instance only when it exists AND belongs to the

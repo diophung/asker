@@ -168,8 +168,43 @@ asker/
 └── web/                # (M1) React search UI
 ```
 
+## Personalized, intent-aware search (v3.2)
+
+Search understands intent and ranks per-user, not just by keywords. Two canonical
+queries work end to end:
+
+- **"what's on my calendar next week"** → next-week events, time-ordered (filtered
+  on the event's *occurrence* time, not its creation time).
+- **"what needs my attention this week"** → action items (RSVP-pending, overdue,
+  unread-from-important) ranked by urgency × importance × personal relevance, each
+  with a "why this ranked" explanation.
+
+How it works (all on the existing **Vespa** vector store — no second DB):
+
+- **Query understanding** (`services/query`): natural-language temporal scope and
+  intent (`schedule_lookup` / `needs_attention` / `find_item`) are parsed by a
+  deterministic rules layer and applied as hard filters / ranking-profile selects.
+- **Hybrid retrieval + RRF**: a keyword arm and a vector arm fused by Reciprocal
+  Rank Fusion, then personalized re-ranking.
+- **Combined relevance** (`platform/personalization`):
+  `w_sem·semantic + w_pref·preference + w_behav·behavioral + w_attn·attention −
+  w_fatigue·repetition`, with an online logistic learning-to-rank model updated
+  from behavioral feedback, MMR diversification, and cold-start defaults.
+- **Settings** (`/v1/preferences`, web Settings page): priority sources, important
+  people, topics, mute list, working hours/timezone, attention-sensitivity,
+  recency-vs-importance, novelty sliders, plus pause/reset/export controls — every
+  field feeds the ranker.
+- **Feedback** (`/v1/feedback`): clicks/opens/dismiss/"more or fewer like this"
+  train the per-user model (write-through cached in Redis for the hot path).
+
+Toggle off with `QUERY_PERSONALIZATION_ENABLED=false` (clean rollback to the
+non-personalized pipeline). See [DECISIONS.md](DECISIONS.md) for the rationale and
+[docs/openapi/personalization.yaml](docs/openapi/personalization.yaml) for the API.
+
 ## More documentation
 
+- [DECISIONS.md](DECISIONS.md) — v3.2 personalized-search stack/DB/model choices and rationale
+- [docs/openapi/personalization.yaml](docs/openapi/personalization.yaml) — Settings + feedback REST contract
 - [MILESTONES.md](MILESTONES.md) — the M0–M6 plan and exit criteria
 - [PROGRESS.md](PROGRESS.md) — session-by-session log (read this first each session)
 - [docs/architecture.md](docs/architecture.md) — system architecture and technology decisions

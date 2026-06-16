@@ -96,6 +96,34 @@ func TestBuildYQL(t *testing.T) {
 			wantErr: errInvalidFilterValue,
 		},
 		{
+			name: "schedule window lists by event_start ascending",
+			q: vespaQuery{
+				Kind:      retrieveFilterOnly,
+				DocTypes:  []askerv1.DocType{askerv1.DocType_CALENDAR_EVENT},
+				EventFrom: time.Unix(1718000000, 0).UTC(),
+				EventTo:   time.Unix(1718600000, 0).UTC(),
+			},
+			want: `select * from sources * where true and type contains "CALENDAR_EVENT" and event_start >= 1718000000 and event_start < 1718600000 order by event_start asc`,
+		},
+		{
+			name: "unbounded upcoming lookup orders ascending",
+			q: vespaQuery{
+				Kind:      retrieveFilterOnly,
+				DocTypes:  []askerv1.DocType{askerv1.DocType_CALENDAR_EVENT},
+				EventFrom: time.Unix(1718000000, 0).UTC(),
+			},
+			want: `select * from sources * where true and type contains "CALENDAR_EVENT" and event_start >= 1718000000 order by event_start asc`,
+		},
+		{
+			name: "keyword schedule search is NOT date-ordered",
+			q: vespaQuery{
+				Kind:      retrieveKeyword,
+				DocTypes:  []askerv1.DocType{askerv1.DocType_CALENDAR_EVENT},
+				EventFrom: time.Unix(1718000000, 0).UTC(),
+			},
+			want: `select * from sources * where userQuery() and type contains "CALENDAR_EVENT" and event_start >= 1718000000`,
+		},
+		{
 			name: "all filters combined",
 			q: vespaQuery{
 				Kind:        retrieveHybrid,

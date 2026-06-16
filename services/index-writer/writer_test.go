@@ -574,6 +574,61 @@ func TestBuildFieldsDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildFieldsEventStart(t *testing.T) {
+	t.Parallel()
+	w := newTestWriter(t, "http://vespa.invalid", 4)
+
+	// A calendar event: occurrence time comes from metadata start/end (RFC3339),
+	// distinct from created_at, and is indexed into event_start/event_end (v3.2).
+	fields, err := w.buildFields(&askerv1.Document{
+		TenantId: "tenant-a",
+		DocId:    "evt-1",
+		Type:     askerv1.DocType_CALENDAR_EVENT,
+		Metadata: map[string]string{
+			"start": "2026-06-15T09:00:00Z",
+			"end":   "2026-06-15T10:00:00Z",
+		},
+		Ts: &askerv1.Timestamps{Created: timestamppb.New(time.Unix(1700000000, 0))},
+	})
+	if err != nil {
+		t.Fatalf("buildFields: %v", err)
+	}
+	wantStart := time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC).Unix()
+	wantEnd := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC).Unix()
+	if fields.EventStart != wantStart || fields.EventEnd != wantEnd {
+		t.Errorf("event_start/end = %d/%d, want %d/%d", fields.EventStart, fields.EventEnd, wantStart, wantEnd)
+	}
+	// event_start must NOT be the creation time.
+	if fields.EventStart == fields.CreatedAt {
+		t.Error("event_start equals created_at; occurrence time was not used")
+	}
+
+	// A non-event document has no start metadata: event_start stays 0 (omitted).
+	noEvent, err := w.buildFields(&askerv1.Document{TenantId: "tenant-a", DocId: "f-1", Type: askerv1.DocType_FILE})
+	if err != nil {
+		t.Fatalf("buildFields: %v", err)
+	}
+	if noEvent.EventStart != 0 || noEvent.EventEnd != 0 {
+		t.Errorf("non-event event_start/end = %d/%d, want 0/0", noEvent.EventStart, noEvent.EventEnd)
+	}
+}
+
+func TestEventEpoch(t *testing.T) {
+	t.Parallel()
+	cases := map[string]int64{
+		"":                     0,
+		"not-a-date":           0,
+		"2026-06-15T09:00:00Z": time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC).Unix(),
+		"2026-06-15":           time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC).Unix(),
+		"1700000000":           1700000000,
+	}
+	for in, want := range cases {
+		if got := eventEpoch(in); got != want {
+			t.Errorf("eventEpoch(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
 func TestParticipantStrings(t *testing.T) {
 	t.Parallel()
 	got := participantStrings([]*askerv1.Participant{

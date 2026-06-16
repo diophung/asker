@@ -90,6 +90,7 @@ func TestSearchTenantChokepointAndShape(t *testing.T) {
 			"end_ms":        float64(0),
 			"modality":      "",
 			"thumbnail_key": "",
+			"explanation":   "",
 		}},
 		"total":    float64(42),
 		"degraded": "keyword-only",

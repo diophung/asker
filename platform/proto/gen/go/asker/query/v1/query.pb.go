@@ -82,6 +82,87 @@ func (SearchMode) EnumDescriptor() ([]byte, []int) {
 	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{0}
 }
 
+type CountRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CountRequest) Reset() {
+	*x = CountRequest{}
+	mi := &file_asker_query_v1_query_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CountRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CountRequest) ProtoMessage() {}
+
+func (x *CountRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_query_v1_query_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CountRequest.ProtoReflect.Descriptor instead.
+func (*CountRequest) Descriptor() ([]byte, []int) {
+	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{0}
+}
+
+type CountResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// indexed is the tenant's document count in the search index.
+	Indexed       int64 `protobuf:"varint,1,opt,name=indexed,proto3" json:"indexed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CountResponse) Reset() {
+	*x = CountResponse{}
+	mi := &file_asker_query_v1_query_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CountResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CountResponse) ProtoMessage() {}
+
+func (x *CountResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_asker_query_v1_query_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CountResponse.ProtoReflect.Descriptor instead.
+func (*CountResponse) Descriptor() ([]byte, []int) {
+	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CountResponse) GetIndexed() int64 {
+	if x != nil {
+		return x.Indexed
+	}
+	return 0
+}
+
 type SearchRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Raw user query. Inline filters (from:alice, type:email, before:/after:)
@@ -94,16 +175,20 @@ type SearchRequest struct {
 	// Participant filter (sender/attendee handle or email substring).
 	Participant string `protobuf:"bytes,5,opt,name=participant,proto3" json:"participant,omitempty"`
 	// Page size; default 20, max 100.
-	Limit         int32      `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
-	Offset        int32      `protobuf:"varint,7,opt,name=offset,proto3" json:"offset,omitempty"`
-	Mode          SearchMode `protobuf:"varint,8,opt,name=mode,proto3,enum=asker.query.v1.SearchMode" json:"mode,omitempty"`
+	Limit  int32      `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
+	Offset int32      `protobuf:"varint,7,opt,name=offset,proto3" json:"offset,omitempty"`
+	Mode   SearchMode `protobuf:"varint,8,opt,name=mode,proto3,enum=asker.query.v1.SearchMode" json:"mode,omitempty"`
+	// debug, when true, asks the server to include per-hit feature contributions
+	// (Hit.features) for observability. The gateway sets it from ?debug=1; it
+	// never affects ranking, only what is reported.
+	Debug         bool `protobuf:"varint,9,opt,name=debug,proto3" json:"debug,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchRequest) Reset() {
 	*x = SearchRequest{}
-	mi := &file_asker_query_v1_query_proto_msgTypes[0]
+	mi := &file_asker_query_v1_query_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -115,7 +200,7 @@ func (x *SearchRequest) String() string {
 func (*SearchRequest) ProtoMessage() {}
 
 func (x *SearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_query_v1_query_proto_msgTypes[0]
+	mi := &file_asker_query_v1_query_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -128,7 +213,7 @@ func (x *SearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchRequest.ProtoReflect.Descriptor instead.
 func (*SearchRequest) Descriptor() ([]byte, []int) {
-	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{0}
+	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SearchRequest) GetQuery() string {
@@ -187,6 +272,13 @@ func (x *SearchRequest) GetMode() SearchMode {
 	return SearchMode_SEARCH_MODE_UNSPECIFIED
 }
 
+func (x *SearchRequest) GetDebug() bool {
+	if x != nil {
+		return x.Debug
+	}
+	return false
+}
+
 type SearchResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Hits  []*Hit                 `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
@@ -203,7 +295,7 @@ type SearchResponse struct {
 
 func (x *SearchResponse) Reset() {
 	*x = SearchResponse{}
-	mi := &file_asker_query_v1_query_proto_msgTypes[1]
+	mi := &file_asker_query_v1_query_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -215,7 +307,7 @@ func (x *SearchResponse) String() string {
 func (*SearchResponse) ProtoMessage() {}
 
 func (x *SearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_query_v1_query_proto_msgTypes[1]
+	mi := &file_asker_query_v1_query_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -228,7 +320,7 @@ func (x *SearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResponse.ProtoReflect.Descriptor instead.
 func (*SearchResponse) Descriptor() ([]byte, []int) {
-	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{1}
+	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SearchResponse) GetHits() []*Hit {
@@ -286,14 +378,23 @@ type Hit struct {
 	// Which arm matched this chunk: "text" | "ocr" | "asr" | "caption".
 	Modality string `protobuf:"bytes,12,opt,name=modality,proto3" json:"modality,omitempty"`
 	// Blob key of a thumbnail / poster frame to render (empty if none).
-	ThumbnailKey  string `protobuf:"bytes,13,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
+	ThumbnailKey string `protobuf:"bytes,13,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"`
+	// explanation is a short, human-readable reason this hit ranked where it did
+	// (v3 personalization), e.g. "deadline in 2 days · from Sarah (important)".
+	// Empty when personalization is not active for the request. Surfaced to the
+	// user for trust (Peak-End / transparency) and for debugging the ranker.
+	Explanation string `protobuf:"bytes,14,opt,name=explanation,proto3" json:"explanation,omitempty"`
+	// features carries each scoring term's signed contribution to the final rank
+	// (semantic/preference/behavioral/attention/repetition), populated only when
+	// SearchRequest.debug is set. Reproducibility surface for the ranker.
+	Features      map[string]float64 `protobuf:"bytes,15,rep,name=features,proto3" json:"features,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Hit) Reset() {
 	*x = Hit{}
-	mi := &file_asker_query_v1_query_proto_msgTypes[2]
+	mi := &file_asker_query_v1_query_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -305,7 +406,7 @@ func (x *Hit) String() string {
 func (*Hit) ProtoMessage() {}
 
 func (x *Hit) ProtoReflect() protoreflect.Message {
-	mi := &file_asker_query_v1_query_proto_msgTypes[2]
+	mi := &file_asker_query_v1_query_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -318,7 +419,7 @@ func (x *Hit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hit.ProtoReflect.Descriptor instead.
 func (*Hit) Descriptor() ([]byte, []int) {
-	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{2}
+	return file_asker_query_v1_query_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Hit) GetDocId() string {
@@ -412,11 +513,28 @@ func (x *Hit) GetThumbnailKey() string {
 	return ""
 }
 
+func (x *Hit) GetExplanation() string {
+	if x != nil {
+		return x.Explanation
+	}
+	return ""
+}
+
+func (x *Hit) GetFeatures() map[string]float64 {
+	if x != nil {
+		return x.Features
+	}
+	return nil
+}
+
 var File_asker_query_v1_query_proto protoreflect.FileDescriptor
 
 const file_asker_query_v1_query_proto_rawDesc = "" +
 	"\n" +
-	"\x1aasker/query/v1/query.proto\x12\x0easker.query.v1\x1a\x17asker/v1/document.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x02\n" +
+	"\x1aasker/query/v1/query.proto\x12\x0easker.query.v1\x1a\x17asker/v1/document.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x0e\n" +
+	"\fCountRequest\")\n" +
+	"\rCountResponse\x12\x18\n" +
+	"\aindexed\x18\x01 \x01(\x03R\aindexed\"\xd9\x02\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12.\n" +
 	"\tdoc_types\x18\x02 \x03(\x0e2\x11.asker.v1.DocTypeR\bdocTypes\x127\n" +
@@ -425,13 +543,14 @@ const file_asker_query_v1_query_proto_rawDesc = "" +
 	"\vparticipant\x18\x05 \x01(\tR\vparticipant\x12\x14\n" +
 	"\x05limit\x18\x06 \x01(\x05R\x05limit\x12\x16\n" +
 	"\x06offset\x18\a \x01(\x05R\x06offset\x12.\n" +
-	"\x04mode\x18\b \x01(\x0e2\x1a.asker.query.v1.SearchModeR\x04mode\"\x9c\x01\n" +
+	"\x04mode\x18\b \x01(\x0e2\x1a.asker.query.v1.SearchModeR\x04mode\x12\x14\n" +
+	"\x05debug\x18\t \x01(\bR\x05debug\"\x9c\x01\n" +
 	"\x0eSearchResponse\x12'\n" +
 	"\x04hits\x18\x01 \x03(\v2\x13.asker.query.v1.HitR\x04hits\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x03R\x05total\x12\x1a\n" +
 	"\bdegraded\x18\x03 \x01(\tR\bdegraded\x12\x17\n" +
 	"\atook_ms\x18\x04 \x01(\x03R\x06tookMs\x12\x16\n" +
-	"\x06cached\x18\x05 \x01(\bR\x06cached\"\x89\x04\n" +
+	"\x06cached\x18\x05 \x01(\bR\x06cached\"\xa7\x05\n" +
 	"\x03Hit\x12\x15\n" +
 	"\x06doc_id\x18\x01 \x01(\tR\x05docId\x12!\n" +
 	"\fconnector_id\x18\x02 \x01(\tR\vconnectorId\x12%\n" +
@@ -446,10 +565,15 @@ const file_asker_query_v1_query_proto_rawDesc = "" +
 	" \x01(\x03R\astartMs\x12\x15\n" +
 	"\x06end_ms\x18\v \x01(\x03R\x05endMs\x12\x1a\n" +
 	"\bmodality\x18\f \x01(\tR\bmodality\x12#\n" +
-	"\rthumbnail_key\x18\r \x01(\tR\fthumbnailKey\x1a;\n" +
+	"\rthumbnail_key\x18\r \x01(\tR\fthumbnailKey\x12 \n" +
+	"\vexplanation\x18\x0e \x01(\tR\vexplanation\x12=\n" +
+	"\bfeatures\x18\x0f \x03(\v2!.asker.query.v1.Hit.FeaturesEntryR\bfeatures\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*N\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a;\n" +
+	"\rFeaturesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01*N\n" +
 	"\n" +
 	"SearchMode\x12\x1b\n" +
 	"\x17SEARCH_MODE_UNSPECIFIED\x10\x00\x12\n" +
@@ -457,9 +581,10 @@ const file_asker_query_v1_query_proto_rawDesc = "" +
 	"\x06HYBRID\x10\x01\x12\v\n" +
 	"\aKEYWORD\x10\x02\x12\n" +
 	"\n" +
-	"\x06VECTOR\x10\x032W\n" +
+	"\x06VECTOR\x10\x032\x9d\x01\n" +
 	"\fQueryService\x12G\n" +
-	"\x06Search\x12\x1d.asker.query.v1.SearchRequest\x1a\x1e.asker.query.v1.SearchResponseBEZCgithub.com/asker/asker/platform/proto/gen/go/asker/query/v1;queryv1b\x06proto3"
+	"\x06Search\x12\x1d.asker.query.v1.SearchRequest\x1a\x1e.asker.query.v1.SearchResponse\x12D\n" +
+	"\x05Count\x12\x1c.asker.query.v1.CountRequest\x1a\x1d.asker.query.v1.CountResponseBEZCgithub.com/asker/asker/platform/proto/gen/go/asker/query/v1;queryv1b\x06proto3"
 
 var (
 	file_asker_query_v1_query_proto_rawDescOnce sync.Once
@@ -474,33 +599,39 @@ func file_asker_query_v1_query_proto_rawDescGZIP() []byte {
 }
 
 var file_asker_query_v1_query_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_asker_query_v1_query_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_asker_query_v1_query_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_asker_query_v1_query_proto_goTypes = []any{
 	(SearchMode)(0),               // 0: asker.query.v1.SearchMode
-	(*SearchRequest)(nil),         // 1: asker.query.v1.SearchRequest
-	(*SearchResponse)(nil),        // 2: asker.query.v1.SearchResponse
-	(*Hit)(nil),                   // 3: asker.query.v1.Hit
-	nil,                           // 4: asker.query.v1.Hit.MetadataEntry
-	(v1.DocType)(0),               // 5: asker.v1.DocType
-	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
+	(*CountRequest)(nil),          // 1: asker.query.v1.CountRequest
+	(*CountResponse)(nil),         // 2: asker.query.v1.CountResponse
+	(*SearchRequest)(nil),         // 3: asker.query.v1.SearchRequest
+	(*SearchResponse)(nil),        // 4: asker.query.v1.SearchResponse
+	(*Hit)(nil),                   // 5: asker.query.v1.Hit
+	nil,                           // 6: asker.query.v1.Hit.MetadataEntry
+	nil,                           // 7: asker.query.v1.Hit.FeaturesEntry
+	(v1.DocType)(0),               // 8: asker.v1.DocType
+	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
 }
 var file_asker_query_v1_query_proto_depIdxs = []int32{
-	5,  // 0: asker.query.v1.SearchRequest.doc_types:type_name -> asker.v1.DocType
-	6,  // 1: asker.query.v1.SearchRequest.from_date:type_name -> google.protobuf.Timestamp
-	6,  // 2: asker.query.v1.SearchRequest.to_date:type_name -> google.protobuf.Timestamp
+	8,  // 0: asker.query.v1.SearchRequest.doc_types:type_name -> asker.v1.DocType
+	9,  // 1: asker.query.v1.SearchRequest.from_date:type_name -> google.protobuf.Timestamp
+	9,  // 2: asker.query.v1.SearchRequest.to_date:type_name -> google.protobuf.Timestamp
 	0,  // 3: asker.query.v1.SearchRequest.mode:type_name -> asker.query.v1.SearchMode
-	3,  // 4: asker.query.v1.SearchResponse.hits:type_name -> asker.query.v1.Hit
-	5,  // 5: asker.query.v1.Hit.type:type_name -> asker.v1.DocType
-	6,  // 6: asker.query.v1.Hit.created:type_name -> google.protobuf.Timestamp
-	6,  // 7: asker.query.v1.Hit.modified:type_name -> google.protobuf.Timestamp
-	4,  // 8: asker.query.v1.Hit.metadata:type_name -> asker.query.v1.Hit.MetadataEntry
-	1,  // 9: asker.query.v1.QueryService.Search:input_type -> asker.query.v1.SearchRequest
-	2,  // 10: asker.query.v1.QueryService.Search:output_type -> asker.query.v1.SearchResponse
-	10, // [10:11] is the sub-list for method output_type
-	9,  // [9:10] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	5,  // 4: asker.query.v1.SearchResponse.hits:type_name -> asker.query.v1.Hit
+	8,  // 5: asker.query.v1.Hit.type:type_name -> asker.v1.DocType
+	9,  // 6: asker.query.v1.Hit.created:type_name -> google.protobuf.Timestamp
+	9,  // 7: asker.query.v1.Hit.modified:type_name -> google.protobuf.Timestamp
+	6,  // 8: asker.query.v1.Hit.metadata:type_name -> asker.query.v1.Hit.MetadataEntry
+	7,  // 9: asker.query.v1.Hit.features:type_name -> asker.query.v1.Hit.FeaturesEntry
+	3,  // 10: asker.query.v1.QueryService.Search:input_type -> asker.query.v1.SearchRequest
+	1,  // 11: asker.query.v1.QueryService.Count:input_type -> asker.query.v1.CountRequest
+	4,  // 12: asker.query.v1.QueryService.Search:output_type -> asker.query.v1.SearchResponse
+	2,  // 13: asker.query.v1.QueryService.Count:output_type -> asker.query.v1.CountResponse
+	12, // [12:14] is the sub-list for method output_type
+	10, // [10:12] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_asker_query_v1_query_proto_init() }
@@ -514,7 +645,7 @@ func file_asker_query_v1_query_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_asker_query_v1_query_proto_rawDesc), len(file_asker_query_v1_query_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

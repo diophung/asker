@@ -194,6 +194,82 @@ class DeleteTokenResponse(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class GetPersonalizationRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class GetPersonalizationResponse(_message.Message):
+    __slots__ = ("profile_json", "version", "weights_json", "sample_count", "exists")
+    PROFILE_JSON_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    WEIGHTS_JSON_FIELD_NUMBER: _ClassVar[int]
+    SAMPLE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    EXISTS_FIELD_NUMBER: _ClassVar[int]
+    profile_json: str
+    version: int
+    weights_json: str
+    sample_count: int
+    exists: bool
+    def __init__(self, profile_json: _Optional[str] = ..., version: _Optional[int] = ..., weights_json: _Optional[str] = ..., sample_count: _Optional[int] = ..., exists: _Optional[bool] = ...) -> None: ...
+
+class PutPreferencesRequest(_message.Message):
+    __slots__ = ("profile_json",)
+    PROFILE_JSON_FIELD_NUMBER: _ClassVar[int]
+    profile_json: str
+    def __init__(self, profile_json: _Optional[str] = ...) -> None: ...
+
+class PutPreferencesResponse(_message.Message):
+    __slots__ = ("version",)
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    version: int
+    def __init__(self, version: _Optional[int] = ...) -> None: ...
+
+class FeedbackEvent(_message.Message):
+    __slots__ = ("doc_id", "doc_type", "connector_id", "senders", "topics", "action", "dwell_ms", "query")
+    DOC_ID_FIELD_NUMBER: _ClassVar[int]
+    DOC_TYPE_FIELD_NUMBER: _ClassVar[int]
+    CONNECTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    SENDERS_FIELD_NUMBER: _ClassVar[int]
+    TOPICS_FIELD_NUMBER: _ClassVar[int]
+    ACTION_FIELD_NUMBER: _ClassVar[int]
+    DWELL_MS_FIELD_NUMBER: _ClassVar[int]
+    QUERY_FIELD_NUMBER: _ClassVar[int]
+    doc_id: str
+    doc_type: str
+    connector_id: str
+    senders: _containers.RepeatedScalarFieldContainer[str]
+    topics: _containers.RepeatedScalarFieldContainer[str]
+    action: str
+    dwell_ms: int
+    query: str
+    def __init__(self, doc_id: _Optional[str] = ..., doc_type: _Optional[str] = ..., connector_id: _Optional[str] = ..., senders: _Optional[_Iterable[str]] = ..., topics: _Optional[_Iterable[str]] = ..., action: _Optional[str] = ..., dwell_ms: _Optional[int] = ..., query: _Optional[str] = ...) -> None: ...
+
+class RecordFeedbackRequest(_message.Message):
+    __slots__ = ("event",)
+    EVENT_FIELD_NUMBER: _ClassVar[int]
+    event: FeedbackEvent
+    def __init__(self, event: _Optional[_Union[FeedbackEvent, _Mapping]] = ...) -> None: ...
+
+class RecordFeedbackResponse(_message.Message):
+    __slots__ = ("weights_json", "sample_count", "learning_paused")
+    WEIGHTS_JSON_FIELD_NUMBER: _ClassVar[int]
+    SAMPLE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    LEARNING_PAUSED_FIELD_NUMBER: _ClassVar[int]
+    weights_json: str
+    sample_count: int
+    learning_paused: bool
+    def __init__(self, weights_json: _Optional[str] = ..., sample_count: _Optional[int] = ..., learning_paused: _Optional[bool] = ...) -> None: ...
+
+class ResetLearningRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class ResetLearningResponse(_message.Message):
+    __slots__ = ("feedback_deleted",)
+    FEEDBACK_DELETED_FIELD_NUMBER: _ClassVar[int]
+    feedback_deleted: int
+    def __init__(self, feedback_deleted: _Optional[int] = ...) -> None: ...
+
 class DeleteTenantRequest(_message.Message):
     __slots__ = ("confirm",)
     CONFIRM_FIELD_NUMBER: _ClassVar[int]

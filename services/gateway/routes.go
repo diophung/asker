@@ -61,6 +61,21 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 		http.MethodPost:   d.handlePostRecent,
 		http.MethodDelete: d.handleDeleteRecent,
 	})))
+	// Personalization (v3.2): per-tenant preferences + behavioral feedback. All
+	// authed; the tenant is the verified-token tenant only. Settings GET/PUT, a
+	// feedback capture endpoint, and the mandatory reset/export data-rights
+	// controls.
+	mux.Handle("/v1/preferences", authed(methods(map[string]http.HandlerFunc{
+		http.MethodGet: d.handleGetPreferences,
+		http.MethodPut: d.handlePutPreferences,
+	})))
+	mux.Handle("/v1/preferences/reset", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleResetLearning,
+	})))
+	mux.Handle("/v1/preferences/export", authed(getOnly(d.handleExportPersonalization)))
+	mux.Handle("/v1/feedback", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleFeedback,
+	})))
 	mux.Handle("/v1/media", authed(getOnly(d.handleMedia)))
 	mux.Handle("/v1/connectors", authed(methods(map[string]http.HandlerFunc{
 		http.MethodGet:  d.handleListConnectors,
@@ -71,6 +86,12 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	})))
 	mux.Handle("/v1/connectors/{id}/token", authed(methods(map[string]http.HandlerFunc{
 		http.MethodPut: d.handlePutToken,
+	})))
+	// Live indexing progress (indexed vs. emitted + per-connector sync state) and
+	// re-index (reset a connector's sync cursor so the hub re-runs a full sync).
+	mux.Handle("/v1/index/status", authed(getOnly(d.handleIndexStatus)))
+	mux.Handle("/v1/connectors/{id}/reindex", authed(methods(map[string]http.HandlerFunc{
+		http.MethodPost: d.handleReindexConnector,
 	})))
 	// OAuth connector authorization start (wave 1). AUTHED: the tenant is the
 	// verified-token tenant, and the server-side flow state it persists is bound

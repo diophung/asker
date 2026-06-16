@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/asker/asker/platform/personalization"
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
@@ -34,6 +35,17 @@ type server struct {
 	// these from config so production blends in freshness.
 	recencyWeight   float64
 	recencyHalfLife time.Duration
+
+	// profiles, when non-nil, turns ON v3 personalization (per-tenant profile +
+	// learned-model re-rank, query understanding, attention scoring). nil — the
+	// newServer default used by every existing test — runs the non-personalized
+	// pipeline byte-for-byte unchanged. main.go wires the Redis loader.
+	profiles profileLoader
+	// rrfEnabled fuses a keyword arm and a vector arm with RRF on the
+	// personalized path; candidateCap is how many candidates that path retrieves
+	// before re-ranking to the page. Both set from config in main.go.
+	rrfEnabled   bool
+	candidateCap int32
 
 	// cacheWarnOnce gates the loud log for a down Redis: the contract is
 	// "skip silently (log once)" — first failure warns, the rest are debug.
@@ -61,7 +73,8 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	logger := s.logger.With("tenant", string(tc.TenantID()))
 
 	// Stage 1+2: normalize, then query understanding.
-	stage := time.Now()
+	now := time.Now()
+	stage := now
 	norm := normalizeRequest(req)
 	plan := understand(norm)
 	logger.Debug("stage understand",
@@ -71,7 +84,25 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		"has_participant", plan.Participant != "",
 		"mode", norm.GetMode().String())
 
-	if plan.Text == "" && !plan.hasFilters() {
+	// Stage 2b (v3): load the tenant's personalization profile + learned model
+	// and enrich the plan with intent + temporal scope. A nil loader leaves
+	// `personalizing` false and the pipeline below runs exactly as before.
+	personalizing := s.profiles != nil
+	var profile personalization.Profile
+	var model personalization.LearnedModel
+	var profileVersion int64
+	if personalizing {
+		profile, model = s.profiles.Load(ctx, tc.TenantID())
+		profileVersion = profile.Version
+		plan = scopeQuery(plan, profile, now)
+		logger.Debug("stage scope", "intent", plan.Intent.String(),
+			"event_window", !plan.EventFrom.IsZero(), "profile_version", profileVersion)
+	}
+
+	// A schedule/needs-attention intent legitimately drives retrieval with no
+	// query terms (it lists a window / scans for salience), so an empty residual
+	// is only an error when no intent and no filters back it.
+	if plan.Text == "" && !plan.hasFilters() && (!personalizing || !intentDrivenEmptyText(plan)) {
 		return nil, status.Error(codes.InvalidArgument, "query: empty query with no filters")
 	}
 
@@ -87,7 +118,7 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	// The cache outcome is both a metric label on the search-duration histogram
 	// and its own counter so a dashboard can read hit ratio directly.
 	stage = time.Now()
-	key := cacheKey(tc.TenantID(), norm, clipPlanned)
+	key := cacheKey(tc.TenantID(), norm, clipPlanned, profileVersion)
 	if cached := s.cacheGet(ctx, logger, key); cached != nil {
 		cached.Cached = true
 		cached.TookMs = time.Since(start).Milliseconds()
@@ -152,26 +183,52 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		From:        plan.From,
 		To:          plan.To,
 		Participant: plan.Participant,
+		EventFrom:   plan.EventFrom, // event_start window for schedule lookups (v3)
+		EventTo:     plan.EventTo,
 	}
 	limit, offset := norm.GetLimit(), norm.GetOffset()
 
-	textQ := base
-	textQ.Kind = retrievalPlan(plan, mode, vector)
-	textQ.Vector = vector
-
 	var result vespaResult
 	stage = time.Now()
-	if clipActive {
+	if personalizing {
+		// Personalized path: retrieve a wide candidate set (RRF-fused arms when
+		// enabled) at offset 0, then re-rank to the page by the combined score.
+		var candidates vespaResult
+		candidates, err = s.retrievePersonalized(ctx, logger, base, plan, mode, vector, clipActive, clipVector, &degradedReasons)
+		if err == nil {
+			halfLife := s.recencyHalfLife
+			if halfLife <= 0 {
+				halfLife = defaultPersonalizationHalfLife
+			}
+			page, total := personalizeRank(candidates.Hits, personalizeParams{
+				profile:  profile,
+				model:    model,
+				intent:   plan.Intent,
+				window:   timeWindow{From: plan.WinFrom, To: plan.WinTo},
+				now:      now,
+				halfLife: halfLife,
+				debug:    norm.GetDebug(),
+				limit:    limit,
+				offset:   offset,
+			})
+			result = vespaResult{Hits: page, Total: total}
+		}
+	} else if clipActive {
 		// Two arms merged: each arm must contribute its full prefix up to
 		// offset+limit (with offset 0), so the merged ranking is correct
 		// before the page is sliced. The text arm still degrades on its own
 		// ladder; a CLIP arm failure here drops the arm (never fail closed).
+		textQ := base
+		textQ.Kind = retrievalPlan(plan, mode, vector)
+		textQ.Vector = vector
 		clipQ := base
 		clipQ.Kind = retrieveCLIP
 		clipQ.ClipVector = clipVector
-
 		result, err = s.searchMerged(ctx, logger, textQ, clipQ, limit, offset, &degradedReasons)
 	} else {
+		textQ := base
+		textQ.Kind = retrievalPlan(plan, mode, vector)
+		textQ.Vector = vector
 		textQ.Hits = limit
 		textQ.Offset = offset
 		var keywordFallback bool
@@ -180,7 +237,7 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 			degradedReasons = addDegraded(degradedReasons, degradedKeywordOnly)
 		}
 	}
-	logger.Debug("stage vespa", "took", time.Since(stage), "profile", textQ.Kind.profile(), "clip_arm", clipActive, "error", err != nil)
+	logger.Debug("stage vespa", "took", time.Since(stage), "personalized", personalizing, "clip_arm", clipActive, "error", err != nil)
 	if err != nil {
 		if errors.Is(err, errInvalidFilterValue) {
 			return nil, status.Errorf(codes.InvalidArgument, "query: %v", err)
@@ -204,7 +261,11 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	// first" — blend freshness into the relevance order (rerank.go). A no-op
 	// when recencyWeight is 0. Applied before caching so a cache hit serves the
 	// same blended order (the sub-minute recency drift over the TTL is noise).
-	rerankByRecency(result.Hits, s.recencyWeight, s.recencyHalfLife, time.Now())
+	// The personalized path already folds recency into its combined score
+	// (recency-vs-importance slider), so this standalone blend is skipped there.
+	if !personalizing {
+		rerankByRecency(result.Hits, s.recencyWeight, s.recencyHalfLife, now)
+	}
 
 	// Stage 7: respond; cache full-fidelity (non-degraded) results only, so
 	// a 60s TTL never pins keyword-only results past a TEI/Vespa blip.
@@ -223,6 +284,27 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	logger.Debug("search complete",
 		"took", time.Since(start), "hits", len(resp.Hits), "total", resp.Total, "degraded", degraded)
 	return resp, nil
+}
+
+// Count reports how many documents are indexed for the calling tenant (the
+// live "indexed" figure for the Settings indexing-progress view). It is a
+// filter-only Vespa query with hits=0, so Vespa returns just the tenant group's
+// total match count — no documents, no ranking. The tenant comes from the
+// verified gRPC metadata, never the request.
+func (s *server) Count(ctx context.Context, _ *queryv1.CountRequest) (*queryv1.CountResponse, error) {
+	tc, err := tenancy.FromContext(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "query: no tenant in request context")
+	}
+	res, err := s.vespa.Search(ctx, vespaQuery{
+		Tenant: tc.TenantID(), // from verified ctx — NEVER from the request
+		Kind:   retrieveFilterOnly,
+		Hits:   0,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "query: count: %v", err)
+	}
+	return &queryv1.CountResponse{Indexed: res.Total}, nil
 }
 
 // searchMerged runs the text arm (with its degradation ladder) and the CLIP

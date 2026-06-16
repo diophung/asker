@@ -247,6 +247,10 @@ type envConfig struct {
 	teiDim   int
 	clipDown bool
 	clipDim  int
+	// v3 personalization: when profiles is non-nil the server runs the
+	// personalized path (rrf controls dual-arm RRF retrieval).
+	profiles profileLoader
+	rrf      bool
 }
 
 func withTEIDown() envOption       { return func(c *envConfig) { c.teiDown = true } }
@@ -254,6 +258,12 @@ func withTEIDim(dim int) envOption { return func(c *envConfig) { c.teiDim = dim 
 func withClipDown() envOption      { return func(c *envConfig) { c.clipDown = true } }
 func withClipDim(dim int) envOption {
 	return func(c *envConfig) { c.clipDim = dim }
+}
+
+// withProfiles turns ON the personalized path with the given loader; rrf selects
+// dual-arm RRF retrieval.
+func withProfiles(l profileLoader, rrf bool) envOption {
+	return func(c *envConfig) { c.profiles = l; c.rrf = rrf }
 }
 
 func newQueryEnv(t *testing.T, opts ...envOption) *queryEnv {
@@ -283,6 +293,12 @@ func newQueryEnv(t *testing.T, opts ...envOption) *queryEnv {
 		cache,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+	if ec.profiles != nil {
+		srv.profiles = ec.profiles
+		srv.rrfEnabled = ec.rrf
+		srv.candidateCap = maxLimit
+		srv.recencyHalfLife = 720 * time.Hour // enable the recency bonus in scoring
+	}
 
 	lis := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(tenancygrpc.UnaryServerInterceptor()))
@@ -412,6 +428,36 @@ func TestSearchHybridFlow(t *testing.T) {
 			t.Errorf("cache TTL = %v, want %v", ttl, cacheTTL)
 		}
 	}
+}
+
+func TestCount(t *testing.T) {
+	env := newQueryEnv(t)
+
+	resp, err := env.client.Count(tenantCtx(t, "tenant-a"), &queryv1.CountRequest{})
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	// vespaFixture's totalCount is 2; Count surfaces it as the indexed count.
+	if resp.GetIndexed() != 2 {
+		t.Errorf("indexed = %d, want 2 (fixture totalCount)", resp.GetIndexed())
+	}
+	// It is a filter-only, hits=0 query scoped to the context tenant group.
+	body := env.vespa.lastBody(t)
+	if body["yql"] != "select * from sources * where true" {
+		t.Errorf("count yql = %v, want filter-only true clause", body["yql"])
+	}
+	if got := body["hits"].(float64); got != 0 {
+		t.Errorf("count hits = %v, want 0", got)
+	}
+	if got := body["streaming.groupname"]; got != "tenant-a" {
+		t.Errorf("count groupname = %v, want tenant-a", got)
+	}
+}
+
+func TestCountWithoutTenantFailsClosed(t *testing.T) {
+	srv := newServer(nil, nil, nil, newFakeCache(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := srv.Count(context.Background(), &queryv1.CountRequest{})
+	wantCode(t, err, codes.Unauthenticated)
 }
 
 // TestStreamingGroupnameIsContextTenant is THE isolation property: the Vespa

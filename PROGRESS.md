@@ -17,6 +17,103 @@ Newest entries go first.
 
 ---
 
+## 2026-06-15 — NLP query-understanding hardening (calendar/temporal)
+
+- Done: **Fixed natural-language calendar/temporal understanding**, driven by an
+  adversarial NLP-robustness probe (4 agents, ~40 phrasings) against the live gateway.
+  Two root causes, both fixed:
+  - **Data (one-time):** the 16,082 pre-existing `CALENDAR_EVENT` docs were indexed
+    before the `event_start` attribute existed, so every schedule-window filter excluded
+    them ("calendar next week" → 0). Backfilled `event_start`/`event_end` from
+    `metadata.start/end` via Vespa partial updates (16,051 updated, 31 skipped, ~52s, no
+    re-embed). Committed the migration as a documented runbook:
+    `tools/backfill-event-start/`.
+  - **Code (`services/query`):** (1) `temporal.go` — added "this/next weekend" (fixed the
+    latent "this week" substring shadow) and parametric relative expressions
+    ("in N days", "N days from now", "a week from now", "in a week", "next N days",
+    "rest of the week") via regex patterns. (2) `intent.go` — `contentResidual` now drops
+    possessive remnants and stray <2-char tokens ("next week's" → "'s" → ""), so
+    "next week's agenda"/"show me next week's calendar" list the window (13) instead of
+    over-constraining to 2; added soft availability cues (`scheduleSignals`:
+    coming-up/upcoming/happening/busy/free) used ONLY when the content residual is empty,
+    so "busy season sales report" stays a content search. (3) `scope.go` — bare temporal
+    ("next week") or soft-cue ("what's coming up", "am I busy next week") queries now
+    promote to a schedule lookup; **window-less schedule lookups default to UPCOMING
+    (`event_start >= today)`** instead of returning the entire history. (4) `vespa.go` —
+    filter-only schedule lookups now `order by event_start asc`, so the candidate cap
+    captures the SOONEST events (unbounded "my calendar"/"upcoming meetings" now start
+    today, not months out).
+  - Verified live: every probe FAIL/WEAK now passes (next week=13, this week=17,
+    tomorrow=4, "a week from now"=1 @06-22, "in 3 days"=2 @06-18, "upcoming meetings"/
+    "my calendar"/"my schedule" upcoming-first from today; "what needs my attention"
+    unaffected at ~55; content queries unaffected). New tests in
+    `temporal_test.go`/`intent_test.go`/`vespa_test.go` + new `scope_test.go`. `make vet`,
+    `make lint` (0 issues), `make test` all green (query 86.2%, personalization 92.3%).
+- Next: redeploy notes — only the `query` image changed (rebuilt + restarted). Consider
+  emitting `metadata["unread"]/["important"]` from the Gmail connector (the attention
+  scorer already consumes them) to sharpen "unread important emails".
+- Known issues: attention-intent queries are intentionally time-agnostic, so temporal
+  windows ("...today" vs "...this week") barely change their result counts — defensible
+  (attention = unresolved-regardless-of-date) but flagged "weak" by the probe; revisit if
+  users expect attention to be date-scoped. The `event_start` backfill is a stopgap for
+  the pre-v3.2 corpus; new docs get it from the index writer and re-index re-drives it.
+
+## 2026-06-14 — v3.2 Personalized, intent-aware semantic search (post-V1)
+
+- Done: **Built the v3.2 personalized-search feature end to end** (spec
+  `specs/asker-v3.2-personalized-search-engine-vectordb.md`) on the EXISTING Vespa
+  stack — the spec's "default to Qdrant" was overridden by its own "use the existing
+  infra" mandate (rationale + all decisions in `DECISIONS.md`). A pre-implementation
+  adversarial design review caught two decisive data-availability bugs (temporal
+  filter on the wrong date field; attention signals not in the index) which were
+  fixed for real, not papered over.
+  - **Shared model** `platform/personalization` (pure logic, 92% cover): resolved
+    `Profile` (+ defaults/clamp), online logistic **learning-to-rank** `LearnedModel`,
+    the combined relevance `Score`, and the Redis-key contract. Imported by the query
+    service (apply) and control-plane (update-on-feedback).
+  - **Query understanding + ranking** (`services/query`): temporal NL parsing
+    (`temporal.go`), intent classification (`intent.go`), attention/salience scorer
+    (`attention.go`, grounded in RSVP/upcoming/overdue/unread/important/addressed/
+    recency), RRF fusion (`rrf.go`), and the personalized re-rank with MMR
+    diversification + per-hit explanations (`personalize.go`, `scope.go`). All gated
+    behind a wired profile loader — the non-personalized path is byte-for-byte
+    unchanged (every existing query test still passes).
+  - **Occurrence-time fix (DECISIONS D11):** new `event_start`/`event_end` Vespa
+    attributes, populated by the index-writer from calendar `metadata["start"]`, so
+    "next week" filters when events OCCUR, not when they were authored.
+  - **Attention grounding (D12):** Gmail connector now emits `unread`/`important`
+    from message labels.
+  - **Persistence** (`services/control-plane`): migration `0002_personalization`
+    (`user_preferences`/`learned_weights`/`feedback_events`, FK-cascade for GDPR),
+    new `ControlPlaneService` RPCs (Get/Put preferences, RecordFeedback with the
+    atomic row-locked online update, ResetLearning), and the GDPR purge/residue +
+    Redis purge extended to the new tables/keys.
+  - **Gateway**: `/v1/preferences` (GET/PUT), `/v1/feedback`, `/v1/preferences/reset`,
+    `/v1/preferences/export`; profile validation + Redis write-through for the hot
+    path; search responses now carry `explanation` (+ `features` under `?debug=1`).
+  - **Web** (`web/src/v2`): Settings "Personalization" section (every preference field
+    + pause/reset/export), per-result "Why this?" explanation, and "More/Fewer like
+    this" feedback. `npm run build`/`test` (104)/`lint` green.
+  - **Tests**: unit (temporal/intent/attention/RRF/model/score), **acceptance** for
+    both canonical queries, **same-query-ranks-differently** for two users, and
+    **per-tenant personalization isolation** — via the in-process gRPC harness with a
+    fake profile loader + seeded Vespa fixtures (the idiomatic "e2e" here). Plus
+    control-plane + gateway personalization tests.
+  - **Validation:** `make build`/`vet` green; golangci-lint 0 issues; full `make test`
+    green; proto regenerated with no drift. `.env.example`, OpenAPI spec, README
+    section, and `DECISIONS.md` added.
+- Next: extend the bash live-stack e2e (calendar seeding in `tools/fake-gmail`) to run
+  the two canonical queries against the real Vespa stack (currently a Go-level
+  acceptance test; recorded as a follow-up in DECISIONS D10). Enrich more connectors
+  to emit `due`/`read_status` so overdue/unread attention applies beyond Gmail/Calendar.
+- Known issues:
+  - Personalized result-cache entries are keyed by profile VERSION (a preferences
+    change invalidates immediately); a learned-model change from feedback is NOT folded
+    into the key, so behavioral re-ranking reflects within the 60s cache TTL, not
+    instantly (documented trade-off, mirrors the recency-drift rationale).
+  - `event_start` only populates on a document's next (re)index; pre-existing calendar
+    docs are still covered by the post-retrieval occurrence filter until reindexed.
+
 ## 2026-06-14 — Full-page-load source tabs + backend recent searches + recency rank + People (post-V1)
 
 - Done: **Four user-requested search-UX changes shipped end to end and live on the dev stack

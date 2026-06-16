@@ -20,6 +20,17 @@ log = logging.getLogger("enrich.embedder")
 MAX_BATCH_TOKENS = 3500
 MAX_BATCH_TEXTS = 16
 
+# Hard cap on the characters of a single input sent to TEI. A structure-aware
+# chunk is ~512 tokens (~2KB), but a chunk with a long unbroken run (base64,
+# minified CSS/JS, a giant URL) is NOT split by the chunker and can be hundreds
+# of KB — which makes TEI reject the whole request with HTTP 413 "Payload Too
+# Large", and the worker then dead-letters the entire document (so it never
+# reaches the index and is not even keyword-searchable). The embedding model
+# only consumes its first ~512 tokens regardless, so truncating here loses
+# nothing the vector would have captured while keeping every request well under
+# TEI's payload and max-batch-tokens limits.
+MAX_INPUT_CHARS = 8000
+
 _HTTP_ATTEMPTS = 3
 _HTTP_BACKOFF_BASE = 0.5  # 0.5s, 1s between attempts (exponential, capped)
 _HTTP_BACKOFF_CAP = 2.0
@@ -100,6 +111,10 @@ class Embedder:
         Every returned vector is validated to have exactly EMBEDDING_DIM
         elements; a mismatch raises DimensionMismatchError.
         """
+        # Cap each input so a runaway chunk cannot push the request over TEI's
+        # payload limit (413). Order/count are preserved, so vectors still map
+        # 1:1 to the caller's texts.
+        texts = [t[:MAX_INPUT_CHARS] for t in texts]
         vectors: list[list[float] | None] = [None] * len(texts)
         for batch in plan_batches(texts):
             inputs = [texts[i] for i in batch]

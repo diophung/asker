@@ -26,6 +26,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	QueryService_Search_FullMethodName = "/asker.query.v1.QueryService/Search"
+	QueryService_Count_FullMethodName  = "/asker.query.v1.QueryService/Count"
 )
 
 // QueryServiceClient is the client API for QueryService service.
@@ -37,6 +38,11 @@ type QueryServiceClient interface {
 	// Search runs a hybrid (keyword + vector) search over the calling tenant's
 	// documents, with graceful degradation to keyword-only under failure/load.
 	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
+	// Count returns how many documents are currently indexed (searchable) for the
+	// calling tenant — the live "indexed" figure the Settings indexing-progress
+	// view compares against the connectors' emitted count. Tenant-scoped via the
+	// streaming group, like Search.
+	Count(ctx context.Context, in *CountRequest, opts ...grpc.CallOption) (*CountResponse, error)
 }
 
 type queryServiceClient struct {
@@ -57,6 +63,16 @@ func (c *queryServiceClient) Search(ctx context.Context, in *SearchRequest, opts
 	return out, nil
 }
 
+func (c *queryServiceClient) Count(ctx context.Context, in *CountRequest, opts ...grpc.CallOption) (*CountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CountResponse)
+	err := c.cc.Invoke(ctx, QueryService_Count_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // QueryServiceServer is the server API for QueryService service.
 // All implementations must embed UnimplementedQueryServiceServer
 // for forward compatibility.
@@ -66,6 +82,11 @@ type QueryServiceServer interface {
 	// Search runs a hybrid (keyword + vector) search over the calling tenant's
 	// documents, with graceful degradation to keyword-only under failure/load.
 	Search(context.Context, *SearchRequest) (*SearchResponse, error)
+	// Count returns how many documents are currently indexed (searchable) for the
+	// calling tenant — the live "indexed" figure the Settings indexing-progress
+	// view compares against the connectors' emitted count. Tenant-scoped via the
+	// streaming group, like Search.
+	Count(context.Context, *CountRequest) (*CountResponse, error)
 	mustEmbedUnimplementedQueryServiceServer()
 }
 
@@ -78,6 +99,9 @@ type UnimplementedQueryServiceServer struct{}
 
 func (UnimplementedQueryServiceServer) Search(context.Context, *SearchRequest) (*SearchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Search not implemented")
+}
+func (UnimplementedQueryServiceServer) Count(context.Context, *CountRequest) (*CountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Count not implemented")
 }
 func (UnimplementedQueryServiceServer) mustEmbedUnimplementedQueryServiceServer() {}
 func (UnimplementedQueryServiceServer) testEmbeddedByValue()                      {}
@@ -118,6 +142,24 @@ func _QueryService_Search_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _QueryService_Count_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueryServiceServer).Count(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueryService_Count_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueryServiceServer).Count(ctx, req.(*CountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // QueryService_ServiceDesc is the grpc.ServiceDesc for QueryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -128,6 +170,10 @@ var QueryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Search",
 			Handler:    _QueryService_Search_Handler,
+		},
+		{
+			MethodName: "Count",
+			Handler:    _QueryService_Count_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

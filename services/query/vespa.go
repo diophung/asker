@@ -113,6 +113,11 @@ type vespaQuery struct {
 	From, To    time.Time
 	Participant string
 
+	// EventFrom/EventTo bound event_start (occurrence time) for a schedule
+	// lookup — the correct field for "what's on my calendar next week" (created_at
+	// is the authoring time). Zero means unbounded. (v3.2, DECISIONS D11)
+	EventFrom, EventTo time.Time
+
 	Hits, Offset int32
 }
 
@@ -195,6 +200,14 @@ func buildYQL(q vespaQuery) (string, error) {
 	if !q.To.IsZero() {
 		clauses = append(clauses, fmt.Sprintf("created_at <= %d", q.To.Unix()))
 	}
+	// event_start (occurrence time) range for schedule lookups (v3.2). The
+	// half-open [EventFrom, EventTo) window is rendered as >= From and < To.
+	if !q.EventFrom.IsZero() {
+		clauses = append(clauses, fmt.Sprintf("event_start >= %d", q.EventFrom.Unix()))
+	}
+	if !q.EventTo.IsZero() {
+		clauses = append(clauses, fmt.Sprintf("event_start < %d", q.EventTo.Unix()))
+	}
 	if q.Participant != "" {
 		lit, err := yqlStringLiteral(q.Participant)
 		if err != nil {
@@ -203,7 +216,19 @@ func buildYQL(q vespaQuery) (string, error) {
 		clauses = append(clauses, "participants contains ({substring:true}"+lit+")")
 	}
 
-	return "select * from sources * where " + strings.Join(clauses, " and "), nil
+	yql := "select * from sources * where " + strings.Join(clauses, " and ")
+
+	// Filter-only schedule lookups ("what's on my calendar", "upcoming meetings")
+	// list events by occurrence time. Order by event_start ASCENDING in Vespa so
+	// the candidate cap captures the SOONEST events — without this an unbounded
+	// upcoming lookup returns an arbitrary cap-sized sample (which, once re-sorted
+	// client-side, starts months out instead of today). EventFrom is set only for
+	// schedule lookups, so this never reorders a generic filter-only search (e.g.
+	// an empty query with a type filter on email, where event_start is 0).
+	if q.Kind == retrieveFilterOnly && !q.EventFrom.IsZero() {
+		yql += " order by event_start asc"
+	}
+	return yql, nil
 }
 
 // yqlStringLiteral renders s as a double-quoted YQL string literal.

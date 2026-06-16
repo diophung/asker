@@ -49,6 +49,17 @@ interface ResultBase {
   haystack: string;
   /** Browser-openable link to the real item (set by the backend mapper). */
   url?: string;
+  /** The connector instance this came from ("gmail", "slack", …); drives the
+   * doc_type/connector_id sent with personalization feedback. */
+  connectorId?: string;
+  /** The DocType enum name (EMAIL, FILE, …) for feedback. */
+  docType?: string;
+  /** Participant addresses/handles for feedback (senders). */
+  senders?: string[];
+  /** Topic terms matched by the ranker, for feedback. */
+  topics?: string[];
+  /** The v3 "why this ranked" reason; "" / undefined when not personalized. */
+  explanation?: string;
 }
 
 export interface EmailResult extends ResultBase {

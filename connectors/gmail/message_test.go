@@ -112,6 +112,37 @@ func TestMessageDocumentNoSubject(t *testing.T) {
 	}
 }
 
+// TestMessageDocumentAttentionLabels: the UNREAD/IMPORTANT system labels ground
+// the v3 "unread important email" attention signal — emitted as metadata only
+// when the label is present (a read/unimportant message carries neither key).
+func TestMessageDocumentAttentionLabels(t *testing.T) {
+	t.Parallel()
+	msg := plainMessage("m-lbl", map[string]string{"Subject": "s", "From": "a@b.c"}, "x")
+	msg.LabelIds = []string{"INBOX", "UNREAD", "IMPORTANT"}
+	doc, err := messageDocument(testTenant, msg)
+	if err != nil {
+		t.Fatalf("messageDocument: %v", err)
+	}
+	md := doc.GetMetadata()
+	if md["unread"] != "true" || md["important"] != "true" {
+		t.Errorf("unread/important = %q/%q, want true/true", md["unread"], md["important"])
+	}
+
+	// A read, unimportant message sets neither key.
+	read := plainMessage("m-read", map[string]string{"Subject": "s", "From": "a@b.c"}, "x")
+	read.LabelIds = []string{"INBOX"}
+	doc2, err := messageDocument(testTenant, read)
+	if err != nil {
+		t.Fatalf("messageDocument: %v", err)
+	}
+	if _, ok := doc2.GetMetadata()["unread"]; ok {
+		t.Error("read message should not carry an unread key")
+	}
+	if _, ok := doc2.GetMetadata()["important"]; ok {
+		t.Error("unimportant message should not carry an important key")
+	}
+}
+
 func TestMessageDocumentParticipants(t *testing.T) {
 	t.Parallel()
 	msg := plainMessage("m4", map[string]string{

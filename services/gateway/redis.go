@@ -54,6 +54,12 @@ func (rc *redisCounter) Set(ctx context.Context, key, value string, ttl time.Dur
 	return rc.client.Set(ctx, key, value, ttl).Err()
 }
 
+// DeleteKey removes a single key (Redis DEL). Used by the personalization
+// write-through cache to drop a tenant's learned-model key on reset.
+func (rc *redisCounter) DeleteKey(ctx context.Context, key string) error {
+	return rc.client.Del(ctx, key).Err()
+}
+
 // GetDel atomically reads and deletes key (Redis GETDEL), giving the OAuth
 // state its single-use guarantee at the server: a replayed callback finds the
 // key already gone. It returns errStateNotFound when the key is absent
