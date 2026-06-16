@@ -411,11 +411,23 @@ services:
     # under Docker Desktop's Rosetta/QEMU emulation (works, but embeds slowly).
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
     platform: linux/amd64
+    # Cap CPU so TEI can't peg the whole machine. Its inference thread pool
+    # otherwise fans out across every core (nproc) and, under amd64-on-arm64
+    # emulation, that pins ~all cores at ~100% whenever there is embedding work
+    # (e.g. draining a sync backlog). The cgroup limit is a hard bound regardless
+    # of how many threads it spawns; RAYON_NUM_THREADS/OMP_NUM_THREADS below align
+    # the thread count to the cap so the limited cores aren't thrashing on context
+    # switches. Override via deploy/compose/.env if you want faster (hotter) embeds.
+    cpus: "${TEI_CPUS:-4}"
     ports:
       - "127.0.0.1:8083:80"
     environment:
       # Override for CI with a small model: TEI_MODEL_ID=sentence-transformers/all-MiniLM-L6-v2
       MODEL_ID: ${TEI_MODEL_ID:-BAAI/bge-m3}
+      # Bound the inference thread pool to the CPU cap (default = nproc, which is
+      # far more than the cap allows and just thrashes under emulation).
+      RAYON_NUM_THREADS: ${TEI_CPUS:-4}
+      OMP_NUM_THREADS: ${TEI_CPUS:-4}
     # Default CMD is just --json-output; keep it and bound tokenization workers
     # (default = nproc = 18 here) plus warmup/runtime batch size — both spiked
     # memory enough to get the container OOM-killed on constrained dev machines.
