@@ -335,6 +335,19 @@ services:
       # Self-contained npm build — context is web/ itself, not the repo root.
       context: ../../web
       dockerfile: Dockerfile
+    # nginx proxies /v1 and /kc to the gateway and keycloak containers, so it must
+    # not start before they are DNS-resolvable: wait for both to be healthy. The
+    # request-time `resolver` in nginx.conf is the real fix for the "host not found
+    # in upstream" start race that left :13001 dead; this gate just keeps first-load
+    # after dev-up clean. NO `restart:` policy, on purpose — like every other service
+    # here, a genuinely broken image must reach a terminal `exited` so `compose up
+    # --wait` (Makefile dev-up) fails fast in seconds instead of crash-looping until
+    # the 30-min --wait-timeout.
+    depends_on:
+      gateway:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
     ports:
       # Host port 13001, NOT the Next.js-default 3000: that port commonly collides
       # with another local dev app, and because macOS resolves `localhost` to IPv6
