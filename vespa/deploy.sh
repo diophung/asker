@@ -33,6 +33,10 @@ VESPA_QUERY_URL="${VESPA_QUERY_URL:-http://localhost:8082}"
 WAIT_TIMEOUT_SECS="${WAIT_TIMEOUT_SECS:-180}"
 EMBEDDING_DIM="${EMBEDDING_DIM:-1024}"
 CLIP_DIM="${CLIP_DIM:-512}"
+# Query-container JVM heap, substituted into services.xml's @VESPA_CONTAINER_JVM@.
+# Default = the committed small dev heap (so `make dev-up` is unchanged); the
+# two-host deploy raises it on the 128GB PC via deploy/compose/.env.pc.
+VESPA_CONTAINER_JVM="${VESPA_CONTAINER_JVM:--Xms256m -Xmx768m}"
 
 if ! [[ "${EMBEDDING_DIM}" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: EMBEDDING_DIM must be a positive integer, got '${EMBEDDING_DIM}'" >&2
@@ -92,14 +96,25 @@ wait_for_health "${VESPA_CFG_URL}/state/v1/health" "Vespa config server"
 # Stage the package and substitute the @EMBEDDING_DIM@ and @CLIP_DIM@ template
 # tokens. The committed package is deployed verbatim except for these
 # substitutions; vespa/app itself is never modified.
+# Guard the free-form JVM value: it is sed-substituted with a '|' delimiter (so
+# '|'/'&' would corrupt the rewrite) INTO a double-quoted XML attribute
+# (services.xml: <jvm options="..."/>), so '"', '<', '>' would produce malformed
+# XML and a confusing late Vespa deploy failure. Legitimate -X/-D heap/property
+# args never contain these. Reject early with a clear message instead.
+if [[ "${VESPA_CONTAINER_JVM}" == *['|&"<>']* ]]; then
+    echo "ERROR: VESPA_CONTAINER_JVM must not contain any of | & \" < >, got '${VESPA_CONTAINER_JVM}'" >&2
+    exit 1
+fi
+
 STAGE_DIR="${TMP_DIR}/app"
-echo "==> Staging application package from ${APP_DIR} (EMBEDDING_DIM=${EMBEDDING_DIM}, CLIP_DIM=${CLIP_DIM})"
+echo "==> Staging application package from ${APP_DIR} (EMBEDDING_DIM=${EMBEDDING_DIM}, CLIP_DIM=${CLIP_DIM}, VESPA_CONTAINER_JVM='${VESPA_CONTAINER_JVM}')"
 mkdir -p "${STAGE_DIR}"
 cp -R "${APP_DIR}/." "${STAGE_DIR}/"
 find "${STAGE_DIR}" -type f -print0 | while IFS= read -r -d '' file; do
-    if grep -q '@EMBEDDING_DIM@\|@CLIP_DIM@' "${file}"; then
+    if grep -q '@EMBEDDING_DIM@\|@CLIP_DIM@\|@VESPA_CONTAINER_JVM@' "${file}"; then
         sed -e "s/@EMBEDDING_DIM@/${EMBEDDING_DIM}/g" \
-            -e "s/@CLIP_DIM@/${CLIP_DIM}/g" "${file}" > "${file}.sub" \
+            -e "s/@CLIP_DIM@/${CLIP_DIM}/g" \
+            -e "s|@VESPA_CONTAINER_JVM@|${VESPA_CONTAINER_JVM}|g" "${file}" > "${file}.sub" \
             && mv "${file}.sub" "${file}"
     fi
 done

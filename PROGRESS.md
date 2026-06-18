@@ -17,6 +17,50 @@ Newest entries go first.
 
 ---
 
+## 2026-06-17 — Two-host GPU deploy (PC engine + Mac client/workers) (post-V1)
+
+- Done: **Added a speed-optimized two-host deployment** layered on the dev compose
+  (base `docker-compose.yml` unchanged — `make dev-up` still single-host). PC (RTX
+  3090 + 128GB) = GPU engine + the whole latency-sensitive search path; Mac (M5 Max,
+  no Docker GPU passthrough) = browser client + arm64-native async `ingest`/`enrich`.
+  - **GPU**: `tei` → CUDA `86-1.8` (Ampere/sm86) image + `devices: [gpu]` reservation;
+    `clip` → CUDA-torch build (`TORCH_INDEX_URL` build-arg) + new `CLIP_DEVICE` knob
+    (auto/cuda/cpu) that moves model+tensors to the GPU (CPU path is a verified no-op,
+    so dev/CI/Mac are byte-identical). **torch==2.12.0 is on `cu126`, NOT `cu124`**
+    (verified the cp312/x86_64 wheel; TEI `86-1.8` tag verified on ghcr).
+  - **Memory**: parameterized Vespa query-container heap via a new `@VESPA_CONTAINER_JVM@`
+    token in services.xml + deploy.sh (default = the old dev heap, so dev is unchanged;
+    PC sets `-Xmx8g`); bigger Redpanda alloc; TEI dev-VM CPU/tokenizer caps lifted on the
+    GPU host.
+  - **Cross-host**: `docker-compose.pc.yml` (overlay) publishes ONLY the 5 worker-facing
+    ports + web on `${PC_LAN_IP}` via `!override`, and Redpanda advertises
+    `external://${PC_HOST}:19092`; `docker-compose.mac.yml` (standalone `asker-mac`) runs
+    scalable ingest+enrich pointing at the PC. `pc-*`/`mac-*` Make targets, `.env.pc/.env.mac`
+    templates, `docs/two-host-deploy.md`.
+  - **Auth**: deployed v2 UI is same-origin (relative `/v1`,`/kc` via nginx), so OIDC
+    issuer/KC_HOSTNAME left at internal `localhost:8081` ON PURPOSE; only browser-facing
+    gateway URLs point at `${PC_HOST}` (web is the sole browser-facing port).
+  - **Adversarial review** (6 lenses, 13 findings, each skeptic-verified → 9 confirmed,
+    all fixed): **(critical)** removed the `connector-hub:9300` LAN exposure — its
+    header-trusting `/internal/media` endpoint would have been an unauthenticated
+    cross-tenant decryption oracle (ADR-002); media enrichment now stays on the PC, Mac
+    does text (distributing media is a documented opt-in). **(security)** flipped the
+    fail-open `PC_LAN_IP` default `0.0.0.0`→`127.0.0.1` (loopback-safe) and sharpened the
+    Redis/Redpanda "this is tenant data" warning. **(correctness)** `.local` mDNS doesn't
+    resolve in Docker's Linux VM → default to a static-IP placeholder + `PC_HOST` fail-fast
+    Make guard. **(perf)** lifted the emulation-era TEI caps. Plus doc fixes (4-partition
+    reality + `rpk add-partitions`, deploy.sh guard now rejects `"<>`), and a note that the
+    dev fake-OAuth "Connect" UI can't work from the Mac browser (use seeding / real provider).
+- Next: nothing blocking. If media search is used heavily across both hosts, the
+  connector-hub media endpoint needs the M4 mTLS/authn hardening before it can be safely
+  LAN-distributed. Not yet run on real hardware (no GPU box in this session) — first run
+  needs a CUDA 12.6-capable driver + nvidia-container-toolkit on the PC.
+- Known issues:
+  - `make pc-up`/`mac-up` build images on each host; the PC's CLIP CUDA image is ~6GB
+    (first build pulls cu126 torch). Compose **v2.24.4+** required (the `!override` tag).
+  - A media doc that lands on a Mac `enrich` consumer dead-letters (hub not exposed) — by
+    design; the PC's own `enrich` (same Kafka group) handles media.
+
 ## 2026-06-15 — NLP query-understanding hardening (calendar/temporal)
 
 - Done: **Fixed natural-language calendar/temporal understanding**, driven by an

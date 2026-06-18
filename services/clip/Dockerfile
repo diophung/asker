@@ -12,11 +12,21 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# torch CPU wheels live on the PyTorch CPU index (the default PyPI build pulls
-# CUDA on linux/amd64, which we don't want). Install torch from the CPU index
-# first, then the rest from PyPI.
+# Which PyTorch wheel index to install torch from. Default = the CPU index
+# (the default PyPI build pulls CUDA on linux/amd64, which dev/CI/Apple-Silicon
+# don't want). The two-host GPU deploy overrides this at build time to a CUDA
+# index, e.g.:
+#   --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
+# The CUDA wheels bundle the CUDA runtime libraries, so no CUDA base image is
+# needed — only the host's NVIDIA driver + nvidia-container-toolkit at runtime
+# (the compose `clip` service requests a gpu device). See docs/two-host-
+# deploy.md. The torch VERSION pinned in requirements.txt must exist on the
+# chosen index: torch==2.12.0 is published on cpu and cu126 (NOT cu124).
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+# Install torch from the selected index first, then the rest from PyPI.
 COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+RUN pip install --no-cache-dir --extra-index-url "${TORCH_INDEX_URL}" \
     -r requirements.txt
 
 COPY clip/ /app/clip/

@@ -1,0 +1,89 @@
+# Asker two-host deploy — Mac overlay (the M5 Max = the user's browser client +
+# arm64-native async indexing workers).
+#
+# This is a SELF-CONTAINED compose (its own project name), NOT an overlay of the
+# base file: the Mac runs ONLY the two CPU-bound, Kafka-fed, latency-tolerant
+# pipeline stages — `ingest` (parse/chunk) and `enrich` (OCR/ASR orchestration +
+# remote embed calls). Everything else (the whole search path + GPU + storage)
+# lives on the PC; see docs/two-host-deploy.md.
+#
+# Run with `make mac-up` (loads deploy/compose/.env.mac), or directly:
+#   docker compose -f deploy/compose/docker-compose.mac.yml \
+#       up -d --scale ingest=$INGEST_REPLICAS --scale enrich=$ENRICH_REPLICAS
+#
+# These build natively for arm64 on the M5 (Go for ingest; CPython for enrich) —
+# fast, no emulation. The heavy GPU embedding work is delegated over the LAN to
+# the PC's TEI/CLIP services; only async traffic crosses the wire.
+#
+# Required in .env.mac (see .env.mac.example):
+#   PC_HOST — the PC's LAN IP, e.g. 192.168.1.50. MUST match the PC's advertised
+#             Kafka address (PC_HOST in the PC's .env). Use a STATIC IP, not a
+#             *.local (Bonjour/mDNS) name: these workers run inside Docker
+#             Desktop's Linux VM, whose embedded DNS does NOT resolve macOS mDNS
+#             — a .local PC_HOST fails to resolve and the workers never connect.
+name: asker-mac
+
+services:
+  # Parse/chunk: consumes docs.raw, produces docs.chunked. Pure CPU, scales with
+  # the M5's cores (bounded by the docs.raw partition count — see the throughput
+  # note in docs/two-host-deploy.md).
+  ingest:
+    build:
+      context: ../..
+      dockerfile: services/ingest/Dockerfile
+    environment:
+      # The PC's Redpanda external listener + Redis, over the LAN.
+      KAFKA_BROKERS: "${PC_HOST}:19092"
+      REDIS_ADDR: "${PC_HOST}:16379"
+      INGEST_HEALTH_ADDR: ":9501"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/ingest", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Enrich: consumes docs.chunked, calls the PC's GPU TEI/CLIP for embeddings,
+  # runs CPU OCR (tesseract) + ASR (faster-whisper, CPU/int8) locally, produces
+  # docs.enriched. The embedding GPUs are on the PC; this orchestrates.
+  #
+  # MEDIA CAVEAT: HUB_MEDIA_URL points at the PC's connector-hub, which is NOT
+  # LAN-exposed by default (it's an unauthenticated cross-tenant decryption
+  # endpoint — see docker-compose.pc.yml). So this Mac enrich handles the TEXT
+  # pipeline fine, but a MEDIA doc (image/video/audio) that lands on it cannot
+  # decrypt the original and dead-letters; media docs are enriched by the PC's
+  # own enrich worker (same Kafka group). To also enrich media on the Mac, opt
+  # into exposing :9300 (see the security note in docs/two-host-deploy.md).
+  enrich:
+    build:
+      context: ../..
+      dockerfile: services/enrich/Dockerfile
+    environment:
+      KAFKA_BROKERS: "${PC_HOST}:19092"
+      # The PC's GPU services + hub, over the LAN (published ports from the PC
+      # overlay: tei 8083->80, clip 9800, connector-hub 9300).
+      TEI_URL: "http://${PC_HOST}:8083"
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      CLIP_URL: "http://${PC_HOST}:9800"
+      CLIP_DIM: ${CLIP_DIM:-512}
+      HUB_MEDIA_URL: "http://${PC_HOST}:9300"
+      ENRICH_HEALTH_ADDR: ":9601"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    restart: unless-stopped
+    volumes:
+      - enrich-hf-cache:/home/nonroot/.cache/huggingface # whisper-tiny weights
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9601/healthz', timeout=2).status==200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  enrich-hf-cache:

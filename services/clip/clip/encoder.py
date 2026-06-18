@@ -93,12 +93,18 @@ class OpenClipEncoder:
     replicas (ADR-013).
     """
 
-    def __init__(self, model: str, pretrained: str, clip_dim: int) -> None:
+    def __init__(
+        self, model: str, pretrained: str, clip_dim: int, device: str = "auto"
+    ) -> None:
         if clip_dim <= 0:
             raise ValueError(f"clip_dim must be positive, got {clip_dim}")
         self._model_name = model
         self._pretrained = pretrained
         self._dim = clip_dim
+        # Operator intent: "auto" (resolve at load), or a forced "cuda"/"cpu".
+        self._device_pref = device
+        # The resolved torch device string, set in load().
+        self._device = "cpu"
         self._lock = threading.Lock()
         self._loaded = False
         self._torch = None
@@ -138,20 +144,34 @@ class OpenClipEncoder:
             )
             model.eval()
             torch.set_grad_enabled(False)
+            # Resolve "auto" now that torch can probe for a visible GPU; an
+            # explicit cuda request with no GPU is a misconfiguration we surface
+            # loudly rather than silently running 50x slower on CPU.
+            if self._device_pref == "auto":
+                self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            else:
+                if self._device_pref == "cuda" and not torch.cuda.is_available():
+                    raise RuntimeError(
+                        "CLIP_DEVICE=cuda but no CUDA GPU is visible to this "
+                        "container (need the nvidia container runtime + a CUDA "
+                        "torch build — see docs/two-host-deploy.md)"
+                    )
+                self._device = self._device_pref
+            model.to(self._device)
             self._torch = torch
             self._model = model
             self._preprocess = preprocess
             self._tokenizer = open_clip.get_tokenizer(self._model_name)
             self._Image = Image
             self._loaded = True
-            log.info("clip model loaded", extra={"dim": self._dim})
+            log.info("clip model loaded", extra={"dim": self._dim, "device": self._device})
 
     def embed_text(self, inputs: list[str]) -> list[list[float]]:
         if not inputs:
             return []
         self._require_loaded()
         with self._lock:
-            tokens = self._tokenizer(inputs)
+            tokens = self._tokenizer(inputs).to(self._device)
             with self._torch.no_grad():
                 features = self._model.encode_text(tokens)
             return self._to_unit_vectors(features, len(inputs))
@@ -162,7 +182,7 @@ class OpenClipEncoder:
         self._require_loaded()
         tensors = [self._preprocess_one(raw, i) for i, raw in enumerate(images)]
         with self._lock:
-            batch = self._torch.stack(tensors)
+            batch = self._torch.stack(tensors).to(self._device)
             with self._torch.no_grad():
                 features = self._model.encode_image(batch)
             return self._to_unit_vectors(features, len(images))
