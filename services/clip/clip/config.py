@@ -21,6 +21,12 @@ DEFAULT_PORT = 9800
 
 # Request bounds: cap how much work one call can ask for. The image arm is the
 # expensive one (decode + preprocess + forward pass), so it gets a tighter cap.
+# Compute device for the forward pass. "auto" picks CUDA when a GPU is visible
+# (the two-host deploy runs this service on the RTX 3090, see docs/two-host-
+# deploy.md) and falls back to CPU otherwise — so dev/CI and the CPU image are
+# unchanged. Force a device with CLIP_DEVICE=cuda|cpu.
+DEFAULT_DEVICE = "auto"
+
 DEFAULT_MAX_TEXTS = 64
 DEFAULT_MAX_IMAGES = 32
 # Hard ceiling on a single request body (bytes). base64 images are large; 32
@@ -40,6 +46,7 @@ class Config:
     model: str = DEFAULT_MODEL
     pretrained: str = DEFAULT_PRETRAINED
     clip_dim: int = DEFAULT_DIM
+    device: str = DEFAULT_DEVICE
     host: str = "0.0.0.0"  # noqa: S104 — container-internal listener (ADR-009 trust boundary)
     port: int = DEFAULT_PORT
     max_texts: int = DEFAULT_MAX_TEXTS
@@ -60,18 +67,36 @@ class Config:
         model = env.get("CLIP_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
         pretrained = env.get("CLIP_PRETRAINED", DEFAULT_PRETRAINED).strip() or DEFAULT_PRETRAINED
         clip_dim = _positive_int(env, "CLIP_DIM", DEFAULT_DIM)
+        device = _device_from_env(env)
         host, port = _addr_from_env(env)
 
         return cls(
             model=model,
             pretrained=pretrained,
             clip_dim=clip_dim,
+            device=device,
             host=host,
             port=port,
             max_texts=_positive_int(env, "CLIP_MAX_TEXTS", DEFAULT_MAX_TEXTS),
             max_images=_positive_int(env, "CLIP_MAX_IMAGES", DEFAULT_MAX_IMAGES),
             max_body_bytes=_positive_int(env, "CLIP_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),
         )
+
+
+def _device_from_env(env: Mapping[str, str]) -> str:
+    """Resolve CLIP_DEVICE, accepting only auto|cuda|cpu (fail fast otherwise).
+
+    The actual cuda-vs-cpu choice for "auto" is made in the encoder at load
+    time (it needs torch to probe for a visible GPU); this only validates the
+    operator's intent.
+    """
+    raw = env.get("CLIP_DEVICE")
+    if raw is None or not raw.strip():
+        return DEFAULT_DEVICE
+    value = raw.strip().lower()
+    if value not in ("auto", "cuda", "cpu"):
+        raise ConfigError(f"CLIP_DEVICE must be one of auto|cuda|cpu, got {raw!r}")
+    return value
 
 
 def _positive_int(env: Mapping[str, str], key: str, default: int) -> int:

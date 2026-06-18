@@ -11,8 +11,11 @@
         <search/>
         <document-api/>
         <nodes>
-            <!-- Small heap: dev stacks share a memory-constrained Docker VM. -->
-            <jvm options="-Xms256m -Xmx768m"/>
+            <!-- Query-container heap. Token substituted by vespa/deploy.sh from
+                 VESPA_CONTAINER_JVM (default below = the small dev heap, since
+                 dev stacks share a memory-constrained Docker VM). The two-host
+                 deploy raises it on the 128GB PC, e.g. "-Xms2g -Xmx8g". -->
+            <jvm options="@VESPA_CONTAINER_JVM@"/>
             <node hostalias="node1"/>
         </nodes>
     </container>

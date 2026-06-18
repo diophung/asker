@@ -1,0 +1,168 @@
+# Asker two-host deploy — PC overlay (the RTX 3090 + 128GB box = the engine).
+#
+# Layer ON TOP of the base file (the base is unchanged for `make dev-up`):
+#   docker compose -f deploy/compose/docker-compose.yml \
+#                  -f deploy/compose/docker-compose.pc.yml up -d --wait
+# or just: `make pc-up`. See docs/two-host-deploy.md for the full topology.
+#
+# What this overlay changes vs. the single-host dev stack:
+#   1. GPU: TEI + CLIP move onto the 3090 (CUDA) instead of CPU emulation.
+#   2. Memory: Vespa + Redpanda get real heap/allocation (128GB host).
+#   3. LAN exposure: the handful of ports the Mac's async workers need are
+#      published on the LAN interface (${PC_LAN_IP}) instead of 127.0.0.1, and
+#      Redpanda advertises a Mac-reachable Kafka address (${PC_HOST}:19092).
+#   4. Browser-facing URLs point at ${PC_HOST} so the Mac's browser works.
+#
+# Requires Docker Compose v2.24.4+ (for the `!override` ports tag) and, for the
+# GPU services, the host NVIDIA driver + nvidia-container-toolkit.
+#
+# Two variables drive everything (set them in deploy/compose/.env.pc, which
+# `make pc-up` loads — see .env.pc.example):
+#   PC_HOST    — the PC's STATIC LAN IP that the Mac (browser + workers) uses to
+#                reach it, e.g. 192.168.1.50. Not a *.local name: the Mac's
+#                workers run in Docker's Linux VM, which can't resolve macOS mDNS.
+#   PC_LAN_IP  — the PC interface to bind published ports to. Defaults to
+#                127.0.0.1 (loopback only — FAIL SAFE: an unedited config
+#                exposes NOTHING on the LAN and the Mac can't connect until you
+#                set this). Set it to the PC's specific LAN IP to expose the
+#                two-host ports ONLY on the trusted wired segment. These ports
+#                carry dev creds with NO auth (Redpanda = the document corpus,
+#                Redis = per-tenant profiles/cache) — never 0.0.0.0 on a host
+#                with any untrusted (WiFi/VPN/public) interface. See the docs.
+name: asker
+
+services:
+  # --- GPU: text embeddings on the 3090 (Ampere/sm86 CUDA image) -------------
+  tei:
+    # CUDA build for Ampere consumer cards (RTX 3090 = compute capability 8.6).
+    # Override TEI_IMAGE for a different arch (e.g. 89-1.8 for Ada/RTX 4090).
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:86-1.8}
+    # The base pins linux/amd64 (CPU emulation on Apple Silicon); on the x86 PC
+    # that is native, and the CUDA image is amd64 — so the pin is correct here.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    # Lift the dev-VM caps: TEI tokenizes on CPU before the GPU embeds, and the
+    # base's `--tokenization-workers 2` + cpus/RAYON/OMP caps exist ONLY to keep
+    # the amd64-on-arm64 EMULATED image from thrashing a small Apple-Silicon VM.
+    # On the native-x86 GPU host those caps just starve the 3090. Raise the
+    # CPU/thread cap via TEI_CPUS in .env.pc (base wires cpus/RAYON/OMP to it),
+    # and re-specify the full command (Compose REPLACES command lists) to lift
+    # the tokenization/batch ceilings.
+    command:
+      - "--json-output"
+      - "--tokenization-workers"
+      - "${TEI_TOKENIZATION_WORKERS:-8}"
+      - "--max-batch-tokens"
+      - "${TEI_MAX_BATCH_TOKENS:-16384}"
+      - "--max-concurrent-requests"
+      - "${TEI_MAX_CONCURRENT_REQUESTS:-64}"
+      - "--auto-truncate"
+    # Reachable by the Mac's enrich workers at http://${PC_HOST}:8083.
+    ports: !override
+      - "${PC_LAN_IP:-127.0.0.1}:8083:80"
+
+  # --- GPU: CLIP vision/text model on the 3090 ------------------------------
+  clip:
+    build:
+      context: ../../services/clip
+      dockerfile: Dockerfile
+      args:
+        # CUDA torch wheels (bundle their own CUDA libs; no CUDA base image
+        # needed). cu126 is the index that ships torch==2.12.0 (the version
+        # pinned in requirements.txt); cu124 does NOT have 2.12.0. CUDA 12.6
+        # runs fine on the RTX 3090 (Ampere) with a recent driver.
+        TORCH_INDEX_URL: ${CLIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}
+    environment:
+      # "auto" picks CUDA when the GPU is visible (it is, via the reservation
+      # below). Force with cuda|cpu if needed.
+      CLIP_DEVICE: ${CLIP_DEVICE:-auto}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    # The base does NOT publish CLIP; the Mac's enrich workers need it at
+    # http://${PC_HOST}:9800.
+    ports: !override
+      - "${PC_LAN_IP:-127.0.0.1}:9800:9800"
+
+  # --- Memory: give Vespa real heap (container heap is set via deploy.sh /
+  #     VESPA_CONTAINER_JVM in .env.pc; this is the config-server heap). -------
+  vespa:
+    environment:
+      # 128GB host: a comfortable config-server heap (base shrinks it to 256m
+      # for the dev VM). Remove the dev "ignore low memory" crutch.
+      VESPA_CONFIGSERVER_JVMARGS: ${VESPA_CONFIGSERVER_JVMARGS:--Xms512m -Xmx2g}
+      VESPA_IGNORE_NOT_ENOUGH_MEMORY: "false"
+
+  # --- Kafka backbone: bigger allocation + a Mac-reachable advertised addr ---
+  redpanda:
+    # Full command list (Compose REPLACES command lists). The ONLY functional
+    # changes vs. base are the external advertised address (now ${PC_HOST} so
+    # the Mac's workers can connect) and the larger --smp/--memory.
+    command:
+      - redpanda
+      - start
+      - --mode dev-container
+      - --smp ${REDPANDA_SMP:-2}
+      - --memory ${REDPANDA_MEMORY:-4G}
+      - --reserve-memory 0M
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      # internal:// = PC-local services (compose DNS). external:// = the Mac's
+      # workers; MUST advertise an address the Mac can resolve/route to.
+      - --advertise-kafka-addr internal://redpanda:9092,external://${PC_HOST}:19092
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --schema-registry-addr internal://0.0.0.0:8081
+    ports: !override
+      - "${PC_LAN_IP:-127.0.0.1}:19092:19092" # Kafka external listener (Mac workers)
+      - "127.0.0.1:9644:9644"               # admin API (PC-local only)
+
+  # --- Redis: the Mac's ingest workers read/write it (REDIS_ADDR) ------------
+  redis:
+    ports: !override
+      - "${PC_LAN_IP:-127.0.0.1}:16379:6379"
+
+  # --- Connector hub: DELIBERATELY NOT exposed on the LAN. -------------------
+  # Its /internal/media endpoint (decrypt original media, encrypt thumbnails) has
+  # NO authentication and trusts the caller-supplied `x-asker-tenant` HEADER as
+  # the tenant identity — safe ONLY on the compose network. Publishing :9300 on
+  # the LAN would make it an UNAUTHENTICATED CROSS-TENANT DECRYPTION/WRITE ORACLE
+  # (any LAN host could read/write any tenant's media by setting the header),
+  # breaking the structural per-tenant isolation that derives tenant_id ONLY from
+  # a verified OIDC token (ADR-002). So the hub stays loopback-internal on the PC.
+  #
+  # Consequence: the Mac's enrich workers can do the TEXT pipeline (TEI/CLIP are
+  # exposed) but cannot decrypt MEDIA — a media doc landing on a Mac enrich
+  # consumer dead-letters. Media enrichment therefore runs on the PC's own enrich
+  # (same Kafka group). To distribute media enrichment to the Mac too, you must
+  # OPT IN by accepting the oracle risk on your trusted single-user wired segment:
+  # uncomment the publish below AND read the security note in docs/two-host-deploy.md.
+  # connector-hub:
+  #   ports: !override
+  #     - "${PC_LAN_IP:-127.0.0.1}:9300:9300"
+
+  # --- Web UI: the Mac's browser hits this (the ONLY browser-facing port).
+  #     nginx proxies /v1->gateway and /kc->keycloak internally on the PC. ----
+  web:
+    ports: !override
+      - "${PC_LAN_IP:-127.0.0.1}:13001:80"
+
+  # --- Gateway: browser-facing URLs only. OIDC_ISSUER/KC_HOSTNAME are LEFT
+  #     UNCHANGED on purpose — they are opaque internal identifiers (nginx pins
+  #     the Host header and JWKS is fetched compose-internal); rewriting them to
+  #     ${PC_HOST} would break token validation. ------------------------------
+  gateway:
+    environment:
+      # The OAuth redirect_uri and post-callback redirect go through the web
+      # origin (nginx /v1 -> gateway), so no extra gateway port is exposed.
+      GATEWAY_PUBLIC_URL: "http://${PC_HOST}:13001"
+      WEB_APP_URL: "http://${PC_HOST}:13001"
+      CORS_ALLOWED_ORIGINS: "http://${PC_HOST}:13001"

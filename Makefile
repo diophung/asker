@@ -69,6 +69,46 @@ dev-logs: ## Tail dev stack logs
 vespa-deploy: ## (Re)deploy the Vespa application package
 	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; bash vespa/deploy.sh
 
+# --- Two-host deploy (PC = RTX 3090 + 128GB engine; Mac = client + workers) ---
+# See docs/two-host-deploy.md. Each machine copies its own .env template into
+# deploy/compose/.env (auto-loaded by compose from the project dir). Run the
+# pc-* targets on the PC and the mac-* targets on the Mac.
+.PHONY: pc-build pc-up pc-down pc-clean pc-logs pc-vespa-deploy mac-up mac-down mac-logs
+
+PC_COMPOSE := $(COMPOSE) -f deploy/compose/docker-compose.pc.yml
+MAC_COMPOSE := docker compose -f deploy/compose/docker-compose.mac.yml
+
+pc-build: ## (PC) Build all service images serially, with the GPU CLIP build-arg
+	@for s in $(BUILT_SERVICES); do echo "== build $$s"; $(PC_COMPOSE) build $$s || exit 1; done
+
+pc-up: pc-build ## (PC) Start the engine + serving stack (GPU TEI/CLIP) and deploy Vespa
+	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; : "$${PC_HOST:?set PC_HOST in deploy/compose/.env — the PC LAN IP Redpanda advertises and the Mac reaches}"
+	$(PC_COMPOSE) up -d --wait --wait-timeout 1800
+	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; bash vespa/deploy.sh
+
+pc-down: ## (PC) Stop the engine stack (volumes survive)
+	$(PC_COMPOSE) down
+
+pc-clean: ## (PC) Stop the engine stack AND wipe all volumes (full reset)
+	$(PC_COMPOSE) down -v
+
+pc-logs: ## (PC) Tail the engine stack logs
+	$(PC_COMPOSE) logs -f --tail=100
+
+pc-vespa-deploy: ## (PC) (Re)deploy the Vespa app (picks up VESPA_CONTAINER_JVM from .env)
+	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; bash vespa/deploy.sh
+
+mac-up: ## (Mac) Start the async indexing workers (scale via INGEST_REPLICAS/ENRICH_REPLICAS)
+	set -a; [ -f deploy/compose/.env ] && . deploy/compose/.env; set +a; \
+	: "$${PC_HOST:?set PC_HOST in deploy/compose/.env — must be the PC's static LAN IP (not a .local name)}"; \
+	$(MAC_COMPOSE) up -d --build --scale ingest=$${INGEST_REPLICAS:-2} --scale enrich=$${ENRICH_REPLICAS:-2}
+
+mac-down: ## (Mac) Stop the async workers
+	$(MAC_COMPOSE) down
+
+mac-logs: ## (Mac) Tail the async worker logs
+	$(MAC_COMPOSE) logs -f --tail=100
+
 e2e-smoke: ## End-to-end smoke test against the running dev stack
 	bash tools/e2e/smoke.sh
 
