@@ -60,6 +60,38 @@ Newest entries go first.
     (first build pulls cu126 torch). Compose **v2.24.4+** required (the `!override` tag).
   - A media doc that lands on a Mac `enrich` consumer dead-letters (hub not exposed) — by
     design; the PC's own `enrich` (same Kafka group) handles media.
+## 2026-06-16 — Fix: :13001 web UI dead after dev-up (nginx startup-DNS race) (post-V1)
+
+- Done: **The web UI (`:13001`) failed to load — `asker-web-1` was `Exited (1)` while every other
+  service was healthy. Root-caused, fixed, and adversarially reviewed (3 lenses, 16 findings, each
+  skeptic-verified → 2 confirmed and applied).**
+  - **Root cause:** nginx resolves `proxy_pass` upstream hostnames at *config-load* time. The `web`
+    service had no `depends_on`/`restart`, so on `make dev-up` it raced ahead of `gateway`, hit
+    `nginx: [emerg] host not found in upstream "gateway"`, exited 1, and stayed down. (This is the
+    "restart web after gateway" known-issue from 2026-06-14, now eliminated rather than worked around.)
+  - **Fix (`web/nginx.conf`):** added `resolver 127.0.0.11 valid=10s ipv6=off;` (Docker embedded DNS)
+    and switched both proxies to a `set $upstream … ; proxy_pass http://$upstream;` form so name
+    resolution is deferred to *request* time — immune to start order AND to an upstream restarting
+    onto a new IP. `/kc` keeps its prefix-strip via `rewrite ^/kc/(.*)$ /$1 break;` (preserves the
+    query string for the OIDC redirect flow). NOTE: the `set` MUST precede the `rewrite` — `... break`
+    halts every rewrite-phase directive below it, so a `set` after it never runs (first attempt 500'd:
+    uninitialized var → "invalid URL"; fixed by reordering).
+  - **Fix (`deploy/compose/docker-compose.yml`):** added `depends_on: {gateway, keycloak:
+    service_healthy}` so web starts only after both backends are healthy (clean first-load). An
+    initial `restart: unless-stopped` was reviewed in and then **dropped**: redundant (resolver +
+    depends_on already close the race) and it broke fast-fail — `make dev-up` runs `compose up --wait
+    --wait-timeout 1800`, and a crash-looping container never reaches a terminal `exited`, so a future
+    broken web image would burn the full 30-min timeout instead of failing in seconds (the very signal
+    that surfaced this bug). No service in the stack carries a restart policy, by design.
+  - **Validation:** rebuilt + recreated only the `web` container; came up healthy. Verified live on
+    `:13001`: `/` 200 (SPA mounts), hashed `/assets/*.js` 200, `/healthz` 200, `/v1/me` 401 (reaches
+    gateway), `/kc` OIDC discovery + authorize 200 with `iss=http://localhost:8081/realms/asker` and a
+    preserved query string, client-route → SPA fallback 200. Review also confirmed the SPA uses no
+    SSE/WebSocket, so the absent proxy `Upgrade`/buffering directives are correct (no regression).
+- Next: resume M1 vertical-slice work. For a real prod deploy the nginx proxy + dev auth seam still
+  need the OIDC-redirect swap tracked in the entries below.
+- Known issues: none new. The web image bakes `nginx.conf` at build time, so any future proxy change
+  needs a `docker compose build web` (not just a container restart).
 
 ## 2026-06-15 — NLP query-understanding hardening (calendar/temporal)
 
@@ -216,10 +248,9 @@ Newest entries go first.
   card (role/org/shared-docs) once a real person index exists; swap the dev sessionStorage seam back
   to the OIDC redirect flow for a real prod deploy (still tracked from the prior entry).
 - Known issues:
-  - **Restart `web` AFTER `gateway`, not together.** nginx resolves the `gateway` upstream at
-    config-load time, so `docker compose up -d web gateway` can race → `nginx: [emerg] host not
-    found in upstream "gateway"` and the web container exits. Restarting `web` alone once the
-    gateway is healthy fixes it (pre-existing `web/nginx.conf` behavior, not new).
+  - ~~**Restart `web` AFTER `gateway`, not together.**~~ RESOLVED 2026-06-16 — nginx now resolves
+    upstreams at request time (`resolver` + variable `proxy_pass`) and `web` gates on
+    `depends_on: gateway/keycloak service_healthy`. See the 2026-06-16 entry above.
   - The dev session in `sessionStorage` is the password-grant token (dev-only, 127.0.0.1, namespaced,
     cleared on sign-out / tab close). MUST NOT ship; the prod OIDC seam holds tokens differently.
   - Recency re-rank operates on the retrieved page (offset 0 = the UI's only page); deeper
