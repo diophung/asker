@@ -57,7 +57,11 @@ def setup_logging() -> None:
 
 def run(config: Config) -> None:
     encoder = OpenClipEncoder(
-        config.model, config.pretrained, config.clip_dim, config.device
+        config.model,
+        config.pretrained,
+        config.clip_dim,
+        device=config.device,
+        precision=config.precision,
     )
 
     def warmup() -> None:
@@ -78,6 +82,7 @@ def run(config: Config) -> None:
             "pretrained": config.pretrained,
             "clip_dim": config.clip_dim,
             "device": config.device,
+            "precision": config.precision,
         },
     )
 

@@ -17,6 +17,45 @@ Newest entries go first.
 
 ---
 
+## 2026-06-22 — GPU infra optimization plan + CUDA CLIP (two-host rollout step 4)
+
+- Context: planning to add a second host (Linux, RTX 3090 24 GB VRAM, 128 GB RAM)
+  alongside the dev Mac (M5 Max, 48 GB, arm64, no container-usable GPU — TEI/CLIP run
+  amd64-emulated today). A grounded multi-agent workflow (4 readers → 3 architect lenses
+  → synthesis + adversarial critic) produced the two-host plan: keep the latency-critical
+  serving triad (gateway/query/vespa/redis/index-writer) + all state on the Mac; move the
+  model plane (tei→bge-m3@1024, clip, enrich+whisper, optional reranker) to the 3090; one
+  embedding-dim migration (384→1024); mTLS on the connector-hub `/internal/media` hop
+  before enrich moves; GPU QoS between bulk re-embed and the live 2 s query embed.
+- Done: **rollout step 4 — made the CLIP service CUDA-capable** (the reversible,
+  no-migration first win), then hardened it against an adversarial review:
+  - `services/clip/clip/encoder.py`: `resolve_device()`/`use_fp16()` pure helpers
+    (auto→cuda-if-present-else-cpu; fp16 only on cuda), `load()` moves the model to the
+    device + `.half()` on cuda, encode paths place tensors on-device, `_to_unit_vectors`
+    upcasts `.float().cpu()`. An EXPLICIT `CLIP_DEVICE=cuda` that can't be honored now
+    **raises** (so `/health` stays 503) instead of silently serving on CPU; `auto` stays lenient.
+  - `services/clip/clip/config.py`: `CLIP_DEVICE` (auto|cpu|cuda) + `CLIP_PRECISION`
+    (auto|fp16|fp32), validated. Wired through `main.py` + logged.
+  - `services/clip/Dockerfile.cuda` (new): CUDA torch/torchvision via `--extra-index-url`
+    on channel **cu126** (where torch 2.12.0+cu126 exists — cu124 tops at 2.6.0), plus a
+    build-time assert that the resolved torch carries the `+cuNNN` tag (fails the build on a
+    silent PyPI/CUDA-13 fallback). Stays on python:3.12-slim (wheels bundle the CUDA runtime).
+  - `deploy/compose/compose.gpu.yml` (new): HOST-B override — `Dockerfile.cuda` +
+    `nvidia` device reservation + `CLIP_DEVICE=cuda` (Compose v2).
+  - Adversarial verification workflow (3 skeptics + adjudicator with live index/PyPI checks)
+    caught 3 real defects — wrong CUDA channel (BLOCKER), non-deterministic torch resolution
+    (MAJOR), and silent-CPU-while-healthy (MAJOR) — all fixed above. The tensor dtype/device
+    flow and compose merge were confirmed correct.
+  - Verified live on the Mac: CPU path unchanged (auto→cpu, 512-d L2-norm text+image
+    embeddings, healthy); `CLIP_DEVICE=cuda` correctly fails loud (503, RuntimeError) on the
+    GPU-less host. clip unit suite 48 passed, ruff lint+format clean.
+- Next (later rollout steps, gated): GPU TEI + the 384→1024 embedding-dim migration
+  (dual-index + rollback bake); mTLS on `/internal/media` before moving enrich; GPU
+  faster-whisper large-v3; optional bge-reranker. The CUDA image build itself is only
+  verifiable on the 3090 (the build assert is the guard).
+- Known issues: the GPU VRAM budget needs validation under simultaneous backfill+query (no
+  GPU QoS yet); blanket `model.half()` is fine for ViT-B-32/openai but a startup NaN
+  self-test was deferred (optional).
 ## 2026-06-17 — Two-host GPU deploy (PC engine + Mac client/workers) (post-V1)
 
 - Done: **Added a speed-optimized two-host deployment** layered on the dev compose

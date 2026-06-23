@@ -20,6 +20,21 @@ def test_defaults_when_env_empty():
     assert cfg.clip_dim == DEFAULT_DIM
     assert cfg.host == "0.0.0.0"
     assert cfg.port == 9800
+    assert cfg.device == "auto"
+    assert cfg.precision == "auto"
+
+
+def test_device_and_precision_parse_and_lowercase():
+    cfg = Config.from_env({"CLIP_DEVICE": "CUDA", "CLIP_PRECISION": "FP16"})
+    assert cfg.device == "cuda"
+    assert cfg.precision == "fp16"
+
+
+def test_device_invalid_is_config_error():
+    with pytest.raises(ConfigError, match="CLIP_DEVICE"):
+        Config.from_env({"CLIP_DEVICE": "gpu"})
+    with pytest.raises(ConfigError, match="CLIP_PRECISION"):
+        Config.from_env({"CLIP_PRECISION": "bf16"})
 
 
 def test_overrides_model_and_dim():

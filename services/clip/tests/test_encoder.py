@@ -11,7 +11,13 @@ import math
 
 import pytest
 
-from clip.encoder import EncodeError, decode_images_b64, l2_normalize
+from clip.encoder import (
+    EncodeError,
+    decode_images_b64,
+    l2_normalize,
+    resolve_device,
+    use_fp16,
+)
 
 
 def test_l2_normalize_returns_unit_vector():
@@ -48,3 +54,33 @@ def test_decode_images_b64_rejects_bad_base64():
 def test_decode_images_b64_rejects_non_string():
     with pytest.raises(EncodeError, match="not a string"):
         decode_images_b64([123])  # type: ignore[list-item]
+
+
+@pytest.mark.parametrize(
+    ("pref", "cuda_available", "expected"),
+    [
+        ("auto", True, "cuda"),
+        ("auto", False, "cpu"),
+        ("cuda", True, "cuda"),
+        ("cuda", False, "cpu"),  # graceful downgrade, not a crash
+        ("cpu", True, "cpu"),  # honored verbatim even when a GPU is present
+        ("cpu", False, "cpu"),
+    ],
+)
+def test_resolve_device(pref, cuda_available, expected):
+    assert resolve_device(pref, cuda_available) == expected
+
+
+@pytest.mark.parametrize(
+    ("precision", "device", "expected"),
+    [
+        ("auto", "cuda", True),  # default to fp16 on GPU
+        ("fp16", "cuda", True),
+        ("fp32", "cuda", False),
+        ("auto", "cpu", False),  # never half on cpu
+        ("fp16", "cpu", False),  # cpu half is slow/unsupported -> ignored
+        ("fp32", "cpu", False),
+    ],
+)
+def test_use_fp16(precision, device, expected):
+    assert use_fp16(precision, device) is expected
