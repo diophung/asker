@@ -1,0 +1,78 @@
+# GPU build of the CLIP service (ADR-013) — identical to ./Dockerfile except it
+# installs the CUDA build of torch instead of the CPU build. Build context is
+# services/clip (no protobuf dependency):
+#   docker build -f services/clip/Dockerfile.cuda services/clip
+#
+# REQUIREMENTS ON THE HOST (the RTX 3090 box, HOST B):
+#   - the NVIDIA Container Toolkit installed, and a driver new enough for the CUDA
+#     channel below (cu126 => CUDA 12.6 => driver R560+). The GPU is exposed to
+#     the container via compose deploy.resources.reservations.devices (Compose v2).
+#   - The CUDA RUNTIME libraries ship INSIDE the torch/torchvision wheels, so this
+#     image stays on python:3.12-slim — no nvidia/cuda base image needed.
+#
+# CUDA CHANNEL: the RTX 3090 is Ampere (compute capability sm_86), covered by every
+# modern CUDA build. The default is cu126 because torch==2.12.0 (the pin in
+# requirements.txt) is published as 2.12.0+cu126 there (cu124 tops out at 2.6.0, so
+# this CANNOT be cu124). To target an OLDER driver you must move the channel AND the
+# torch version together (e.g. --build-arg TORCH_CUDA_CHANNEL=cu121 needs a torch the
+# cu121 channel actually has, ~2.5.1). The build below FAILS LOUDLY if the resolved
+# torch is not the channel-matched +cuNNN wheel (so a silent CPU/CUDA-13 PyPI
+# fallback can never ship). Sanity-check a built image with:
+#   docker run --rm --gpus all <img> python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# torch + torchvision CUDA wheels live on the PyTorch CUDA index; the wheels bundle
+# the CUDA runtime (cudnn/cublas/...), so no CUDA base image is required. Using
+# --extra-index-url (not --index-url) lets open_clip's torchVISION dep also resolve
+# to the matching +cuNNN wheel from the channel, while open_clip/pillow/numpy come
+# from PyPI — exactly how the CPU Dockerfile resolves torch+cpu/torchvision+cpu.
+# A +cuNNN local version sorts ABOVE the plain PyPI version, so pip prefers it.
+ARG TORCH_CUDA_CHANNEL=cu126
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/${TORCH_CUDA_CHANNEL} \
+    -r requirements.txt
+
+# Deterministic guard: fail the BUILD (not the 3090 deploy) unless torch is the
+# channel-matched CUDA wheel. The PyPI fallback wheel has no local tag ("2.12.0")
+# and ships CUDA 13; only the channel wheel carries "+${TORCH_CUDA_CHANNEL}".
+RUN python -c "import torch, torchvision, sys; \
+v = torch.__version__; \
+print('torch', v, 'cuda', torch.version.cuda, 'torchvision', torchvision.__version__); \
+sys.exit(0 if '+${TORCH_CUDA_CHANNEL}' in v else 1)"
+
+COPY clip/ /app/clip/
+
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    # open_clip / huggingface_hub cache; mount a volume here to persist weights.
+    HF_HOME=/home/nonroot/.cache/huggingface \
+    CLIP_PORT=":9800" \
+    # This image is for GPU hosts: select cuda explicitly. The encoder still
+    # downgrades to cpu (with a warning) if no CUDA device is visible, so a
+    # misplaced run degrades instead of crashing.
+    CLIP_DEVICE="cuda" \
+    CLIP_PRECISION="auto"
+
+# Non-root (uid matches distroless nonroot for consistency across services).
+RUN groupadd --gid 65532 nonroot && \
+    useradd --uid 65532 --gid 65532 --create-home --shell /usr/sbin/nologin nonroot && \
+    mkdir -p /home/nonroot/.cache && chown -R nonroot:nonroot /home/nonroot/.cache
+USER nonroot
+
+# Bake the CLIP ViT-B-32/openai weights into the image at build time (downloaded
+# to CPU during the build — no GPU needed at build time) so a fresh deploy/CI
+# container is ready in seconds. Matches the default CLIP_MODEL/CLIP_PRETRAINED.
+RUN for i in 1 2 3 4 5 6; do \
+      python -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')" && break; \
+      if [ "$i" = 6 ]; then echo "clip prefetch failed after 6 attempts" >&2; exit 1; fi; \
+      echo "clip prefetch attempt $i failed; retrying in $((i*20))s"; sleep $((i*20)); \
+    done
+
+EXPOSE 9800
+
+# Compose healthcheck: ["CMD", "python", "-m", "clip.main", "-healthcheck"]
+ENTRYPOINT ["python", "-m", "clip.main"]

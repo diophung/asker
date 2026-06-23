@@ -19,6 +19,16 @@ DEFAULT_PRETRAINED = "openai"
 DEFAULT_DIM = 512
 DEFAULT_PORT = 9800
 
+# Compute placement (ADR-013). "auto" picks cuda when a CUDA device is visible
+# (the RTX 3090 deployment) and falls back to cpu otherwise (the emulated dev
+# Mac / CI) — so the same image runs in both places. "precision" governs fp16:
+# "auto" uses half precision on cuda (≈2x throughput, half the VRAM) and float32
+# on cpu (cpu half is slow/unsupported for several ops).
+DEFAULT_DEVICE = "auto"
+DEFAULT_PRECISION = "auto"
+ALLOWED_DEVICES = ("auto", "cpu", "cuda")
+ALLOWED_PRECISIONS = ("auto", "fp16", "fp32")
+
 # Request bounds: cap how much work one call can ask for. The image arm is the
 # expensive one (decode + preprocess + forward pass), so it gets a tighter cap.
 DEFAULT_MAX_TEXTS = 64
@@ -40,6 +50,8 @@ class Config:
     model: str = DEFAULT_MODEL
     pretrained: str = DEFAULT_PRETRAINED
     clip_dim: int = DEFAULT_DIM
+    device: str = DEFAULT_DEVICE
+    precision: str = DEFAULT_PRECISION
     host: str = "0.0.0.0"  # noqa: S104 — container-internal listener (ADR-009 trust boundary)
     port: int = DEFAULT_PORT
     max_texts: int = DEFAULT_MAX_TEXTS
@@ -60,18 +72,33 @@ class Config:
         model = env.get("CLIP_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
         pretrained = env.get("CLIP_PRETRAINED", DEFAULT_PRETRAINED).strip() or DEFAULT_PRETRAINED
         clip_dim = _positive_int(env, "CLIP_DIM", DEFAULT_DIM)
+        device = _choice(env, "CLIP_DEVICE", DEFAULT_DEVICE, ALLOWED_DEVICES)
+        precision = _choice(env, "CLIP_PRECISION", DEFAULT_PRECISION, ALLOWED_PRECISIONS)
         host, port = _addr_from_env(env)
 
         return cls(
             model=model,
             pretrained=pretrained,
             clip_dim=clip_dim,
+            device=device,
+            precision=precision,
             host=host,
             port=port,
             max_texts=_positive_int(env, "CLIP_MAX_TEXTS", DEFAULT_MAX_TEXTS),
             max_images=_positive_int(env, "CLIP_MAX_IMAGES", DEFAULT_MAX_IMAGES),
             max_body_bytes=_positive_int(env, "CLIP_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),
         )
+
+
+def _choice(env: Mapping[str, str], key: str, default: str, allowed: tuple[str, ...]) -> str:
+    """Resolve a lower-cased enum env var, failing fast on an unknown value."""
+    raw = env.get(key)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value not in allowed:
+        raise ConfigError(f"{key} must be one of {allowed}, got {raw!r}")
+    return value
 
 
 def _positive_int(env: Mapping[str, str], key: str, default: int) -> int:

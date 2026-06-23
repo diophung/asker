@@ -1,0 +1,39 @@
+# GPU overlay for the HOST B (RTX 3090) deployment — see the two-host optimization
+# plan, rollout step 4 (CUDA CLIP: the reversible, no-migration first win).
+#
+# This is a compose OVERRIDE: it layers on top of docker-compose.yml and only
+# changes what differs on a GPU host. Run it where the 3090 + NVIDIA Container
+# Toolkit live:
+#
+#   docker compose -f docker-compose.yml -f compose.gpu.yml up -d clip
+#
+# Verify the GPU is actually used (not a silent CPU fallback):
+#   docker compose logs clip | grep '"device"'        # -> "device":"cuda","fp16":true
+#   docker exec asker-clip-1 python -c "import torch; print(torch.cuda.is_available())"
+#
+# Requires Compose v2 (`docker compose`, not legacy v1): the GPU reservation under
+# `deploy.resources.reservations.devices` is silently ignored by v1.
+#
+# SCOPE: CLIP only for now. Moving `tei` (bge-m3@1024) and `enrich`
+# (faster-whisper large-v3) to this host are later rollout steps and require the
+# embedding-dim migration + mTLS on the media hop respectively — do not add them
+# here until those gates are met.
+services:
+  clip:
+    build:
+      context: ../../services/clip
+      dockerfile: Dockerfile.cuda
+      # args:
+      #   # cu126 is the default (torch 2.12.0 is published as 2.12.0+cu126). For an
+      #   # older driver, move channel AND torch version together (cu121 => ~torch 2.5.1).
+      #   TORCH_CUDA_CHANNEL: cu126
+    environment:
+      CLIP_DEVICE: cuda          # explicit; encoder still downgrades to cpu (warned) if no GPU
+      CLIP_PRECISION: auto       # => fp16 on cuda (≈2x throughput, half the VRAM)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
