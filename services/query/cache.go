@@ -70,7 +70,7 @@ func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest, clipArm bool,
 	writeTimestampField(req.GetFromDate() != nil, req.GetFromDate().GetSeconds(), req.GetFromDate().GetNanos())
 	writeTimestampField(req.GetToDate() != nil, req.GetToDate().GetSeconds(), req.GetToDate().GetNanos())
 	b.WriteString(req.GetParticipant())
-	fmt.Fprintf(&b, "\x1f%d\x1f%d\x1f%d\x1f%t\x1f%d", req.GetLimit(), req.GetOffset(), req.GetMode(), clipArm, profileVersion)
+	fmt.Fprintf(&b, "\x1f%d\x1f%d\x1f%d\x1f%t\x1f%d\x1f%t", req.GetLimit(), req.GetOffset(), req.GetMode(), clipArm, profileVersion, req.GetRerank())
 
 	sum := sha256.Sum256([]byte(b.String()))
 	return "q:" + string(tenant) + ":" + hex.EncodeToString(sum[:])

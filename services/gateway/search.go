@@ -174,6 +174,17 @@ func parseSearchRequest(q url.Values, maxQueryChars int) (*queryv1.SearchRequest
 		return nil, fmt.Errorf("invalid debug %q: want 1 or 0", q.Get("debug"))
 	}
 
+	// rerank=1 requests the cross-encoder rerank pass. Honored only for HYBRID
+	// with text and when the query service has a reranker wired; otherwise it is
+	// ignored, and a reranker failure degrades to the fused order.
+	switch q.Get("rerank") {
+	case "", "0", "false":
+	case "1", "true":
+		req.Rerank = true
+	default:
+		return nil, fmt.Errorf("invalid rerank %q: want 1 or 0", q.Get("rerank"))
+	}
+
 	return req, nil
 }
 

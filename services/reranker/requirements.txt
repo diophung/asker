@@ -1,0 +1,12 @@
+# Runtime dependencies for services/reranker (pinned). The HTTP layer uses the
+# stdlib (http.server) — no web framework. The cross-encoder is served via
+# sentence-transformers over torch.
+#
+# torch is installed from the PyTorch wheel index (CPU by default; the two-host
+# GPU deploy overrides TORCH_INDEX_URL to a CUDA index at build time — see the
+# Dockerfile). On Apple Silicon, torch's MPS backend ships in the default wheel,
+# so RERANKER_DEVICE=mps works with the CPU-index build.
+sentence-transformers==5.1.0
+# Floor torch >= 2.13.0: torch.jit.script memory corruption (GHSA-rrmf-rvhw-rf47).
+torch==2.13.0
+numpy==1.26.4

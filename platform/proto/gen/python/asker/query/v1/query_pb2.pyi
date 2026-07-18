@@ -33,7 +33,7 @@ class CountResponse(_message.Message):
     def __init__(self, indexed: _Optional[int] = ...) -> None: ...
 
 class SearchRequest(_message.Message):
-    __slots__ = ("query", "doc_types", "from_date", "to_date", "participant", "limit", "offset", "mode", "debug")
+    __slots__ = ("query", "doc_types", "from_date", "to_date", "participant", "limit", "offset", "mode", "debug", "rerank")
     QUERY_FIELD_NUMBER: _ClassVar[int]
     DOC_TYPES_FIELD_NUMBER: _ClassVar[int]
     FROM_DATE_FIELD_NUMBER: _ClassVar[int]
@@ -43,6 +43,7 @@ class SearchRequest(_message.Message):
     OFFSET_FIELD_NUMBER: _ClassVar[int]
     MODE_FIELD_NUMBER: _ClassVar[int]
     DEBUG_FIELD_NUMBER: _ClassVar[int]
+    RERANK_FIELD_NUMBER: _ClassVar[int]
     query: str
     doc_types: _containers.RepeatedScalarFieldContainer[_document_pb2.DocType]
     from_date: _timestamp_pb2.Timestamp
@@ -52,7 +53,8 @@ class SearchRequest(_message.Message):
     offset: int
     mode: SearchMode
     debug: bool
-    def __init__(self, query: _Optional[str] = ..., doc_types: _Optional[_Iterable[_Union[_document_pb2.DocType, str]]] = ..., from_date: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., to_date: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., participant: _Optional[str] = ..., limit: _Optional[int] = ..., offset: _Optional[int] = ..., mode: _Optional[_Union[SearchMode, str]] = ..., debug: _Optional[bool] = ...) -> None: ...
+    rerank: bool
+    def __init__(self, query: _Optional[str] = ..., doc_types: _Optional[_Iterable[_Union[_document_pb2.DocType, str]]] = ..., from_date: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., to_date: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., participant: _Optional[str] = ..., limit: _Optional[int] = ..., offset: _Optional[int] = ..., mode: _Optional[_Union[SearchMode, str]] = ..., debug: _Optional[bool] = ..., rerank: _Optional[bool] = ...) -> None: ...
 
 class SearchResponse(_message.Message):
     __slots__ = ("hits", "total", "degraded", "took_ms", "cached")

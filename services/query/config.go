@@ -65,6 +65,28 @@ type queryConfig struct {
 	// recall for the re-ranker, more work. Clamped to [maxLimit, 1000].
 	CandidateCap int `env:"QUERY_CANDIDATE_CAP" envDefault:"100"`
 
+	// --- Cross-encoder reranking (Phase 1) ----------------------------------
+
+	// RerankEnabled wires the reranker client (main.go). When false the reranker
+	// is not constructed and the SearchRequest.rerank flag is ignored — a clean
+	// rollback switch, and the default so existing deployments are unchanged.
+	RerankEnabled bool `env:"QUERY_RERANK_ENABLED" envDefault:"false"`
+	// RerankURL is the reranker model service (bge-reranker-v2-m3 by default),
+	// analogous to TEI/CLIP: it scores (query, candidate) pairs.
+	RerankURL string `env:"QUERY_RERANK_URL" envDefault:"http://reranker:9900"`
+	// RerankTimeout bounds the reranker /rerank call; on expiry the rerank pass
+	// is skipped (degraded="rerank-unavailable") — retrieval is unaffected
+	// (never fail closed). Default fits the ~300ms/50-candidate budget with slack.
+	RerankTimeout time.Duration `env:"QUERY_RERANK_TIMEOUT" envDefault:"1s"`
+	// RerankCandidates is how many of the top fused candidates are handed to the
+	// cross-encoder (rerank depth). The reranked set is what the page is drawn
+	// from. Larger => better recall for the reranker, more per-query cost.
+	RerankCandidates int `env:"QUERY_RERANK_CANDIDATES" envDefault:"50"`
+	// RerankDocChars caps how much of each candidate's text is sent to the
+	// reranker (cross-encoders truncate long inputs anyway; this bounds payload
+	// and latency).
+	RerankDocChars int `env:"QUERY_RERANK_DOC_CHARS" envDefault:"1024"`
+
 	// Empty endpoint means telemetry is a no-op.
 	OTLPEndpoint string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:""`
 }
@@ -97,6 +119,22 @@ func loadConfig() (queryConfig, error) {
 	}
 	if cfg.CandidateCap > 1000 {
 		cfg.CandidateCap = 1000
+	}
+	if cfg.RerankEnabled {
+		if cfg.RerankTimeout <= 0 {
+			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_TIMEOUT must be > 0 when QUERY_RERANK_ENABLED, got %s", cfg.RerankTimeout)
+		}
+		if cfg.RerankCandidates <= 0 {
+			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_CANDIDATES must be > 0 when QUERY_RERANK_ENABLED, got %d", cfg.RerankCandidates)
+		}
+		if cfg.RerankDocChars <= 0 {
+			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_DOC_CHARS must be > 0 when QUERY_RERANK_ENABLED, got %d", cfg.RerankDocChars)
+		}
+		// The reranker reorders the top RerankCandidates of the retrieved
+		// candidate pool, so the pool must be at least that deep.
+		if cfg.CandidateCap < cfg.RerankCandidates {
+			cfg.CandidateCap = cfg.RerankCandidates
+		}
 	}
 	return cfg, nil
 }

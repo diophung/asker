@@ -218,5 +218,8 @@ func normalizeRequest(req *queryv1.SearchRequest) *queryv1.SearchRequest {
 		// contributions); it never affects ranking but must survive normalization
 		// so the personalized re-rank can honor it.
 		Debug: req.GetDebug(),
+		// Rerank asks for the cross-encoder rerank pass; it must survive
+		// normalization so the pipeline (and the cache key) honor it.
+		Rerank: req.GetRerank(),
 	}
 }

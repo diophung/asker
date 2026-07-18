@@ -47,12 +47,25 @@ type server struct {
 	rrfEnabled   bool
 	candidateCap int32
 
+	// reranker, when non-nil, turns ON the cross-encoder rerank pass (Phase 1):
+	// the top rerankCandidates fused candidates are re-scored by the reranker
+	// before the final ordering. nil (the newServer default) leaves the pipeline
+	// unchanged. rerankCandidates is the rerank depth; rerankDocChars caps the
+	// passage sent per candidate. main.go wires these from config when
+	// QUERY_RERANK_ENABLED. A request opts in per-call via SearchRequest.rerank.
+	reranker         reranker
+	rerankCandidates int
+	rerankDocChars   int
+
 	// cacheWarnOnce gates the loud log for a down Redis: the contract is
 	// "skip silently (log once)" — first failure warns, the rest are debug.
 	cacheWarnOnce sync.Once
 	// clipWarnOnce gates the loud log for a down clip service: degradation is
 	// "log once" (ADR-006) — first failure warns, the rest are debug.
 	clipWarnOnce sync.Once
+	// rerankWarnOnce gates the loud log for a down reranker service: degradation
+	// is "log once" — first failure warns, the rest are debug.
+	rerankWarnOnce sync.Once
 }
 
 func newServer(embed embedder, clip clipEmbedder, vespa vespaSearcher, cache resultCache, logger *slog.Logger) *server {
@@ -112,6 +125,14 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	// with a CLIP-less one) and decides whether stage 4b runs.
 	mode := norm.GetMode()
 	clipPlanned := plan.Text != "" && mode == queryv1.SearchMode_HYBRID
+
+	// The cross-encoder rerank pass (Phase 1) fires only when a reranker is
+	// wired, the caller opted in (SearchRequest.rerank), and the request is a
+	// HYBRID search with residual query text (there is nothing to re-score for a
+	// pure filter/schedule lookup). It re-scores the top fused candidates before
+	// the final ordering; a reranker failure degrades to the fused order.
+	rerankActive := s.reranker != nil && norm.GetRerank() &&
+		mode == queryv1.SearchMode_HYBRID && plan.Text != ""
 
 	// Stage 3: result cache. A clean hit serves immediately; a miss (including a
 	// Redis outage, which degrades to "no cache") falls through to retrieval.
@@ -195,6 +216,20 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		// enabled) at offset 0, then re-rank to the page by the combined score.
 		var candidates vespaResult
 		candidates, err = s.retrievePersonalized(ctx, logger, base, plan, mode, vector, clipActive, clipVector, &degradedReasons)
+		if err == nil && rerankActive {
+			// Re-score the top fused candidates with the cross-encoder and reorder
+			// them; personalizeRank then reads the improved relevance via its
+			// Semantic feature (Hit.Score). A reranker failure drops the pass.
+			stageRerank := time.Now()
+			reranked, rErr := applyRerank(ctx, s.reranker, plan.Text, candidates.Hits, s.rerankCandidates, s.rerankDocChars)
+			logger.Debug("stage rerank", "took", time.Since(stageRerank), "error", rErr != nil, "candidates", len(candidates.Hits))
+			if rErr != nil {
+				s.logRerankError(logger, rErr)
+				degradedReasons = addDegraded(degradedReasons, degradedRerankUnavailable)
+			} else {
+				candidates.Hits = reranked
+			}
+		}
 		if err == nil {
 			halfLife := s.recencyHalfLife
 			if halfLife <= 0 {
@@ -504,5 +539,19 @@ func (s *server) logClipError(logger *slog.Logger, err error) {
 	})
 	if !warned {
 		logger.Debug("clip text->image arm unavailable", "error", err)
+	}
+}
+
+// logRerankError reports a dropped cross-encoder rerank pass: loud once (the
+// reranker service is unavailable or misbehaving), quiet thereafter. The fused
+// retrieval order still serves (Phase 1: never fail closed on rerank).
+func (s *server) logRerankError(logger *slog.Logger, err error) {
+	warned := false
+	s.rerankWarnOnce.Do(func() {
+		warned = true
+		logger.Warn("cross-encoder rerank unavailable; serving fused order", "error", err)
+	})
+	if !warned {
+		logger.Debug("cross-encoder rerank unavailable", "error", err)
 	}
 }

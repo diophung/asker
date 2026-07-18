@@ -249,6 +249,13 @@ services:
       QUERY_PERSONALIZATION_ENABLED: ${QUERY_PERSONALIZATION_ENABLED:-true}
       QUERY_HYBRID_RRF: ${QUERY_HYBRID_RRF:-true}
       QUERY_CANDIDATE_CAP: ${QUERY_CANDIDATE_CAP:-100}
+      # Cross-encoder rerank pass (Phase 1). OFF by default so the heavy reranker
+      # model stays opt-in on small dev VMs; enable with the `rerank` compose
+      # profile (make rerank-up) plus QUERY_RERANK_ENABLED=true. The query service
+      # degrades to the fused order if the reranker is down, so it never
+      # hard-depends on it (no depends_on entry).
+      QUERY_RERANK_ENABLED: ${QUERY_RERANK_ENABLED:-false}
+      QUERY_RERANK_URL: "http://reranker:9900"
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
     depends_on:
       vespa:
@@ -284,6 +291,36 @@ services:
         - python
         - -c
         - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9800/health', timeout=2).status==200 else 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      # Model download + load on first boot.
+      start_period: 10m
+
+  reranker:
+    # Cross-encoder reranker service (Phase 1): scores (query, candidate) pairs
+    # to reorder the top fused retrieval candidates. OPT-IN — the `rerank` profile
+    # keeps it out of `make dev-up` because the model (bge-reranker-v2-m3, ~2.3GB)
+    # is heavy for small dev VMs. Start with `make rerank-up` and set
+    # QUERY_RERANK_ENABLED=true (deploy/compose/.env) so the query service uses it.
+    profiles: ["rerank"]
+    build:
+      context: ../../services/reranker
+      dockerfile: Dockerfile
+    environment:
+      RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      RERANKER_DEVICE: ${RERANKER_DEVICE:-auto}
+      RERANKER_PORT: ":9900"
+    volumes:
+      # HF weights cache at the image's nonroot HOME (HF_HOME under it), so the
+      # reranker model persists across restarts instead of re-downloading.
+      - reranker-cache:/home/nonroot/.cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9900/health', timeout=2).status==200 else 1)"
       interval: 15s
       timeout: 10s
       retries: 30
@@ -556,4 +593,5 @@ volumes:
   # connector-hub blob store). Vault replaces this in M4.
   kek-keys:
   clip-cache: # open_clip model weights (M3)
+  reranker-cache: # bge-reranker-v2-m3 cross-encoder weights (Phase 1, opt-in)
   enrich-hf-cache: # faster-whisper (whisper-tiny) weights (M3)

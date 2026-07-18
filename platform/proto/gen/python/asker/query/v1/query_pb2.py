@@ -26,7 +26,7 @@ from asker.v1 import document_pb2 as asker_dot_v1_dot_document__pb2
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1a\x61sker/query/v1/query.proto\x12\x0e\x61sker.query.v1\x1a\x17\x61sker/v1/document.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x0e\n\x0c\x43ountRequest\")\n\rCountResponse\x12\x18\n\x07indexed\x18\x01 \x01(\x03R\x07indexed\"\xd9\x02\n\rSearchRequest\x12\x14\n\x05query\x18\x01 \x01(\tR\x05query\x12.\n\tdoc_types\x18\x02 \x03(\x0e\x32\x11.asker.v1.DocTypeR\x08\x64ocTypes\x12\x37\n\tfrom_date\x18\x03 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08\x66romDate\x12\x33\n\x07to_date\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x06toDate\x12 \n\x0bparticipant\x18\x05 \x01(\tR\x0bparticipant\x12\x14\n\x05limit\x18\x06 \x01(\x05R\x05limit\x12\x16\n\x06offset\x18\x07 \x01(\x05R\x06offset\x12.\n\x04mode\x18\x08 \x01(\x0e\x32\x1a.asker.query.v1.SearchModeR\x04mode\x12\x14\n\x05\x64\x65\x62ug\x18\t \x01(\x08R\x05\x64\x65\x62ug\"\x9c\x01\n\x0eSearchResponse\x12\'\n\x04hits\x18\x01 \x03(\x0b\x32\x13.asker.query.v1.HitR\x04hits\x12\x14\n\x05total\x18\x02 \x01(\x03R\x05total\x12\x1a\n\x08\x64\x65graded\x18\x03 \x01(\tR\x08\x64\x65graded\x12\x17\n\x07took_ms\x18\x04 \x01(\x03R\x06tookMs\x12\x16\n\x06\x63\x61\x63hed\x18\x05 \x01(\x08R\x06\x63\x61\x63hed\"\xa7\x05\n\x03Hit\x12\x15\n\x06\x64oc_id\x18\x01 \x01(\tR\x05\x64ocId\x12!\n\x0c\x63onnector_id\x18\x02 \x01(\tR\x0b\x63onnectorId\x12%\n\x04type\x18\x03 \x01(\x0e\x32\x11.asker.v1.DocTypeR\x04type\x12\x14\n\x05title\x18\x04 \x01(\tR\x05title\x12\x18\n\x07snippet\x18\x05 \x01(\tR\x07snippet\x12\x14\n\x05score\x18\x06 \x01(\x01R\x05score\x12\x34\n\x07\x63reated\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x07\x63reated\x12\x36\n\x08modified\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08modified\x12=\n\x08metadata\x18\t \x03(\x0b\x32!.asker.query.v1.Hit.MetadataEntryR\x08metadata\x12\x19\n\x08start_ms\x18\n \x01(\x03R\x07startMs\x12\x15\n\x06\x65nd_ms\x18\x0b \x01(\x03R\x05\x65ndMs\x12\x1a\n\x08modality\x18\x0c \x01(\tR\x08modality\x12#\n\rthumbnail_key\x18\r \x01(\tR\x0cthumbnailKey\x12 \n\x0b\x65xplanation\x18\x0e \x01(\tR\x0b\x65xplanation\x12=\n\x08\x66\x65\x61tures\x18\x0f \x03(\x0b\x32!.asker.query.v1.Hit.FeaturesEntryR\x08\x66\x65\x61tures\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x1a;\n\rFeaturesEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\x01R\x05value:\x02\x38\x01*N\n\nSearchMode\x12\x1b\n\x17SEARCH_MODE_UNSPECIFIED\x10\x00\x12\n\n\x06HYBRID\x10\x01\x12\x0b\n\x07KEYWORD\x10\x02\x12\n\n\x06VECTOR\x10\x03\x32\x9d\x01\n\x0cQueryService\x12G\n\x06Search\x12\x1d.asker.query.v1.SearchRequest\x1a\x1e.asker.query.v1.SearchResponse\x12\x44\n\x05\x43ount\x12\x1c.asker.query.v1.CountRequest\x1a\x1d.asker.query.v1.CountResponseBEZCgithub.com/asker/asker/platform/proto/gen/go/asker/query/v1;queryv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1a\x61sker/query/v1/query.proto\x12\x0e\x61sker.query.v1\x1a\x17\x61sker/v1/document.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x0e\n\x0c\x43ountRequest\")\n\rCountResponse\x12\x18\n\x07indexed\x18\x01 \x01(\x03R\x07indexed\"\xf1\x02\n\rSearchRequest\x12\x14\n\x05query\x18\x01 \x01(\tR\x05query\x12.\n\tdoc_types\x18\x02 \x03(\x0e\x32\x11.asker.v1.DocTypeR\x08\x64ocTypes\x12\x37\n\tfrom_date\x18\x03 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08\x66romDate\x12\x33\n\x07to_date\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x06toDate\x12 \n\x0bparticipant\x18\x05 \x01(\tR\x0bparticipant\x12\x14\n\x05limit\x18\x06 \x01(\x05R\x05limit\x12\x16\n\x06offset\x18\x07 \x01(\x05R\x06offset\x12.\n\x04mode\x18\x08 \x01(\x0e\x32\x1a.asker.query.v1.SearchModeR\x04mode\x12\x14\n\x05\x64\x65\x62ug\x18\t \x01(\x08R\x05\x64\x65\x62ug\x12\x16\n\x06rerank\x18\n \x01(\x08R\x06rerank\"\x9c\x01\n\x0eSearchResponse\x12\'\n\x04hits\x18\x01 \x03(\x0b\x32\x13.asker.query.v1.HitR\x04hits\x12\x14\n\x05total\x18\x02 \x01(\x03R\x05total\x12\x1a\n\x08\x64\x65graded\x18\x03 \x01(\tR\x08\x64\x65graded\x12\x17\n\x07took_ms\x18\x04 \x01(\x03R\x06tookMs\x12\x16\n\x06\x63\x61\x63hed\x18\x05 \x01(\x08R\x06\x63\x61\x63hed\"\xa7\x05\n\x03Hit\x12\x15\n\x06\x64oc_id\x18\x01 \x01(\tR\x05\x64ocId\x12!\n\x0c\x63onnector_id\x18\x02 \x01(\tR\x0b\x63onnectorId\x12%\n\x04type\x18\x03 \x01(\x0e\x32\x11.asker.v1.DocTypeR\x04type\x12\x14\n\x05title\x18\x04 \x01(\tR\x05title\x12\x18\n\x07snippet\x18\x05 \x01(\tR\x07snippet\x12\x14\n\x05score\x18\x06 \x01(\x01R\x05score\x12\x34\n\x07\x63reated\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x07\x63reated\x12\x36\n\x08modified\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x08modified\x12=\n\x08metadata\x18\t \x03(\x0b\x32!.asker.query.v1.Hit.MetadataEntryR\x08metadata\x12\x19\n\x08start_ms\x18\n \x01(\x03R\x07startMs\x12\x15\n\x06\x65nd_ms\x18\x0b \x01(\x03R\x05\x65ndMs\x12\x1a\n\x08modality\x18\x0c \x01(\tR\x08modality\x12#\n\rthumbnail_key\x18\r \x01(\tR\x0cthumbnailKey\x12 \n\x0b\x65xplanation\x18\x0e \x01(\tR\x0b\x65xplanation\x12=\n\x08\x66\x65\x61tures\x18\x0f \x03(\x0b\x32!.asker.query.v1.Hit.FeaturesEntryR\x08\x66\x65\x61tures\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x1a;\n\rFeaturesEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\x01R\x05value:\x02\x38\x01*N\n\nSearchMode\x12\x1b\n\x17SEARCH_MODE_UNSPECIFIED\x10\x00\x12\n\n\x06HYBRID\x10\x01\x12\x0b\n\x07KEYWORD\x10\x02\x12\n\n\x06VECTOR\x10\x03\x32\x9d\x01\n\x0cQueryService\x12G\n\x06Search\x12\x1d.asker.query.v1.SearchRequest\x1a\x1e.asker.query.v1.SearchResponse\x12\x44\n\x05\x43ount\x12\x1c.asker.query.v1.CountRequest\x1a\x1d.asker.query.v1.CountResponseBEZCgithub.com/asker/asker/platform/proto/gen/go/asker/query/v1;queryv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,22 +38,22 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_HIT_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_HIT_FEATURESENTRY']._loaded_options = None
   _globals['_HIT_FEATURESENTRY']._serialized_options = b'8\001'
-  _globals['_SEARCHMODE']._serialized_start=1352
-  _globals['_SEARCHMODE']._serialized_end=1430
+  _globals['_SEARCHMODE']._serialized_start=1376
+  _globals['_SEARCHMODE']._serialized_end=1454
   _globals['_COUNTREQUEST']._serialized_start=104
   _globals['_COUNTREQUEST']._serialized_end=118
   _globals['_COUNTRESPONSE']._serialized_start=120
   _globals['_COUNTRESPONSE']._serialized_end=161
   _globals['_SEARCHREQUEST']._serialized_start=164
-  _globals['_SEARCHREQUEST']._serialized_end=509
-  _globals['_SEARCHRESPONSE']._serialized_start=512
-  _globals['_SEARCHRESPONSE']._serialized_end=668
-  _globals['_HIT']._serialized_start=671
-  _globals['_HIT']._serialized_end=1350
-  _globals['_HIT_METADATAENTRY']._serialized_start=1230
-  _globals['_HIT_METADATAENTRY']._serialized_end=1289
-  _globals['_HIT_FEATURESENTRY']._serialized_start=1291
-  _globals['_HIT_FEATURESENTRY']._serialized_end=1350
-  _globals['_QUERYSERVICE']._serialized_start=1433
-  _globals['_QUERYSERVICE']._serialized_end=1590
+  _globals['_SEARCHREQUEST']._serialized_end=533
+  _globals['_SEARCHRESPONSE']._serialized_start=536
+  _globals['_SEARCHRESPONSE']._serialized_end=692
+  _globals['_HIT']._serialized_start=695
+  _globals['_HIT']._serialized_end=1374
+  _globals['_HIT_METADATAENTRY']._serialized_start=1254
+  _globals['_HIT_METADATAENTRY']._serialized_end=1313
+  _globals['_HIT_FEATURESENTRY']._serialized_start=1315
+  _globals['_HIT_FEATURESENTRY']._serialized_end=1374
+  _globals['_QUERYSERVICE']._serialized_start=1457
+  _globals['_QUERYSERVICE']._serialized_end=1614
 # @@protoc_insertion_point(module_scope)

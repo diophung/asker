@@ -1,0 +1,7 @@
+# The real golden set can contain private queries from your own corpus — keep it
+# local. The committed template is golden/*.example.jsonl.
+golden/golden.jsonl
+golden/*.local.jsonl
+
+# Bearer-token files for the eval runner must never be committed.
+tokens*.json

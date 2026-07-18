@@ -181,7 +181,14 @@ type SearchRequest struct {
 	// debug, when true, asks the server to include per-hit feature contributions
 	// (Hit.features) for observability. The gateway sets it from ?debug=1; it
 	// never affects ranking, only what is reported.
-	Debug         bool `protobuf:"varint,9,opt,name=debug,proto3" json:"debug,omitempty"`
+	Debug bool `protobuf:"varint,9,opt,name=debug,proto3" json:"debug,omitempty"`
+	// rerank, when true, applies the cross-encoder reranker to the top fused
+	// candidates before the final ordering (a higher-precision relevance pass).
+	// Only honored for HYBRID with residual text and when the server has a
+	// reranker wired (QUERY_RERANK_ENABLED); otherwise ignored. A reranker
+	// failure degrades to the fused order (degraded="rerank-unavailable"), never
+	// an error. The gateway sets it from ?rerank=1.
+	Rerank        bool `protobuf:"varint,10,opt,name=rerank,proto3" json:"rerank,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -275,6 +282,13 @@ func (x *SearchRequest) GetMode() SearchMode {
 func (x *SearchRequest) GetDebug() bool {
 	if x != nil {
 		return x.Debug
+	}
+	return false
+}
+
+func (x *SearchRequest) GetRerank() bool {
+	if x != nil {
+		return x.Rerank
 	}
 	return false
 }
@@ -534,7 +548,7 @@ const file_asker_query_v1_query_proto_rawDesc = "" +
 	"\x1aasker/query/v1/query.proto\x12\x0easker.query.v1\x1a\x17asker/v1/document.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x0e\n" +
 	"\fCountRequest\")\n" +
 	"\rCountResponse\x12\x18\n" +
-	"\aindexed\x18\x01 \x01(\x03R\aindexed\"\xd9\x02\n" +
+	"\aindexed\x18\x01 \x01(\x03R\aindexed\"\xf1\x02\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12.\n" +
 	"\tdoc_types\x18\x02 \x03(\x0e2\x11.asker.v1.DocTypeR\bdocTypes\x127\n" +
@@ -544,7 +558,9 @@ const file_asker_query_v1_query_proto_rawDesc = "" +
 	"\x05limit\x18\x06 \x01(\x05R\x05limit\x12\x16\n" +
 	"\x06offset\x18\a \x01(\x05R\x06offset\x12.\n" +
 	"\x04mode\x18\b \x01(\x0e2\x1a.asker.query.v1.SearchModeR\x04mode\x12\x14\n" +
-	"\x05debug\x18\t \x01(\bR\x05debug\"\x9c\x01\n" +
+	"\x05debug\x18\t \x01(\bR\x05debug\x12\x16\n" +
+	"\x06rerank\x18\n" +
+	" \x01(\bR\x06rerank\"\x9c\x01\n" +
 	"\x0eSearchResponse\x12'\n" +
 	"\x04hits\x18\x01 \x03(\v2\x13.asker.query.v1.HitR\x04hits\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x03R\x05total\x12\x1a\n" +

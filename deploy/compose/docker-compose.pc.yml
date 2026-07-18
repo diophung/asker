@@ -73,8 +73,8 @@ services:
       dockerfile: Dockerfile
       args:
         # CUDA torch wheels (bundle their own CUDA libs; no CUDA base image
-        # needed). cu126 is the index that ships torch==2.12.0 (the version
-        # pinned in requirements.txt); cu124 does NOT have 2.12.0. CUDA 12.6
+        # needed). cu126 is the index that ships torch==2.13.0 (the version
+        # pinned in requirements.txt); cu124 does NOT have 2.13.0. CUDA 12.6
         # runs fine on the RTX 3090 (Ampere) with a recent driver.
         TORCH_INDEX_URL: ${CLIP_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}
     environment:

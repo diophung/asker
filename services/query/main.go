@@ -111,6 +111,17 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 		logger.Info("personalization enabled", "rrf", cfg.HybridRRF, "candidate_cap", cfg.CandidateCap)
 	}
 
+	// Cross-encoder reranker (Phase 1): wire the client only when enabled, so
+	// existing deployments are byte-for-byte unchanged (srv.reranker stays nil).
+	// A request opts in per-call via ?rerank=1; a reranker failure degrades to
+	// the fused order.
+	if cfg.RerankEnabled {
+		srv.reranker = newReranker(cfg.RerankURL, cfg.RerankTimeout)
+		srv.rerankCandidates = cfg.RerankCandidates
+		srv.rerankDocChars = cfg.RerankDocChars
+		logger.Info("reranker enabled", "url", cfg.RerankURL, "candidates", cfg.RerankCandidates, "timeout", cfg.RerankTimeout)
+	}
+
 	// otelgrpc stats handler records RPC-level RED metrics + traces (the M4-noted
 	// gap). It uses the global meter/tracer providers, so it is no-op-safe when
 	// telemetry was initialized without an endpoint. The tenancy interceptor

@@ -168,3 +168,18 @@ load-ingest: ## M5 ingest/freshness load suite (needs k6 + a running stack)
 
 soak: ## M5 soak (SOAK_DURATION default 2h; zero failed + zero data loss; needs k6 + a running stack)
 	SOAK=true SEED_CORPUS=$${SEED_CORPUS:-true} bash tools/load/run-load.sh
+
+# --- Retrieval-quality evaluation ---------------------------------------------
+.PHONY: eval
+
+eval: ## Retrieval eval (Recall@k/nDCG/MRR + latency) vs tools/eval/golden/golden.jsonl; needs a running+seeded stack. Pass EVAL_ARGS="-k 10".
+	go run ./tools/eval $(EVAL_ARGS)
+
+# --- Cross-encoder reranker (Phase 1, opt-in) ---------------------------------
+.PHONY: rerank-up rerank-down
+
+rerank-up: ## Build+start the OPT-IN reranker (bge-reranker-v2-m3). Then set QUERY_RERANK_ENABLED=true in deploy/compose/.env and `docker compose up -d query` to use it.
+	$(COMPOSE) --profile rerank up -d --build reranker
+
+rerank-down: ## Stop and remove the opt-in reranker service (main stack keeps running)
+	$(COMPOSE) --profile rerank stop reranker && $(COMPOSE) --profile rerank rm -f reranker

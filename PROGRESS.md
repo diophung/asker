@@ -17,6 +17,78 @@ Newest entries go first.
 
 ---
 
+## 2026-07-18 — Dependabot: fix all 14 open vulnerabilities (x/crypto + torch)
+
+- Context: GitHub reported 14 open Dependabot alerts on main (7 critical, 2 high, 4 moderate,
+  1 low). They collapse to two root causes: 13× `golang.org/x/crypto < 0.52.0` (go.mod,
+  indirect — SSH agent/cert/auth bypasses, DoS panics) and 1× `torch <= 2.12.1`
+  (`services/clip/requirements.txt`, GHSA-rrmf-rvhw-rf47 torch.jit.script memory corruption).
+- Done: `go get golang.org/x/crypto@v0.52.0` (no transitive bumps needed); `torch==2.13.0` in
+  BOTH `services/clip` and `services/reranker` requirements (reranker wasn't flagged — it's
+  unmerged — but carried the same vulnerable pin); refreshed the five comment sites that
+  documented "cu126 ships torch==2.12.0" (clip/reranker Dockerfiles, Dockerfile.cuda,
+  .env.pc.example, docker-compose.pc.yml).
+- Verified (5-agent workflow): `make build`/`vet` clean; full `make test` -race suite passes
+  (platform/crypto 92.5%, tenancy 100% floor intact); `make lint` 0 issues; torch 2.13.0
+  cp312 wheels CONFIRMED on both `cpu` and `cu126` indexes (so the two-host CUDA build still
+  resolves; sentence-transformers 5.1.0 / open_clip_torch 2.24.0 have no torch upper bound);
+  govulncheck: 0 called/imported vulns; `npm audit` (web prod deps): 0.
+- Known issues:
+  - torch 2.13.0 not yet runtime-validated on this stack (clip/reranker images not rebuilt —
+    ~2.3GB downloads, heavy on the 8GB VM); numpy 1.26.4 pin kept, was validated with 2.12.0.
+  - govulncheck reports module-level GO-2026-5932 (x/crypto/openpgp unmaintained-by-design,
+    no fixed version, never imported by our code) — unfixable by bumping, acceptable residual.
+  - Alerts close only when this lands on main (committed on `feat/local-hosting`).
+
+## 2026-07-18 — Hybrid-search upgrade: eval harness (Phase 0) + cross-encoder reranker (Phase 1)
+
+- Context: kicked off a SOTA hybrid-retrieval upgrade. Phase-0 recon (a 10-agent
+  workflow: 7 codebase readers + 3 SOTA-model researchers) confirmed Asker already does
+  hybrid retrieval (Vespa streaming nativeRank + bge-m3 dense, RRF `k=60` on the
+  personalized path) with structural per-tenant isolation, so the prompt's greenfield
+  Tantivy/LanceDB/MLX stack was rejected (it fragments the single-engine isolation model,
+  per DECISIONS D1). **Decision: upgrade Vespa in place.** Approved forks: keep nativeRank +
+  add exact-match routing (not true BM25 — streaming has no corpus stats); reranker +
+  contextual chunking first, embedder swap (bge-m3 → Qwen3-Embedding-4B) as a fast-follow;
+  reranker served by a new Python service mirroring `services/clip`.
+- Done: **Phase 0 — evaluation harness (`tools/eval/`, built FIRST).** Recall@k / nDCG@k /
+  MRR + p50/p95 latency for `lexical|dense|hybrid|hybrid_rerank` per slice (exact/keyword/
+  semantic/multilingual) against a JSONL golden set, driving the LIVE gateway; quality gate
+  = candidate must match-or-beat baseline nDCG on EVERY slice and improve overall. Pure
+  metrics + loader + runner + gate all unit-tested; live client httptest-covered; `make eval`.
+  Golden `doc_id`s come from synthgen rare tokens (no private data) or curation — the real
+  `golden/golden.jsonl` is gitignored. Placed under `tools/` (not top-level `eval/`) so
+  `GO_PKGS` builds/lints/tests it. **Limitation: baseline numbers need a running+seeded
+  stack — not yet run live.**
+- Done: **Phase 1 — cross-encoder reranker.** New `services/reranker` Python service (stdlib
+  HTTP, mirrors `services/clip`) serving `BAAI/bge-reranker-v2-m3` via sentence-transformers
+  CrossEncoder, `RERANKER_DEVICE=auto|cpu|cuda|mps` (native MPS on the M5 Max, cuda on the
+  3090 — this is the "optional reranker" the 2026-06-22 two-host plan flagged for the model
+  plane); `POST /rerank {query,documents}->{scores}`; 37 pytest tests + ruff clean, all
+  against a fake scorer (no torch download). Query service: `reranker` HTTP client +
+  `applyRerank` rewrites each top-N candidate's `Hit.Score` with the cross-encoder relevance
+  and reorders, so `personalizeRank`'s Semantic feature (and `rerankByRecency`) consume it
+  with ZERO changes to those stages; wired on the personalized path behind the degradation
+  ladder (`degraded="rerank-unavailable"`, never fails). Proto `SearchRequest.rerank` (regen
+  Go+Python), gateway `?rerank=1`, cache key + `normalizeRequest` carry it. Config
+  `QUERY_RERANK_*` (OFF by default). Reranker is an OPT-IN compose service (`rerank` profile,
+  `make rerank-up`) so `make dev-up` stays light on the 8 GB VM. All 41 Go packages pass;
+  query/gateway/eval lint clean.
+- Next: (1) run the eval harness live to bank a baseline + prove the reranker lift (needs a
+  seeded stack; add `golden generate --from-synthgen`). (2) Extend rerank to the
+  NON-personalized path (wider candidate-pool retrieval + paging in the 3 non-personalized
+  branches — deferred this commit). (3) Phase 2: structure-aware + contextual chunking
+  (real tokenizer, code/table-safe, `title>section` breadcrumb). (4) Then exact-match routing
+  + RRF-as-default, then the Qwen3-Embedding-4B swap (full re-embed, dim 1024→2560).
+- Known issues:
+  - Reranker runs only on the PERSONALIZED path so far; with `QUERY_PERSONALIZATION_ENABLED=false`
+    the `rerank` flag is currently a no-op (documented follow-up above).
+  - `services/reranker/requirements.txt` pins `sentence-transformers==5.1.0` / `torch==2.12.0`
+    — validate the exact versions resolve on the target wheel index before a real image build
+    (the Dockerfile prefetches bge-reranker-v2-m3 ~2.3 GB at build; heavy, hence opt-in).
+  - Rerank passage is `title + snippet` (the snippet is the matched region; full body isn't on
+    the Hit). Good signal, but contextual chunking (Phase 2) will strengthen it.
+
 ## 2026-06-22 — GPU infra optimization plan + CUDA CLIP (two-host rollout step 4)
 
 - Context: planning to add a second host (Linux, RTX 3090 24 GB VRAM, 128 GB RAM)
