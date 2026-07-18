@@ -21,7 +21,7 @@ WORKDIR /app
 # needed — only the host's NVIDIA driver + nvidia-container-toolkit at runtime
 # (the compose `clip` service requests a gpu device). See docs/two-host-
 # deploy.md. The torch VERSION pinned in requirements.txt must exist on the
-# chosen index: torch==2.12.0 is published on cpu and cu126 (NOT cu124).
+# chosen index: torch==2.13.0 is published on cpu and cu126 (NOT cu124).
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 # Install torch from the selected index first, then the rest from PyPI.

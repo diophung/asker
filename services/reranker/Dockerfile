@@ -14,7 +14,7 @@ WORKDIR /app
 # Which PyTorch wheel index to install torch from. Default = the CPU index. The
 # two-host GPU deploy overrides this at build time to a CUDA index, e.g.:
 #   --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
-# See docs/two-host-deploy.md. torch==2.12.0 is published on cpu and cu126.
+# See docs/two-host-deploy.md. torch==2.13.0 is published on cpu and cu126.
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt ./requirements.txt

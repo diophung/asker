@@ -17,6 +17,29 @@ Newest entries go first.
 
 ---
 
+## 2026-07-18 — Dependabot: fix all 14 open vulnerabilities (x/crypto + torch)
+
+- Context: GitHub reported 14 open Dependabot alerts on main (7 critical, 2 high, 4 moderate,
+  1 low). They collapse to two root causes: 13× `golang.org/x/crypto < 0.52.0` (go.mod,
+  indirect — SSH agent/cert/auth bypasses, DoS panics) and 1× `torch <= 2.12.1`
+  (`services/clip/requirements.txt`, GHSA-rrmf-rvhw-rf47 torch.jit.script memory corruption).
+- Done: `go get golang.org/x/crypto@v0.52.0` (no transitive bumps needed); `torch==2.13.0` in
+  BOTH `services/clip` and `services/reranker` requirements (reranker wasn't flagged — it's
+  unmerged — but carried the same vulnerable pin); refreshed the five comment sites that
+  documented "cu126 ships torch==2.12.0" (clip/reranker Dockerfiles, Dockerfile.cuda,
+  .env.pc.example, docker-compose.pc.yml).
+- Verified (5-agent workflow): `make build`/`vet` clean; full `make test` -race suite passes
+  (platform/crypto 92.5%, tenancy 100% floor intact); `make lint` 0 issues; torch 2.13.0
+  cp312 wheels CONFIRMED on both `cpu` and `cu126` indexes (so the two-host CUDA build still
+  resolves; sentence-transformers 5.1.0 / open_clip_torch 2.24.0 have no torch upper bound);
+  govulncheck: 0 called/imported vulns; `npm audit` (web prod deps): 0.
+- Known issues:
+  - torch 2.13.0 not yet runtime-validated on this stack (clip/reranker images not rebuilt —
+    ~2.3GB downloads, heavy on the 8GB VM); numpy 1.26.4 pin kept, was validated with 2.12.0.
+  - govulncheck reports module-level GO-2026-5932 (x/crypto/openpgp unmaintained-by-design,
+    no fixed version, never imported by our code) — unfixable by bumping, acceptable residual.
+  - Alerts close only when this lands on main (committed on `feat/local-hosting`).
+
 ## 2026-07-18 — Hybrid-search upgrade: eval harness (Phase 0) + cross-encoder reranker (Phase 1)
 
 - Context: kicked off a SOTA hybrid-retrieval upgrade. Phase-0 recon (a 10-agent
