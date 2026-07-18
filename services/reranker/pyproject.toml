@@ -1,0 +1,32 @@
+[project]
+name = "asker-reranker"
+version = "0.1.0"
+description = "Asker cross-encoder reranker service: (query, doc) relevance over HTTP (Phase 1)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["."]
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "RUF"]
+ignore = [
+    # assert is how pytest works; tests are in-scope for ruff.
+    "S101",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# S310: tests open our own ephemeral loopback test server over http:// — the
+# URL is a fixed scheme + the bound port, never user input.
+# S104: a test asserts the default host string equals "0.0.0.0" (a constant
+# comparison, not an actual bind).
+"tests/*" = ["S310", "S104"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["reranker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

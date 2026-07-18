@@ -58,6 +58,13 @@ message SearchRequest {
   // (Hit.features) for observability. The gateway sets it from ?debug=1; it
   // never affects ranking, only what is reported.
   bool debug = 9;
+  // rerank, when true, applies the cross-encoder reranker to the top fused
+  // candidates before the final ordering (a higher-precision relevance pass).
+  // Only honored for HYBRID with residual text and when the server has a
+  // reranker wired (QUERY_RERANK_ENABLED); otherwise ignored. A reranker
+  // failure degrades to the fused order (degraded="rerank-unavailable"), never
+  // an error. The gateway sets it from ?rerank=1.
+  bool rerank = 10;
 }
 
 message SearchResponse {

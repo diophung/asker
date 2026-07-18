@@ -36,6 +36,11 @@ const degradedKeywordOnly = "keyword-only"
 // the text/OCR arm still served (ADR-006, ADR-013).
 const degradedClipUnavailable = "clip-unavailable"
 
+// degradedRerankUnavailable is the SearchResponse.degraded marker for a skipped
+// cross-encoder rerank pass (reranker service error/timeout): the fused
+// retrieval order is served as-is. Never fails the search (Phase 1).
+const degradedRerankUnavailable = "rerank-unavailable"
+
 // addDegraded appends a degradation reason once (the same reason can be
 // reached via more than one rung). Order of first appearance is preserved so
 // the composed marker is deterministic.

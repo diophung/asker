@@ -1,0 +1,8 @@
+# Development/test/lint dependencies for services/reranker (pinned).
+#
+# NOTE: this does NOT include requirements.txt. Unit tests run against a
+# deterministic fake scorer and the stdlib HTTP layer — they must never need
+# torch / sentence-transformers / a model download (the real model is too heavy
+# for CI; the real-model check is an integration smoke documented in the README).
+pytest==9.0.3
+ruff==0.15.17

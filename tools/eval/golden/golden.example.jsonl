@@ -1,0 +1,16 @@
+# Example golden set for the Asker retrieval eval harness.
+#
+# Copy this to tools/eval/golden/golden.jsonl and replace the REPLACE_* doc_ids
+# with real doc_ids from YOUR seeded corpus (see tools/eval/README.md for how to
+# find them). One JSON record per line; blank lines and #-comment lines are
+# ignored. Each record needs at least one relevant doc (via "relevant" or
+# "gains"). "tenant" selects which dev user's token to search as.
+#
+# Slices: exact | keyword | semantic | multilingual. The quality gate is
+# enforced on EVERY slice, so keep the exact-match slice well populated — that
+# is where naive vector search regresses hardest.
+{"id":"exact-rare-01","query":"qzx00000001","tenant":"alice","slice":"exact","relevant":["REPLACE_WITH_REAL_DOC_ID"],"note":"synthgen rare token -> the single doc that carries it"}
+{"id":"exact-file-01","query":"Q3-budget-final.xlsx","tenant":"alice","slice":"exact","relevant":["REPLACE_WITH_REAL_DOC_ID"],"note":"filename must be findable verbatim"}
+{"id":"kw-budget-01","query":"quarterly budget review","tenant":"alice","slice":"keyword","relevant":["REPLACE_WITH_REAL_DOC_ID"]}
+{"id":"sem-deadline-01","query":"when is the project due","tenant":"alice","slice":"semantic","gains":{"REPLACE_DOC_A":3,"REPLACE_DOC_B":1},"note":"paraphrase of a deadline discussion; graded relevance"}
+{"id":"ml-agenda-01","query":"orden del día de la reunión","tenant":"alice","slice":"multilingual","relevant":["REPLACE_WITH_REAL_DOC_ID"],"note":"include only if your corpus has non-English content"}

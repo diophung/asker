@@ -251,6 +251,8 @@ type envConfig struct {
 	// personalized path (rrf controls dual-arm RRF retrieval).
 	profiles profileLoader
 	rrf      bool
+	// reranker, when non-nil, wires the cross-encoder rerank pass (Phase 1).
+	reranker reranker
 }
 
 func withTEIDown() envOption       { return func(c *envConfig) { c.teiDown = true } }
@@ -264,6 +266,12 @@ func withClipDim(dim int) envOption {
 // dual-arm RRF retrieval.
 func withProfiles(l profileLoader, rrf bool) envOption {
 	return func(c *envConfig) { c.profiles = l; c.rrf = rrf }
+}
+
+// withReranker wires the cross-encoder rerank pass with the given (fake)
+// reranker, so a request with Rerank=true exercises the rerank stage.
+func withReranker(r reranker) envOption {
+	return func(c *envConfig) { c.reranker = r }
 }
 
 func newQueryEnv(t *testing.T, opts ...envOption) *queryEnv {
@@ -298,6 +306,11 @@ func newQueryEnv(t *testing.T, opts ...envOption) *queryEnv {
 		srv.rrfEnabled = ec.rrf
 		srv.candidateCap = maxLimit
 		srv.recencyHalfLife = 720 * time.Hour // enable the recency bonus in scoring
+	}
+	if ec.reranker != nil {
+		srv.reranker = ec.reranker
+		srv.rerankCandidates = 50
+		srv.rerankDocChars = 1024
 	}
 
 	lis := bufconn.Listen(1 << 20)
