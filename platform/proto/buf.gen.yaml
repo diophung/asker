@@ -10,7 +10,16 @@ plugins:
     opt: paths=source_relative
   # Python bindings for the enrich worker (ADR-007). Remote buf plugins (no
   # local protoc needed); committed like the Go output.
-  - remote: buf.build/protocolbuffers/python
+  #
+  # PIN THESE. An unversioned `remote:` resolves to whatever the BSR currently
+  # publishes, so a new upstream plugin release rewrites the gencode version
+  # header and the CI drift check (`git diff --exit-code platform/proto/gen`)
+  # fails on a commit that changed nothing. The pin must also stay in lockstep
+  # with `protobuf==` in services/enrich/requirements*.txt: protobuf refuses to
+  # load gencode newer than the runtime, so bumping one without the other
+  # breaks the enrich worker at import time. v35.1 == "Protobuf Python Version:
+  # 7.35.1" in the committed output.
+  - remote: buf.build/protocolbuffers/python:v35.1
     out: gen/python
-  - remote: buf.build/protocolbuffers/pyi
+  - remote: buf.build/protocolbuffers/pyi:v35.1
     out: gen/python

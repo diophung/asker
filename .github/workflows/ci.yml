@@ -33,7 +33,7 @@ jobs:
           (cd platform/proto && ../../bin/buf lint)
           make proto
           git diff --exit-code platform/proto/gen \
-            || { echo "::error::platform/proto/gen is stale — run 'make proto' and commit"; exit 1; }
+            || { echo "::error::platform/proto/gen is stale. Run 'make proto' and commit. If the ONLY diff is the 'Protobuf Python Version' header, do NOT commit it — the buf remote plugin pin in platform/proto/buf.gen.yaml and 'protobuf==' in services/enrich/requirements.txt must move together; committing gencode newer than the pinned runtime breaks the enrich worker at import."; exit 1; }
       - name: Helm lint + kubeconform (chart) + observability artifacts
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
