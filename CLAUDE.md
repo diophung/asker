@@ -8,7 +8,9 @@ with strict per-user isolation. Go monorepo (single module `github.com/asker/ask
 plus a React/TS web UI and Python ML enrich workers.
 
 **Status:** V1 is built and shipped — milestones M0–M6 are all complete (see `MILESTONES.md`),
-and a v3.2 personalized, intent-aware search layer has since landed on top (see `DECISIONS.md`).
+a v3.2 personalized, intent-aware search layer has since landed on top (see `DECISIONS.md`),
+and a hybrid-search upgrade is in flight (Phase 0 eval harness + Phase 1 cross-encoder reranker
+landed; contextual chunking, exact-match routing, and an embedder swap are queued).
 The full vertical slice runs end to end: connectors → Kafka → ingest/chunk → enrich → Vespa
 streaming index → query + React UI. Work is still milestone-logged: **read `PROGRESS.md` at the
 start of every session** (it is the session-by-session log and source of current truth) and
@@ -28,6 +30,9 @@ start of every session** (it is the session-by-session log and source of current
   cross-tenant leakage suite — it must always pass**) · `make e2e-m1` · `make e2e-m3-media` ·
   `make e2e-oauth` · `make e2e-gdpr` (DESTRUCTIVE: erases the test tenant)
 - Web (`cd web`): `npm run build` (tsc + vite) · `npm test` (vitest) · `npm run lint` (eslint)
+- Retrieval quality: `make eval` (Recall@k/nDCG/MRR + latency vs `tools/eval/golden/golden.jsonl`,
+  which is gitignored — needs a running+seeded stack) · `make rerank-up`/`rerank-down` (opt-in
+  cross-encoder reranker compose profile; then set `QUERY_RERANK_ENABLED=true`)
 - Deploy/scale (rarely needed locally): `make helm-lint` · `make e2e-k8s` (M4 kind chaos) ·
   `make obs-up`/`obs-down` (opt-in Prometheus+Grafana) · `make load-query`/`soak` (M5, need k6) ·
   `make synthgen-dry`. Two-host GPU deploy uses the `pc-*` (RTX engine) and `mac-*` (workers)
@@ -41,8 +46,9 @@ start of every session** (it is the session-by-session log and source of current
 - Lint: golangci-lint v2 (errcheck, govet, staticcheck, revive, etc.); US-locale misspell.
   The golangci-lint version is pinned in both `Makefile` and `.github/workflows/ci.yml` — keep
   them in sync. Generated code (`platform/proto/gen`) and `web/` are excluded.
-- Languages by concern (do not cross): **Go** for all services; **Python** only for ML enrich
-  workers (`services/enrich`); **TypeScript/React** for `web/`.
+- Languages by concern (do not cross): **Go** for all services; **Python** only for the ML
+  services (`services/enrich`, `services/clip`, `services/reranker`); **TypeScript/React**
+  for `web/`.
 - **Small Docker VMs OOM easily.** `make dev-up` builds the ~11 images *serially* on purpose
   (parallel BuildKit builds spike memory enough to OOM-kill Vespa, exit 137). The 8GB dev VM
   can't fit the default `BAAI/bge-m3` model or run the full-scale e2e — a gitignored
@@ -80,6 +86,10 @@ personalization layer lives here:
   filters + ranking-profile selection.
 - **Hybrid retrieval + RRF** (`rrf.go`) — keyword and vector arms fused by Reciprocal Rank
   Fusion, gated by `QUERY_HYBRID_RRF`, personalized path only.
+- **Cross-encoder rerank** (opt-in, OFF by default): `services/reranker` (Python,
+  bge-reranker-v2-m3, compose `rerank` profile) rescores top-N candidates before
+  personalization; gated by `QUERY_RERANK_*` + gateway `?rerank=1`, personalized path only,
+  degrades to `rerank-unavailable` rather than failing.
 - **Combined relevance** (`platform/personalization`, a *pure, no-I/O* package at the ≥75%
   coverage floor): `w_sem·semantic + w_pref·preference + w_behav·behavioral + w_attn·attention
   − w_fatigue·repetition`, with an online logistic learning-to-rank model, MMR diversification,
@@ -95,11 +105,11 @@ personalization layer lives here:
 
 `platform/` shared Go libs (proto, tenancy, telemetry, config, crypto, kafkautil, oauth, blob,
 safehttp, personalization) · `services/` (gateway, control-plane, connector-hub, ingest,
-enrich [Python], index-writer, query, clip) · `connectors/` (sdk + ~13 connectors: gmail,
-gdrive, gcal, slack, jira, confluence, outlook-mail/cal, ical, s3, whatsapp-export,
+enrich [Python], index-writer, query, clip, reranker) · `connectors/` (sdk + ~13 connectors:
+gmail, gdrive, gcal, slack, jira, confluence, outlook-mail/cal, ical, s3, whatsapp-export,
 imessage-agent, msteams, upload) · `vespa/` (streaming-mode app package + `deploy.sh`) ·
-`deploy/` (`compose/` dev stack, `helm/` umbrella chart) · `tools/` (ci gate, e2e suites, load,
-synthgen, fake-gmail, fake-oauth) · `docs/` (architecture.md, capacity.md, security.md,
+`deploy/` (`compose/` dev stack, `helm/` umbrella chart) · `tools/` (ci gate, e2e suites, eval,
+load, synthgen, fake-gmail, fake-oauth) · `docs/` (architecture.md, capacity.md, security.md,
 ship-review.md, ADRs in `docs/adr/` [ADR-001…017], runbooks, openapi) · `specs/` (product specs).
 
 Dev infra (all bound to 127.0.0.1, dev-only creds — see README "Dev URLs" table): Web UI 13001,
