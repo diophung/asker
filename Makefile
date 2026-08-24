@@ -2,8 +2,9 @@ SHELL := /bin/bash
 GOBIN := $(CURDIR)/bin
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 
-# Tool versions (single source of truth; CI pins golangci-lint to the same
-# version via its action input — keep them in sync).
+# Tool versions (single source of truth). CI READS GOLANGCI_LINT_VERSION out of
+# this file (.github/workflows/ci.yml, "Resolve golangci-lint version") instead
+# of duplicating it — change it here and CI follows automatically.
 BUF_VERSION := v1.70.0
 PROTOC_GEN_GO_VERSION := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1

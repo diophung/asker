@@ -18,15 +18,28 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
+      # Single source of truth: the linter version lives in the Makefile ONLY and
+      # is read from it here. A version duplicated in two files drifts silently —
+      # CI and `make lint` then disagree about which linter ran, and the first
+      # symptom is a lint error nobody can reproduce locally.
+      - name: Resolve golangci-lint version from the Makefile
+        id: golangci
+        run: |
+          v="$(sed -n 's/^GOLANGCI_LINT_VERSION[[:space:]]*:=[[:space:]]*//p' Makefile | tr -d '[:space:]')"
+          if [ -z "$v" ]; then
+            echo "::error::GOLANGCI_LINT_VERSION not found in Makefile"; exit 1
+          fi
+          echo "version=$v" >>"$GITHUB_OUTPUT"
+          echo "golangci-lint $v (resolved from Makefile)"
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2 # keep in sync with GOLANGCI_LINT_VERSION in the Makefile
+          version: ${{ steps.golangci.outputs.version }}
       - name: buf lint + generated-code drift check
         run: |
           make tools
@@ -35,9 +48,18 @@ jobs:
           git diff --exit-code platform/proto/gen \
             || { echo "::error::platform/proto/gen is stale. Run 'make proto' and commit. If the ONLY diff is the 'Protobuf Python Version' header, do NOT commit it — the buf remote plugin pin in platform/proto/buf.gen.yaml and 'protobuf==' in services/enrich/requirements.txt must move together; committing gencode newer than the pinned runtime breaks the enrich worker at import."; exit 1; }
       - name: Helm lint + kubeconform (chart) + observability artifacts
+        env:
+          # Pinned on purpose. `main`-branch install scripts and `@latest` installs
+          # make this step depend on whatever upstream shipped this morning, so a
+          # commit that changed nothing can go red. Bump these deliberately.
+          HELM_VERSION: v3.21.4
+          KUBECONFORM_VERSION: v0.8.0
         run: |
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3" \
+            | bash -s -- --version "${HELM_VERSION}"
+          helm version --short
+          go install "github.com/yannh/kubeconform/cmd/kubeconform@${KUBECONFORM_VERSION}"
           helm lint deploy/helm/asker
           KC="$(go env GOPATH)/bin/kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.29.0 -summary"
           for vals in "" "-f deploy/helm/asker/values-dev.yaml" "-f deploy/helm/asker/values-ci.yaml"; do
@@ -58,8 +80,8 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
@@ -72,8 +94,8 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
@@ -82,7 +104,7 @@ jobs:
       - name: Build gateway image
         run: docker build -f services/gateway/Dockerfile -t asker-gateway:ci .
       - name: Scan gateway image (trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: asker-gateway:ci
           format: table
@@ -97,8 +119,8 @@ jobs:
       run:
         working-directory: services/enrich
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
@@ -121,8 +143,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -148,7 +170,7 @@ jobs:
       EMBEDDING_DIM: "384"
       CLIP_DIM: "512"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Free disk space
         # make dev-up builds 11 images + pulls TEI/clip-torch/whisper, which fills
         # the runner's / past Vespa's 80% disk limit -> Vespa feed-blocks (HTTP 507)
@@ -180,7 +202,7 @@ jobs:
       # M1 exit criteria scale: 10K synthetic emails across 3 tenants.
       E2E_EMAIL_COUNT: "10000"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Free disk space
         # See e2e-smoke: reclaim disk so Vespa does not feed-block (HTTP 507).
         run: |
@@ -212,7 +234,7 @@ jobs:
       EMBEDDING_DIM: "384"
       CLIP_DIM: "512"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Free disk space
         # Heavy ML images make this the tightest job; reclaim the preinstalled
         # toolchains too (not just docker images) so Vespa does not feed-block.
@@ -248,7 +270,7 @@ jobs:
       # precondition (DEK + blob present, searchable) doesn't race the pipeline.
       WAIT_SECS: "600"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Free disk space
         # See e2e-smoke: reclaim disk so Vespa does not feed-block (HTTP 507).
         run: |

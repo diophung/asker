@@ -1,0 +1,24 @@
+# Dependabot config.
+#
+# Why this file exists: every third-party action in .github/workflows is pinned
+# to a commit SHA (supply-chain integrity + no silent behaviour changes from a
+# retagged `@v4`). Pinning trades "drifts without telling you" for "goes stale
+# without telling you" — which is the better failure mode ONLY if something
+# proposes the bumps. That something is this file.
+#
+# Note: Dependabot *security alerts* work without any config (that is what the
+# 14 alerts resolved in f18f4d7 came from). Version-update PRs do not — they
+# need the ecosystems declared here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      # One PR for the routine action bumps instead of eight.
+      actions:
+        patterns: ["*"]

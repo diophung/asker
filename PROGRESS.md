@@ -17,6 +17,60 @@ Newest entries go first.
 
 ---
 
+## 2026-08-24 — CI: fix the proto drift failure + pin every drifting input
+
+- Context: `main` was red on the `lint` job. Nothing in the repo had changed to cause it.
+- Root cause (category D — external drift): `platform/proto/buf.gen.yaml` declared the Python
+  bindings with unversioned remote plugins (`remote: buf.build/protocolbuffers/python`). An
+  unversioned `remote:` resolves to whatever the BSR currently publishes. Upstream moved
+  35.1 -> 36.0, so `make proto` started emitting `Protobuf Python Version: 7.36.0` against
+  committed gencode of 7.35.1, and `git diff --exit-code platform/proto/gen` tripped. The Go
+  plugins are pinned in `make tools`, which is exactly why only the Python half drifted.
+- The trap underneath it: the drift check's own advice ("run `make proto` and commit") would
+  have made things worse — `services/enrich/requirements.txt` pins `protobuf==7.35.1`, and
+  protobuf refuses to load gencode newer than the runtime, so committing the regenerated files
+  turns one red job (lint) into two (lint + enrich). Reproduced locally: 121 enrich tests pass
+  on the committed tree, 3 collection errors with `VersionError` on the regenerated tree.
+- Done:
+  - Pinned `buf.build/protocolbuffers/python` and `.../pyi` to `:v35.1`; `make proto` is now
+    byte-reproducible (verified 3 consecutive runs, zero drift).
+  - Documented the gencode/runtime lockstep in both `buf.gen.yaml` and
+    `services/enrich/requirements.txt`, and rewrote the drift-check error so the next person
+    hitting it is told not to blind-commit a version-header-only diff.
+  - Pinned all 21 third-party action references to commit SHAs (with `# vX.Y.Z` comments).
+  - Added `.github/dependabot.yml` (github-actions ecosystem) so the SHA pins get proposed
+    bumps instead of silently rotting — pinning without an updater trades drift for staleness.
+  - `ci.yml`: `kubeconform@latest` -> `@v0.8.0`; Helm install script fetched from tag `v3.21.4`
+    with `--version` instead of piping helm's `main` branch; `set -euo pipefail` on that step.
+  - `k8s.yml`: pinned kubectl (was `dl.k8s.io/release/stable.txt` = today's stable) to v1.32.2
+    to match kind v0.27.0's node image; same Helm pin.
+  - `ci.yml` now READS `GOLANGCI_LINT_VERSION` out of the Makefile instead of duplicating it,
+    so `make lint` and CI cannot disagree about which linter ran.
+- Verified locally (Go 1.25.8, golangci-lint v2.12.2, helm v3.21.4, kubeconform v0.8.0):
+  build, vet, golangci-lint (0 issues), `make test` (race+coverage), coverage gate (all floors
+  OK, tenancy 100%), buf lint, proto drift x3, helm lint + kubeconform across all 4 value sets,
+  dashboard JSON, web (eslint / 115 vitest tests / tsc+vite build), enrich (ruff / 121 pytest).
+- Next: watch the first `main` run; re-run twice to confirm determinism. Decide the Trivy
+  question (below). Revisit the three `continue-on-error` jobs (#6, #7, #8).
+- Known issues:
+  - **Trivy is the next time-bomb.** The `build` job gates on `severity: CRITICAL,HIGH`,
+    `exit-code: 1` against a live CVE feed — a new disclosure turns an unchanged commit red.
+    Not changed here: weakening a security gate needs a decision, not a drive-by. Options are
+    (a) leave as-is and accept periodic unrelated reds, (b) keep the scan blocking on PRs but
+    move the feed-driven part to a scheduled run that opens an issue, (c) add `.trivyignore`
+    with expiry dates. Recommend (b).
+  - Actions are pinned to the tip of their major tags as of 2026-08-24 (checkout v4.4.0 etc.),
+    while upstream majors are at v7. The `@v4` line will eventually be deprecated by a runner
+    change and all workflows break at once — a scheduled major bump, not an emergency.
+  - E2E jobs still build ~11 images per run with no layer cache and pull models from HF/Docker
+    Hub with no retry; `sudo rm -rf` disk reclamation is a workaround for image bloat. Untested
+    here (no runner-class machine); the most likely source of remaining intermittent reds.
+  - CI logs were not readable from the working environment (private repo, no `gh` auth), so the
+    failure ledger was built by reproducing every non-e2e CI job locally rather than from run
+    history. The e2e/compose jobs were NOT reproduced.
+
+---
+
 ## 2026-07-18 — Dependabot: fix all 14 open vulnerabilities (x/crypto + torch)
 
 - Context: GitHub reported 14 open Dependabot alerts on main (7 critical, 2 high, 4 moderate,
