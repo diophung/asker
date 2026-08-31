@@ -17,6 +17,49 @@ Newest entries go first.
 
 ---
 
+## 2026-08-31 — CI: read the actual runs; fixed build (trivy), load (TEI CPUs), Node-20 actions
+
+- Context: the 2026-08-24 pass diagnosed the lint failure by reproducing CI locally but could
+  not reach GitHub. This session read the real runs (browser, authenticated) and found the
+  earlier picture was incomplete: `lint` was one of **two** failing jobs on main, and a third
+  workflow had been failing nightly, unnoticed, for weeks.
+- Failure ledger (ci #52 on main, e08882d, and load #58–#78):
+  - `lint` — "platform/proto/gen is stale". **Category D.** Exactly as diagnosed on 08-24;
+    fix already committed (unpinned buf remote plugin). No change needed.
+  - `build` — "Scan gateway image (trivy)", 3 HIGH, all fixed upstream. **Category A** — the
+    scanner was right. `go.mod` carried x/crypto 0.52.0 (CVE-2026-56854, CRITICAL, ssh auth
+    bypass), x/net 0.55.0, x/text 0.37.0, grpc 1.81.1. Bumped; trivy now reports 0 for go.mod.
+    The 08-24 note framed Trivy as a policy trade-off to decide — that was premature. It was a
+    real vulnerability with a published fix, and the gate needed no weakening at all.
+  - `load` (every nightly since at least #58) — **Category B**, and nothing to do with the load
+    test: `make dev-up` never started. Compose caps TEI at `${TEI_CPUS:-4}`; a GitHub runner on
+    this plan has 2 CPUs and Docker refuses a limit above what exists ("range of CPUs is from
+    0.01 to 2.00"). Set `TEI_CPUS: "2"` at workflow level in ci.yml and load.yml.
+  - `e2e-smoke` / `e2e-m1` / `e2e-m3-media` / `e2e-gdpr` — 0s, never ran (`needs: [build]`).
+    They call the same `make dev-up`, so fixing lint+build alone would have converted one red
+    job into four. The TEI_CPUS fix lands ahead of them.
+  - All jobs — "Node.js 20 is deprecated ... forced to run on Node.js 24". **Category D, live.**
+    The 08-24 pin froze checkout/setup-go/setup-node/setup-python/upload-artifact *on* the
+    deprecated runtime. Bumped to the current majors (v7), still SHA-pinned. Lesson: a pin is
+    only half the job if the pinned version is already end-of-life.
+- Verified locally on the branch: build, vet, golangci-lint (0 issues), test (race+coverage),
+  coverage gate (tenancy 100%), proto drift clean, `docker compose config` renders `cpus: 2`.
+- Branch `fix/ci-pin-drifting-inputs`, 5 commits, **not pushed** (no push credentials in the
+  working environment). Push, open the PR, and watch — then re-run twice for determinism.
+- Known issues:
+  - **The e2e jobs have still never completed on a runner.** TEI_CPUS unblocks the first
+    failure; what comes after it is unknown. Expect more work there, and note the 2-CPU runner
+    is a hard ceiling for a stack of ~11 containers plus an embedding model.
+  - pillow 12.2.0 -> 12.3.0 (10 HIGH) in services/clip and services/enrich is unfixed. CI only
+    scans the gateway image so it is not blocking; Dependabot has both PRs open.
+  - 7 stale Dependabot PRs are all red for the lint drift, i.e. one root cause, not seven. They
+    should go green once this branch merges and they rebase.
+  - Trivy remains a live-feed gate on the blocking path. It was right this time. The scheduled-
+    scan option from the 08-24 entry is still worth considering, but on this evidence the gate
+    is earning its place.
+
+---
+
 ## 2026-08-24 — CI: fix the proto drift failure + pin every drifting input
 
 - Context: `main` was red on the `lint` job. Nothing in the repo had changed to cause it.
