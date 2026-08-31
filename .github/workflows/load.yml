@@ -57,6 +57,10 @@ jobs:
       TEI_MODEL_ID: BAAI/bge-small-en-v1.5
       EMBEDDING_DIM: "384"
       CLIP_DIM: "512"
+      # Compose defaults TEI to 4 CPUs; a GitHub runner has 2 and Docker refuses
+      # the container ("range of CPUs is from 0.01 to 2.00"), killing `make
+      # dev-up`. This is what failed every nightly load run. Local dev keeps 4.
+      TEI_CPUS: "2"
       # Soak duration: short for CI/nightly; the real 2h soak is on-demand.
       SOAK_DURATION: ${{ github.event.inputs.soak_duration || '10m' }}
       # synthgen seed parameters (run-load.sh seeds the corpus deterministically;

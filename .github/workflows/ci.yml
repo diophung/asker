@@ -8,6 +8,15 @@ on:
 permissions:
   contents: read
 
+# The dev compose file caps TEI at ${TEI_CPUS:-4} CPUs, which is more than a
+# GitHub-hosted runner has (2 on this plan). Docker rejects the container
+# outright — "range of CPUs is from 0.01 to 2.00" — and `make dev-up` dies
+# before a single service starts, taking every compose-based job with it.
+# Set it here rather than in each job: one runner constraint, one place.
+# Local dev keeps the 4-CPU default.
+env:
+  TEI_CPUS: "2"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Dedup superseded PR runs, but let every push to main run to completion.
