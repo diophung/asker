@@ -57,6 +57,10 @@ jobs:
       TEI_MODEL_ID: BAAI/bge-small-en-v1.5
       EMBEDDING_DIM: "384"
       CLIP_DIM: "512"
+      # Compose defaults TEI to 4 CPUs; a GitHub runner has 2 and Docker refuses
+      # the container ("range of CPUs is from 0.01 to 2.00"), killing `make
+      # dev-up`. This is what failed every nightly load run. Local dev keeps 4.
+      TEI_CPUS: "2"
       # Soak duration: short for CI/nightly; the real 2h soak is on-demand.
       SOAK_DURATION: ${{ github.event.inputs.soak_duration || '10m' }}
       # synthgen seed parameters (run-load.sh seeds the corpus deterministically;
@@ -74,9 +78,9 @@ jobs:
       VESPA_URL: http://localhost:8082
       KEYCLOAK_URL: http://localhost:8081
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -129,7 +133,7 @@ jobs:
       # to its step log; the JSON summaries are uploaded here.
       - name: Upload k6 summaries + synthgen log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: loadtest-out-${{ github.run_id }}
           path: |

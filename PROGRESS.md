@@ -17,6 +17,103 @@ Newest entries go first.
 
 ---
 
+## 2026-08-31 — CI: read the actual runs; fixed build (trivy), load (TEI CPUs), Node-20 actions
+
+- Context: the 2026-08-24 pass diagnosed the lint failure by reproducing CI locally but could
+  not reach GitHub. This session read the real runs (browser, authenticated) and found the
+  earlier picture was incomplete: `lint` was one of **two** failing jobs on main, and a third
+  workflow had been failing nightly, unnoticed, for weeks.
+- Failure ledger (ci #52 on main, e08882d, and load #58–#78):
+  - `lint` — "platform/proto/gen is stale". **Category D.** Exactly as diagnosed on 08-24;
+    fix already committed (unpinned buf remote plugin). No change needed.
+  - `build` — "Scan gateway image (trivy)", 3 HIGH, all fixed upstream. **Category A** — the
+    scanner was right. `go.mod` carried x/crypto 0.52.0 (CVE-2026-56854, CRITICAL, ssh auth
+    bypass), x/net 0.55.0, x/text 0.37.0, grpc 1.81.1. Bumped; trivy now reports 0 for go.mod.
+    The 08-24 note framed Trivy as a policy trade-off to decide — that was premature. It was a
+    real vulnerability with a published fix, and the gate needed no weakening at all.
+  - `load` (every nightly since at least #58) — **Category B**, and nothing to do with the load
+    test: `make dev-up` never started. Compose caps TEI at `${TEI_CPUS:-4}`; a GitHub runner on
+    this plan has 2 CPUs and Docker refuses a limit above what exists ("range of CPUs is from
+    0.01 to 2.00"). Set `TEI_CPUS: "2"` at workflow level in ci.yml and load.yml.
+  - `e2e-smoke` / `e2e-m1` / `e2e-m3-media` / `e2e-gdpr` — 0s, never ran (`needs: [build]`).
+    They call the same `make dev-up`, so fixing lint+build alone would have converted one red
+    job into four. The TEI_CPUS fix lands ahead of them.
+  - All jobs — "Node.js 20 is deprecated ... forced to run on Node.js 24". **Category D, live.**
+    The 08-24 pin froze checkout/setup-go/setup-node/setup-python/upload-artifact *on* the
+    deprecated runtime. Bumped to the current majors (v7), still SHA-pinned. Lesson: a pin is
+    only half the job if the pinned version is already end-of-life.
+- Verified locally on the branch: build, vet, golangci-lint (0 issues), test (race+coverage),
+  coverage gate (tenancy 100%), proto drift clean, `docker compose config` renders `cpus: 2`.
+- Branch `fix/ci-pin-drifting-inputs`, 5 commits, **not pushed** (no push credentials in the
+  working environment). Push, open the PR, and watch — then re-run twice for determinism.
+- Known issues:
+  - **The e2e jobs have still never completed on a runner.** TEI_CPUS unblocks the first
+    failure; what comes after it is unknown. Expect more work there, and note the 2-CPU runner
+    is a hard ceiling for a stack of ~11 containers plus an embedding model.
+  - pillow 12.2.0 -> 12.3.0 (10 HIGH) in services/clip and services/enrich is unfixed. CI only
+    scans the gateway image so it is not blocking; Dependabot has both PRs open.
+  - 7 stale Dependabot PRs are all red for the lint drift, i.e. one root cause, not seven. They
+    should go green once this branch merges and they rebase.
+  - Trivy remains a live-feed gate on the blocking path. It was right this time. The scheduled-
+    scan option from the 08-24 entry is still worth considering, but on this evidence the gate
+    is earning its place.
+
+---
+
+## 2026-08-24 — CI: fix the proto drift failure + pin every drifting input
+
+- Context: `main` was red on the `lint` job. Nothing in the repo had changed to cause it.
+- Root cause (category D — external drift): `platform/proto/buf.gen.yaml` declared the Python
+  bindings with unversioned remote plugins (`remote: buf.build/protocolbuffers/python`). An
+  unversioned `remote:` resolves to whatever the BSR currently publishes. Upstream moved
+  35.1 -> 36.0, so `make proto` started emitting `Protobuf Python Version: 7.36.0` against
+  committed gencode of 7.35.1, and `git diff --exit-code platform/proto/gen` tripped. The Go
+  plugins are pinned in `make tools`, which is exactly why only the Python half drifted.
+- The trap underneath it: the drift check's own advice ("run `make proto` and commit") would
+  have made things worse — `services/enrich/requirements.txt` pins `protobuf==7.35.1`, and
+  protobuf refuses to load gencode newer than the runtime, so committing the regenerated files
+  turns one red job (lint) into two (lint + enrich). Reproduced locally: 121 enrich tests pass
+  on the committed tree, 3 collection errors with `VersionError` on the regenerated tree.
+- Done:
+  - Pinned `buf.build/protocolbuffers/python` and `.../pyi` to `:v35.1`; `make proto` is now
+    byte-reproducible (verified 3 consecutive runs, zero drift).
+  - Documented the gencode/runtime lockstep in both `buf.gen.yaml` and
+    `services/enrich/requirements.txt`, and rewrote the drift-check error so the next person
+    hitting it is told not to blind-commit a version-header-only diff.
+  - Pinned all 21 third-party action references to commit SHAs (with `# vX.Y.Z` comments).
+  - Added `.github/dependabot.yml` (github-actions ecosystem) so the SHA pins get proposed
+    bumps instead of silently rotting — pinning without an updater trades drift for staleness.
+  - `ci.yml`: `kubeconform@latest` -> `@v0.8.0`; Helm install script fetched from tag `v3.21.4`
+    with `--version` instead of piping helm's `main` branch; `set -euo pipefail` on that step.
+  - `k8s.yml`: pinned kubectl (was `dl.k8s.io/release/stable.txt` = today's stable) to v1.32.2
+    to match kind v0.27.0's node image; same Helm pin.
+  - `ci.yml` now READS `GOLANGCI_LINT_VERSION` out of the Makefile instead of duplicating it,
+    so `make lint` and CI cannot disagree about which linter ran.
+- Verified locally (Go 1.25.8, golangci-lint v2.12.2, helm v3.21.4, kubeconform v0.8.0):
+  build, vet, golangci-lint (0 issues), `make test` (race+coverage), coverage gate (all floors
+  OK, tenancy 100%), buf lint, proto drift x3, helm lint + kubeconform across all 4 value sets,
+  dashboard JSON, web (eslint / 115 vitest tests / tsc+vite build), enrich (ruff / 121 pytest).
+- Next: watch the first `main` run; re-run twice to confirm determinism. Decide the Trivy
+  question (below). Revisit the three `continue-on-error` jobs (#6, #7, #8).
+- Known issues:
+  - **Trivy is the next time-bomb.** The `build` job gates on `severity: CRITICAL,HIGH`,
+    `exit-code: 1` against a live CVE feed — a new disclosure turns an unchanged commit red.
+    Not changed here: weakening a security gate needs a decision, not a drive-by. Options are
+    (a) leave as-is and accept periodic unrelated reds, (b) keep the scan blocking on PRs but
+    move the feed-driven part to a scheduled run that opens an issue, (c) add `.trivyignore`
+    with expiry dates. Recommend (b).
+  - Actions are pinned to the tip of their major tags as of 2026-08-24 (checkout v4.4.0 etc.),
+    while upstream majors are at v7. The `@v4` line will eventually be deprecated by a runner
+    change and all workflows break at once — a scheduled major bump, not an emergency.
+  - E2E jobs still build ~11 images per run with no layer cache and pull models from HF/Docker
+    Hub with no retry; `sudo rm -rf` disk reclamation is a workaround for image bloat. Untested
+    here (no runner-class machine); the most likely source of remaining intermittent reds.
+  - CI logs were not readable from the working environment (private repo, no `gh` auth), so the
+    failure ledger was built by reproducing every non-e2e CI job locally rather than from run
+    history. The e2e/compose jobs were NOT reproduced.
+
+---
+
 ## 2026-07-18 — Dependabot: fix all 14 open vulnerabilities (x/crypto + torch)
 
 - Context: GitHub reported 14 open Dependabot alerts on main (7 critical, 2 high, 4 moderate,

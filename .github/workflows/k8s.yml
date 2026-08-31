@@ -50,7 +50,7 @@ jobs:
       EMBEDDING_DIM: "384"
       CLIP_DIM: "512"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The ML/search images (TEI cpu, Vespa, Keycloak) are large; reclaim the
       # runner's preinstalled toolchains/images first (mirrors e2e-m3-media).
@@ -61,27 +61,37 @@ jobs:
           docker image prune -af || true
           df -h /
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
+      # Every version here is pinned. kubectl used to come from
+      # dl.k8s.io/release/stable.txt and helm from an install script on helm's
+      # `main` branch — both mean "whatever upstream shipped today", which turns
+      # an unchanged commit red and makes a red run unreproducible later.
+      # KUBECTL_VERSION tracks the node image that kind v0.27.0 boots (k8s 1.32).
       - name: Install kind + kubectl + helm
+        env:
+          KIND_VERSION: v0.27.0
+          KUBECTL_VERSION: v1.32.2
+          HELM_VERSION: v3.21.4
         run: |
+          set -euo pipefail
           # kind
           curl -fsSL -o ./kind \
-            https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
           chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
           kind version
           # kubectl
-          KVER="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
           curl -fsSL -o ./kubectl \
-            "https://dl.k8s.io/release/${KVER}/bin/linux/amd64/kubectl"
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
           kubectl version --client
           # helm (preinstalled on ubuntu-latest, but pin a known-good one)
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          helm version
+          curl -fsSL "https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3" \
+            | bash -s -- --version "${HELM_VERSION}"
+          helm version --short
 
       - name: Create kind cluster
         run: |
