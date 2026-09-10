@@ -59,6 +59,19 @@ func (d *deps) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
+	// This is the browser-facing edge of the media path, and the Content-Type
+	// being passed through traces back to an upload's multipart part header
+	// (attacker controlled). Harden here as well as in the hub so the
+	// guarantee does not depend on the upstream response: nosniff prevents
+	// MIME-sniffing an octet-stream body into text/html, attachment prevents a
+	// top-level render, and the sandbox CSP neutralizes any script that does
+	// run. The web client uses fetch()+createObjectURL, so thumbnails are
+	// unaffected.
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Disposition", "attachment")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("X-Frame-Options", "DENY")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, d.maxMediaBytes))
 }
