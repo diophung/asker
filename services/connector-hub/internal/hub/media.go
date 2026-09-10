@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/asker/asker/platform/blob"
+	"github.com/asker/asker/platform/mimeguard"
 	"github.com/asker/asker/platform/tenancy"
 )
 
@@ -29,11 +30,30 @@ const defaultMediaContentType = "application/octet-stream"
 // rendered as an active document in the serving origin. Applied by both the
 // hub's /internal/media and the gateway's /v1/media proxy, so the guarantee
 // holds no matter which one a client reaches.
+//
+// This tightens what the hub's securityHeaders middleware already set: the
+// middleware covers every response, this adds the byte-serving specifics
+// (attachment disposition and the sandbox CSP).
 func setMediaSecurityHeaders(h http.Header) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Disposition", "attachment")
 	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	h.Set("X-Frame-Options", "DENY")
+}
+
+// securityHeaders sets the hub's baseline response headers. The hub is an
+// internal JSON + byte-serving API that never returns renderable HTML, so it
+// takes the same strict set as the gateway. Applied outermost; handlers may
+// tighten (setMediaSecurityHeaders does).
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // mediaBlobRef is the JSON shape returned by PUT /internal/media — the same
@@ -153,10 +173,14 @@ func (h *httpAPI) handleMediaPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query parameter \"key\" is required"})
 		return
 	}
-	contentType := r.URL.Query().Get("content_type")
-	if contentType == "" {
-		contentType = defaultMediaContentType
-	}
+	// Sanitized at the storage boundary, not just at the upload connector:
+	// whatever is stored here becomes the response Content-Type of GET
+	// /internal/media (and of the gateway's /v1/media proxy), so a renderable
+	// type stored via this endpoint would be the same stored-XSS primitive the
+	// upload path already guards against. The only in-tree caller is the
+	// enrich worker (which hardcodes image/jpeg), but the invariant should not
+	// depend on every future caller remembering.
+	contentType := mimeguard.SanitizeContentType(r.URL.Query().Get("content_type"))
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxMediaBytes)
 	data, err := io.ReadAll(r.Body)

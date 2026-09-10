@@ -50,7 +50,11 @@ func (h *httpAPI) routes() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})
-	return telemetry.HTTPMiddleware(serviceName)(mux)
+	// Security headers outermost, so EVERY hub response carries them —
+	// including the 400/401/404/503 branches of handleMediaGet, which return
+	// before it reaches its own setMediaSecurityHeaders call, and the "/" 404.
+	// Handler-level headers are exactly the pattern that misses error paths.
+	return securityHeaders(telemetry.HTTPMiddleware(serviceName)(mux))
 }
 
 // handleWebhook routes a source-originated push notification to the matched
