@@ -1,4 +1,5 @@
 import type { Hit } from "../api";
+import { safeHttpUrl } from "../safeUrl";
 import { typeLabel } from "../search/filters";
 import {
   formatTimestamp,
@@ -101,10 +102,10 @@ export function ResultCard({
       </div>
       <footer className="result-meta">
         {date !== "" && <time className="result-date">{date}</time>}
-        {hit.source_url !== undefined && hit.source_url !== "" && (
+        {safeHttpUrl(hit.source_url) !== "" && (
           <a
             className="source-link"
-            href={hit.source_url}
+            href={safeHttpUrl(hit.source_url)}
             target="_blank"
             rel="noopener noreferrer"
           >
