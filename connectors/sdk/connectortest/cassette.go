@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -69,6 +70,11 @@ type Cassette struct {
 	Name string
 	// Interactions are the recorded request/response pairs in file order.
 	Interactions []*Interaction
+
+	// mu guards the Interaction.played bookkeeping during replay. Both replay
+	// entry points (ReplayServer's http.HandlerFunc and the RoundTripper) are
+	// driven concurrently by net/http, so match must be serialized.
+	mu sync.Mutex
 }
 
 // Interaction is one recorded request/response pair plus replay bookkeeping.
@@ -193,7 +199,15 @@ func (c *Cassette) validate() error {
 // interaction matches (a replay miss). Interactions sharing a matcher are
 // served in file order because the search runs front-to-back and stops at the
 // first unplayed match.
+//
+// The scan and the mark are one atomic step. net/http serves each connection
+// on its own goroutine, so a connector that fetches concurrently reaches this
+// from several goroutines at once; without the lock the read of in.played and
+// the increment race, and two callers can both observe played == 0 and be
+// served the same single-use interaction.
 func (c *Cassette) match(method, path, rawQuery string, body []byte) *Interaction {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, in := range c.Interactions {
 		if in.played > 0 {
 			continue
