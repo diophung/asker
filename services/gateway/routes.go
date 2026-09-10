@@ -16,10 +16,12 @@ import (
 const readyzProbeTimeout = 2 * time.Second
 
 // newHandler assembles the middleware chain. Outermost to innermost:
-// CORS (answers preflights pre-auth) -> pre-auth throttle (per-IP + global,
-// IN FRONT of auth so unauth floods can't hammer JWKS/crypto) -> telemetry ->
-// mux -> auth -> per-tenant rate limit -> handler. Admin routes add a distinct
-// admin-claim authorization check after auth.
+// security headers (outermost so EVERY response carries them, including
+// errors, 404s and preflights) -> CORS (answers preflights pre-auth) ->
+// pre-auth throttle (per-IP + global, IN FRONT of auth so unauth floods can't
+// hammer JWKS/crypto) -> telemetry -> mux -> auth -> per-tenant rate limit ->
+// handler. Admin routes add a distinct admin-claim authorization check after
+// auth.
 func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	limiter := newRateLimiter(d.counter, cfg.RateLimitPerMinute, d.logger)
 	cors := newCORSPolicy(cfg.CORSAllowedOrigins)
@@ -121,7 +123,7 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	})))
 
 	mux.HandleFunc("/", handleNotFound)
-	return cors.middleware(preAuth.middleware(telemetry.HTTPMiddleware("gateway")(mux)))
+	return securityHeadersMiddleware(cors.middleware(preAuth.middleware(telemetry.HTTPMiddleware("gateway")(mux))))
 }
 
 // methods dispatches by HTTP method with a JSON 405 (and Allow header) for
