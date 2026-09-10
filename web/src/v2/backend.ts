@@ -11,6 +11,7 @@
 // seam swaps back to the real OIDC token from src/auth.ts. NEVER ship this.
 
 import { getToken } from "./auth";
+import { safeHttpUrl } from "../safeUrl";
 import type {
   CalendarResult,
   EmailResult,
@@ -686,16 +687,28 @@ function sanitizeSnippet(s: string): string {
     .trim();
 }
 
-/** Gmail web deep link from the message id when the connector left it empty. */
+/** Result link, or "" when no usable one exists.
+ *
+ * Every candidate goes through safeHttpUrl. The gateway already scheme-checks
+ * the value it puts in `source_url`, but it also passes the raw provider
+ * metadata through untouched, and the fallbacks below read those keys
+ * directly — so without this gate a provider-supplied `javascript:` URL would
+ * reach the result href. See web/src/safeUrl.ts. */
 function linkFor(hit: GatewayHit): string {
-  if (hit.source_url) return hit.source_url;
   const md = hit.metadata;
-  if (md.html_link) return md.html_link;
-  if (md.web_link) return md.web_link;
-  if (md.web_view_link) return md.web_view_link;
-  if (md.permalink) return md.permalink;
+  for (const candidate of [
+    hit.source_url,
+    md.html_link,
+    md.web_link,
+    md.web_view_link,
+    md.permalink,
+  ]) {
+    const safe = safeHttpUrl(candidate);
+    if (safe !== "") return safe;
+  }
   if (hit.connector_id === "gmail" && md.message_id) {
-    return `https://mail.google.com/mail/u/0/#all/${md.message_id}`;
+    // Encoded: the id is provider data interpolated into a URL we construct.
+    return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(md.message_id)}`;
   }
   return "";
 }

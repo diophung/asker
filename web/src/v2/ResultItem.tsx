@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { safeHttpUrl } from "../safeUrl";
 import {
   Check,
   CornerUpLeft,
@@ -124,9 +125,12 @@ function TitleLink({
 }) {
   const cls =
     "text-[20px] leading-7 text-gtitle visited:text-gtitle-visited hover:underline";
-  if (url !== undefined && url !== "") {
+  // Re-checked at the sink: callers pass provider-derived URLs, and an
+  // unvalidated one here would be a javascript:-URL XSS. See src/safeUrl.ts.
+  const safe = safeHttpUrl(url);
+  if (safe !== "") {
     return (
-      <a href={url} target="_blank" rel="noopener noreferrer" className={cls}>
+      <a href={safe} target="_blank" rel="noopener noreferrer" className={cls}>
         {children}
       </a>
     );
