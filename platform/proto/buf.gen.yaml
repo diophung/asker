@@ -10,7 +10,21 @@ plugins:
     opt: paths=source_relative
   # Python bindings for the enrich worker (ADR-007). Remote buf plugins (no
   # local protoc needed); committed like the Go output.
-  - remote: buf.build/protocolbuffers/python
+  #
+  # PIN THESE. An unpinned `remote:` resolves to whatever the latest plugin is
+  # at generate time, so the committed output drifts on its own and CI's
+  # generated-code check fails on unrelated PRs (a new plugin release bumped
+  # the "Protobuf Python Version" stamp from 7.35.1 to 7.36.1). The local Go
+  # plugins were already pinned via the Makefile; these are the two inputs
+  # that were not. v35.1 reproduces the committed output byte for byte.
+  #
+  # LOCKSTEP: this pin and `protobuf==` in services/enrich/requirements.txt are
+  # one decision in two files. v35.1 emits gencode 7.35.1, and the generated
+  # module calls ValidateProtobufRuntimeVersion(7, 35, 1) at import time —
+  # protobuf refuses to load gencode NEWER than the runtime, so bumping the
+  # plugin without bumping that pin breaks every `from asker.v1 import ...`.
+  # Change both, regenerate, and commit together.
+  - remote: buf.build/protocolbuffers/python:v35.1
     out: gen/python
-  - remote: buf.build/protocolbuffers/pyi
+  - remote: buf.build/protocolbuffers/pyi:v35.1
     out: gen/python
