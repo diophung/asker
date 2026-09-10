@@ -57,6 +57,12 @@ jobs:
       TEI_MODEL_ID: BAAI/bge-small-en-v1.5
       EMBEDDING_DIM: "384"
       CLIP_DIM: "512"
+      # The GitHub runner has 2 CPUs; compose defaults TEI_CPUS to 4, and Docker
+      # rejects a cpus= above the available count ("range of CPUs is from 0.01
+      # to 2.00"), failing `make dev-up` before the stack starts. This also
+      # sizes TEI's RAYON/OMP thread pools, which the base compose wires to the
+      # same value.
+      TEI_CPUS: "2"
       # Soak duration: short for CI/nightly; the real 2h soak is on-demand.
       SOAK_DURATION: ${{ github.event.inputs.soak_duration || '10m' }}
       # synthgen seed parameters (run-load.sh seeds the corpus deterministically;
