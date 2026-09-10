@@ -65,9 +65,14 @@ func (d *deps) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
+	// The hub answers this endpoint exclusively with JSON, so the response is
+	// pinned to application/json rather than reflecting an upstream
+	// Content-Type. Mirrors the media proxy's stance of not letting the
+	// upstream response decide how the browser treats these bytes; here the
+	// content type is known, so pinning it is simpler than hardening a
+	// pass-through.
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }
