@@ -9,7 +9,7 @@
 open_clip_torch==2.24.0
 # Floor torch >= 2.13.0: torch.jit.script memory corruption (GHSA-rrmf-rvhw-rf47).
 torch==2.13.0
-pillow==12.2.0
+pillow==12.3.0
 # Required by open_clip's image preprocessing (PIL image -> tensor). Without it
 # image embedding fails at runtime with "Numpy is not available" while text
 # embedding still works. Kept at numpy<2 — validated working with torch 2.12.0.

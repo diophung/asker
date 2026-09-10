@@ -16,5 +16,5 @@ protobuf==7.35.1
 faster-whisper==1.2.1
 # Pillow opens/resizes images for OCR input and thumbnails; pytesseract drives
 # the `tesseract-ocr` binary (installed in the Dockerfile).
-pillow==12.2.0
+pillow==12.3.0
 pytesseract==0.3.13
