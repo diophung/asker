@@ -25,6 +25,17 @@ const mediaTimeout = 60 * time.Second
 // BlobRef names a MIME type.
 const defaultMediaContentType = "application/octet-stream"
 
+// setMediaSecurityHeaders hardens a blob response so stored bytes can never be
+// rendered as an active document in the serving origin. Applied by both the
+// hub's /internal/media and the gateway's /v1/media proxy, so the guarantee
+// holds no matter which one a client reaches.
+func setMediaSecurityHeaders(h http.Header) {
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Disposition", "attachment")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("X-Frame-Options", "DENY")
+}
+
 // mediaBlobRef is the JSON shape returned by PUT /internal/media — the same
 // fields the enrich worker writes into Document.media (thumbnail/keyframe
 // BlobRef). Mirrors askerv1.BlobRef so the worker round-trips it without the
@@ -101,6 +112,15 @@ func (h *httpAPI) handleMediaGet(w http.ResponseWriter, r *http.Request) {
 		contentType = defaultMediaContentType
 	}
 	w.Header().Set("Content-Type", contentType)
+	// The stored Content-Type originates from an upload's multipart part
+	// header (attacker controlled), so the response is hardened against being
+	// rendered as an active document: nosniff stops MIME sniffing from
+	// upgrading octet-stream to text/html, attachment forces a download
+	// instead of a top-level render, and the sandbox CSP neutralizes script
+	// even if the other two are bypassed. The web client reads this endpoint
+	// with fetch()+URL.createObjectURL (api.ts fetchThumbnail), which these
+	// headers do not affect.
+	setMediaSecurityHeaders(w.Header())
 	w.WriteHeader(http.StatusOK)
 	// A write error means the client went away mid-stream; nothing to recover.
 	_, _ = w.Write(data)

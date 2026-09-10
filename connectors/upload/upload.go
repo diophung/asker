@@ -78,9 +78,7 @@ func HandleUpload(ctx context.Context, deps Deps, tenant tenancy.Context, file i
 		return nil, ErrTooLarge
 	}
 	contentType = strings.ToValidUTF8(contentType, "")
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
+	contentType = sanitizeContentType(contentType)
 
 	sum := sha256.Sum256(content)
 	digest := hex.EncodeToString(sum[:])
@@ -124,6 +122,73 @@ func HandleUpload(ctx context.Context, deps Deps, tenant tenancy.Context, file i
 		Original:    ref,
 		VersionEtag: digest,
 	}, nil
+}
+
+// defaultContentType is the inert type used for empty, malformed, or
+// actively-dangerous upload MIME types.
+const defaultContentType = "application/octet-stream"
+
+// activeContentTypes are media types a browser will execute script from when
+// it renders the bytes as a top-level document. The upload MIME type arrives
+// from the client's multipart part header, so it is attacker controlled, and
+// it is echoed back as the Content-Type of GET /v1/media. Storing one of
+// these would turn an upload into stored XSS in the gateway's own origin.
+//
+// This is a denylist of *renderable* types rather than an allowlist of good
+// ones on purpose: uploads are arbitrary user files (PDFs, Office documents,
+// archives, source code), and an allowlist would silently degrade all of them
+// to octet-stream, breaking classifyDocType/isTextual for legitimate content.
+// Everything here is neutralized to octet-stream; combined with the
+// nosniff/Content-Disposition/CSP headers on the serving path, the bytes are
+// downloaded rather than rendered.
+var activeContentTypes = map[string]bool{
+	"text/html":                     true,
+	"application/xhtml+xml":         true,
+	"image/svg+xml":                 true,
+	"application/xml":               true,
+	"text/xml":                      true,
+	"application/xslt+xml":          true,
+	"text/javascript":               true,
+	"application/javascript":        true,
+	"application/x-javascript":      true,
+	"application/ecmascript":        true,
+	"text/ecmascript":               true,
+	"application/x-shockwave-flash": true,
+}
+
+// sanitizeContentType normalizes an untrusted upload MIME type into one that
+// is safe to store and later reflect as a response Content-Type. Anything
+// unparseable or script-bearing becomes application/octet-stream; otherwise
+// the type is re-serialized from the parsed media type and parameters, which
+// normalizes casing and whitespace and drops any trailing junk after the
+// parameter list. Legitimate parameters are preserved, so "text/plain;
+// charset=utf-8" survives intact.
+//
+// PDF is deliberately NOT neutralized: browsers render it in a sandboxed
+// viewer that cannot script the embedding origin, and downgrading it would
+// break the common case of uploading documents.
+func sanitizeContentType(contentType string) string {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return defaultContentType
+	}
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	// ParseMediaType accepts a bare token with no "/" (e.g. "attachment"),
+	// which is not a usable Content-Type; require type/subtype so nothing
+	// malformed is ever stored and later reflected to a browser.
+	slash := strings.IndexByte(mediaType, '/')
+	if slash <= 0 || slash == len(mediaType)-1 {
+		return defaultContentType
+	}
+	if activeContentTypes[mediaType] {
+		return defaultContentType
+	}
+	// FormatMediaType re-quotes parameters and returns "" if the result would
+	// be malformed; fall back to the bare media type in that case.
+	if formatted := mime.FormatMediaType(mediaType, params); formatted != "" {
+		return formatted
+	}
+	return mediaType
 }
 
 // classifyDocType maps the upload's MIME type to a DocType so media uploads
