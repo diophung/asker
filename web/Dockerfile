@@ -14,6 +14,8 @@ RUN npm run build
 # Serve stage: static files behind nginx with SPA fallback.
 FROM nginx:alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Included per-location by nginx.conf; nginx fails to start if it is missing.
+COPY security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
