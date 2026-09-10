@@ -77,8 +77,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Via the Makefile, which scopes the walk to GO_PKGS. A bare `go build
+      # ./...` violates the repo's stated rule (CLAUDE.md): web/node_modules can
+      # contain vendored Go files that must never enter the package walk. It
+      # happens to pass today only because this job never runs `npm ci`.
       - name: Build all Go packages
-        run: go build ./...
+        run: make build
       - name: Build gateway image
         run: docker build -f services/gateway/Dockerfile -t asker-gateway:ci .
       - name: Scan gateway image (trivy)
@@ -89,6 +93,55 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+
+  # Supply-chain gate. Without this, dependency and stdlib vulnerabilities are
+  # only visible on the Dependabot alerts page, which nothing blocks on — they
+  # accumulated to 45 open alerts (35 high) before this job existed. Each
+  # ecosystem is a separate step so a failure names the ecosystem directly, and
+  # they all run (continue-on-error is NOT used) so one failure does not mask
+  # the others.
+  vulns:
+    name: vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # govulncheck is reachability-aware: it reports only vulnerabilities this
+      # code actually calls, so it is precise enough to gate a build on. It also
+      # covers the Go STANDARD LIBRARY, which Dependabot cannot see at all —
+      # the go.mod toolchain version is what fixes those.
+      - name: govulncheck (Go deps + stdlib)
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@latest \
+            ./platform/... ./services/... ./connectors/... ./tools/...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # --audit-level=high fails on high/critical only. Moderate and below are
+      # reported but do not block, so a transitive advisory in dev tooling
+      # cannot wedge every unrelated PR.
+      - name: npm audit (web)
+        working-directory: web
+        run: npm audit --audit-level=high
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit (enrich + clip)
+        run: |
+          pip install pip-audit
+          # Audit the pinned requirement sets without installing the heavy ML
+          # wheels (torch et al). --strict fails on an unfixable finding rather
+          # than passing quietly.
+          pip-audit --strict --requirement services/enrich/requirements.txt
+          pip-audit --strict --requirement services/clip/requirements.txt
 
   enrich:
     name: enrich (python)
