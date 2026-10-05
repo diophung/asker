@@ -52,6 +52,7 @@ RUN_ID="$(date +%s)"
 USERS=(alice bob carol)
 USER_PASS="password123"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/m1-e2e.XXXXXX")"
+mkdir -m 700 "$TMP/tokens"
 
 # Per-tenant state (parallel arrays indexed 0=alice 1=bob 2=carol).
 MAILBOX=()      # run-unique fake-gmail mailbox
@@ -59,7 +60,6 @@ SEEDVAL=()      # deterministic per-tenant generator seed
 ISO_TOKEN=()    # run+tenant-unique isolation marker token
 ISO_ID=()       # message id of the injected isolation message
 INSTANCE=()     # gateway connector instance id
-TOKENS=()       # current OIDC access tokens
 TENANT=()       # tenant_id from /v1/me
 P0_ID=(); P0_SUBJ=(); P0_TS=(); P0_TOK=(); P0_CTOK=()  # probe for correctness checks
 P1_ID=(); P1_TOK=()                                    # probe for the freshness edit
@@ -71,7 +71,7 @@ for i in 0 1 2; do
   # Pre-seed the per-tenant arrays so that, under `set -u`, a step that fails
   # during setup leaves later steps to report a clean failure rather than
   # aborting the whole run on an unbound-variable error.
-  TOKENS[i]=""; TENANT[i]=""; INSTANCE[i]=""
+  TENANT[i]=""; INSTANCE[i]=""
 done
 
 # Measured latencies (seconds), reported in the final summary.
@@ -134,24 +134,76 @@ print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc)
 ' "$1"
 }
 
-# fetch_token USER: print an access token via the dev password grant.
+# Cache tokens in this private run directory, rather than shell arrays: callers
+# use command substitution, and its subshell cannot update an in-memory cache.
+# Use expires_in (and JWT exp when available) with 30s of request headroom.
+cat >"$TMP/token.py" <<'PYEOF'
+import base64
+import json
+import os
+import sys
+import tempfile
+
+op, path, now = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    if op == "get":
+        with open(path, encoding="utf-8") as source:
+            cached = json.load(source)
+        token, expiry = cached["token"], cached["expires_at"]
+        if not isinstance(token, str) or not token or any(not "!" <= c <= "~" for c in token):
+            raise ValueError("invalid token")
+        if not isinstance(expiry, int) or expiry <= now + 30:
+            raise ValueError("expired token")
+    elif op == "save":
+        grant = json.load(sys.stdin)
+        token, ttl = grant["access_token"], grant["expires_in"]
+        if not isinstance(token, str) or not token or any(not "!" <= c <= "~" for c in token):
+            raise ValueError("invalid token")
+        if type(ttl) is not int or not 1 <= ttl <= 86400:
+            raise ValueError("invalid token lifetime")
+        expiry = now + ttl  # request start is conservative if Keycloak is slow
+        if len(token.split(".")) == 3:
+            payload = token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+            jwt_exp = claims.get("exp")
+            if type(jwt_exp) is not int:
+                raise ValueError("missing JWT expiry")
+            expiry = min(expiry, jwt_exp)
+        if expiry <= int(sys.argv[4]):
+            raise ValueError("grant expired during request")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(path),
+                                         delete=False) as target:
+            json.dump({"token": token, "expires_at": expiry}, target)
+        os.replace(target.name, path)  # tempfile is 0600, including after replacement
+    else:
+        raise ValueError("invalid token operation")
+    print(token)
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit(1)  # never print grants, credentials or token contents
+PYEOF
+
+# fetch_token USER [refresh]: print a token valid at this request boundary.
 fetch_token() {
-  local body tok
+  local user="$1" cache now body
+  case "$user" in alice | bob | carol) ;; *) return 1 ;; esac
+  cache="$TMP/tokens/$user.json"
+  now=$(date +%s)
+  if [ "${2:-}" != refresh ] && python3 "$TMP/token.py" get "$cache" "$now" 2>/dev/null; then
+    return 0
+  fi
   body="$("${CURL[@]}" -X POST "${KEYCLOAK_URL}/realms/asker/protocol/openid-connect/token" \
     -H 'Content-Type: application/x-www-form-urlencoded' \
     --data-urlencode "client_id=asker-web" \
     --data-urlencode "grant_type=password" \
-    --data-urlencode "username=$1" \
-    --data-urlencode "password=${USER_PASS}" 2>&1)" || {
-    echo "token request failed: ${body:0:200}"
+    --data-urlencode "username=$user" \
+    --data-urlencode "password=${USER_PASS}" 2>/dev/null)" || {
+    echo "token request failed for $user" >&2
     return 1
   }
-  tok="$(json_field access_token <<<"$body" || true)"
-  if [ -z "$tok" ]; then
-    echo "no access_token in response: ${body:0:200}"
+  if ! python3 "$TMP/token.py" save "$cache" "$now" "$(date +%s)" <<<"$body"; then
+    echo "invalid or expired token response for $user" >&2
     return 1
   fi
-  printf '%s\n' "$tok"
 }
 
 # fetch_admin_token: Keycloak master-realm admin token (dev console creds).
@@ -163,43 +215,33 @@ fetch_admin_token() {
     --data-urlencode "grant_type=password" \
     --data-urlencode "username=${KC_ADMIN_USER}" \
     --data-urlencode "password=${KC_ADMIN_PASS}" 2>&1)" || {
-    echo "admin token request failed: ${body:0:200}"
+    echo "admin token request failed" >&2
     return 1
   }
   tok="$(json_field access_token <<<"$body" || true)"
   if [ -z "$tok" ]; then
-    echo "no access_token in admin response: ${body:0:200}"
+    echo "no access_token in admin response" >&2
     return 1
   fi
   printf '%s\n' "$tok"
 }
 
-# refresh_tokens: refetch all three user tokens (dev access tokens live 300s;
-# several phases run longer than that).
-refresh_tokens() {
-  local i t
-  for i in 0 1 2; do
-    t="$(fetch_token "${USERS[i]}")" || {
-      echo "refresh_tokens: ${USERS[i]}: $t" >&2
-      return 1
-    }
-    TOKENS[i]="$t"
-  done
-}
-
-# search_as TOKEN PARAM...: GET /v1/search with the given query params
+# search_as USER PARAM...: GET /v1/search with a currently valid user token.
 # (PARAMs are "key=value", url-encoded by curl). Body lands in $TMP/search.json.
-# Retries on 429 (the per-tenant rate limit is shared with concurrent suites).
+# Bypass query caching while observing indexing. Retry 429 and refresh once on
+# 401, including when an earlier request/retry consumed the token lifetime.
 search_as() {
-  local token="$1" code attempt p
+  local user="$1" token code p refreshed=0
   shift
   local args=()
   for p in "$@"; do
     args+=(--data-urlencode "$p")
   done
-  for attempt in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
+    token="$(fetch_token "$user")" || return 1
     code="$(curl -s -o "$TMP/search.json" -w '%{http_code}' --max-time 30 -G \
-      -H "Authorization: Bearer ${token}" "${GATEWAY_URL}/v1/search" "${args[@]}")" || code="000"
+      -H "Authorization: Bearer ${token}" -H 'Cache-Control: no-cache' \
+      "${GATEWAY_URL}/v1/search" "${args[@]}")" || code="000"
     if [ "$code" = "200" ]; then
       return 0
     fi
@@ -207,10 +249,25 @@ search_as() {
       sleep 3
       continue
     fi
+    if [ "$code" = "401" ] && [ "$refreshed" = 0 ]; then
+      fetch_token "$user" refresh >/dev/null || return 1
+      refreshed=1
+      continue
+    fi
     break
   done
   echo "search HTTP ${code}: $(head -c 200 "$TMP/search.json" 2>/dev/null || true)" >&2
   return 1
+}
+
+# Membership probes have an exact lexical contract; hybrid dense candidates
+# may legitimately include other documents from this same tenant.
+search_marker_as() {
+  local user="$1" marker="$2"
+  shift 2
+  [[ "$marker" =~ ^[[:alnum:]]+$ ]] || return 1
+  search_as "$user" "q=\"${marker}\"" "mode=keyword" "$@" || return 1
+  [ "$(xt degraded)" = "" ] # a failed backend's empty fallback cannot prove absence
 }
 
 # xt OP [ARGS]: run a search-response extraction op against $TMP/search.json.
@@ -244,6 +301,12 @@ def marker(d, mb):
     return out
 
 
+def target(d, mb, identity):
+    scoped = marker(d, mb) if mb else hits(d)
+    return [h for h in scoped if h.get("doc_id") == identity
+            or (h.get("metadata") or {}).get("message_id") == identity]
+
+
 op = sys.argv[1]
 d = json.load(sys.stdin)
 if op == "count":  # global hit count
@@ -264,6 +327,11 @@ elif op == "marker_field":  # argv[2]=mailbox argv[3]=field (or metadata.X)
         print((h.get("metadata") or {}).get(f[len("metadata."):], ""))
     else:
         print(h.get(f, ""))
+elif op == "target_count":  # argv[2]=mailbox argv[3]=message_id or doc_id
+    print(len(target(d, sys.argv[2], sys.argv[3])))
+elif op == "target_field":  # argv[2]=mailbox argv[3]=identity argv[4]=field
+    matched = target(d, sys.argv[2], sys.argv[3])
+    print(matched[0].get(sys.argv[4], "") if matched else "")
 elif op == "field":  # argv[2]=field of the first hit
     hs = hits(d)
     print(hs[0].get(sys.argv[2], "") if hs else "")
@@ -342,29 +410,29 @@ gmail_get() {
     "${FAKE_GMAIL_URL}/gmail/v1/users/me$2"
 }
 
-# wait_hits NAME USER QUERY MAILBOX WANT TIMEOUT: poll /v1/search as USER for
-# QUERY until the hit count meets WANT ("pos": >=1, "zero": ==0). When MAILBOX
-# is non-empty the count is marker-scoped to it; otherwise it is the global
-# hit count (only safe for run-unique tokens). The varying limit busts the
-# 60s query result cache (limit is part of the cache key) without changing
-# which documents match. Sets WAIT_OK, WAIT_ELAPSED, WAIT_END, WAIT_LAST.
+# wait_hits NAME USER MARKER MAILBOX WANT TIMEOUT ID: poll uncached exact
+# markers. Positive waits require the expected source message_id or doc_id,
+# so another hit in the same mailbox cannot announce a successful drain.
+# Zero waits still require ALL marker matches in scope to disappear.
+# Sets WAIT_OK, WAIT_ELAPSED, WAIT_END, WAIT_LAST.
 wait_hits() {
   local name="$1" user="$2" query="$3" mbox="$4" want="$5" timeout="$6"
-  local start now elapsed=0 i=0 tok count lim met
+  local identity="${7:-}" start now elapsed=0 i=0 count met
   WAIT_OK=0
   WAIT_ELAPSED=0
   WAIT_END=0
   WAIT_LAST="?"
   start=$(date +%s)
-  tok="$(fetch_token "$user")" || {
-    echo "     .. ${name}: cannot fetch ${user} token: $tok"
+  if [ -z "$identity" ]; then
+    echo "     .. ${name}: missing expected document identity"
     return 0
-  }
+  fi
   while :; do
-    lim=$((30 + i % 70))
     count="?"
-    if search_as "$tok" "q=${query}" "limit=${lim}" 2>/dev/null; then
-      if [ -n "$mbox" ]; then
+    if search_marker_as "$user" "$query" "limit=100" 2>/dev/null; then
+      if [ "$want" = pos ]; then
+        count="$(xt target_count "$mbox" "$identity" 2>/dev/null || echo '?')"
+      elif [ -n "$mbox" ]; then
         count="$(xt marker_count "$mbox" 2>/dev/null || echo '?')"
       else
         count="$(xt count 2>/dev/null || echo '?')"
@@ -378,7 +446,7 @@ wait_hits() {
     esac
     now=$(date +%s)
     elapsed=$((now - start))
-    if [ "$met" = "1" ]; then
+    if [ "$met" = "1" ] && [ "$elapsed" -le "$timeout" ]; then
       WAIT_OK=1
       WAIT_ELAPSED="$elapsed"
       WAIT_END="$now"
@@ -392,9 +460,6 @@ wait_hits() {
     i=$((i + 1))
     if [ $((i % 10)) -eq 0 ]; then
       echo "     .. ${name}: waiting (${elapsed}s elapsed, hits=${count}, want ${want})"
-    fi
-    if [ $((i % 60)) -eq 59 ]; then
-      tok="$(fetch_token "$user" || true)" # tokens expire after 300s
     fi
     sleep 3
   done
@@ -414,6 +479,12 @@ cleanup() {
   rm -rf "$TMP"
 }
 trap cleanup EXIT
+
+# Sourcing exposes the real helpers to offline contract tests without making
+# preflight, seed, connector or search requests.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
 
 echo "== Asker M1 e2e test =="
 echo "   gateway=${GATEWAY_URL} keycloak=${KEYCLOAK_URL} fake-gmail=${FAKE_GMAIL_URL}"
@@ -468,7 +539,6 @@ for i in 0 1 2; do
     diag="${USERS[i]}: $t"
     break
   fi
-  TOKENS[i]="$t"
   if ! body="$("${CURL[@]}" -H "Authorization: Bearer ${t}" "${GATEWAY_URL}/v1/me" 2>&1)" ||
     ! TENANT[i]="$(json_field tenant_id <<<"$body")" || [ -z "${TENANT[i]}" ]; then
     tenants_ok=0
@@ -574,13 +644,18 @@ for i in 0 1 2; do
   diag=""
   create_payload="$(printf '{"connector_id":"gmail","display_name":"m1-e2e %s %s","config":{"base_url":"%s","user_email":"%s"}}' \
     "$user" "$RUN_ID" "$FAKE_GMAIL_INTERNAL_URL" "$mbox")"
-  if body="$("${CURL[@]}" -X POST "${GATEWAY_URL}/v1/connectors" \
-    -H "Authorization: Bearer ${TOKENS[i]}" -H 'Content-Type: application/json' \
+  if t="$(fetch_token "$user")" &&
+    body="$("${CURL[@]}" -X POST "${GATEWAY_URL}/v1/connectors" \
+    -H "Authorization: Bearer ${t}" -H 'Content-Type: application/json' \
     -d "$create_payload" 2>&1)" &&
     INSTANCE[i]="$(json_field id <<<"$body")" && [ -n "${INSTANCE[i]}" ]; then
-    code="$(http_code -X PUT "${GATEWAY_URL}/v1/connectors/${INSTANCE[i]}/token" \
-      -H "Authorization: Bearer ${TOKENS[i]}" -H 'Content-Type: application/json' \
+    if t="$(fetch_token "$user")"; then
+      code="$(http_code -X PUT "${GATEWAY_URL}/v1/connectors/${INSTANCE[i]}/token" \
+      -H "Authorization: Bearer ${t}" -H 'Content-Type: application/json' \
       -d "{\"token\":\"fake-gmail-token:${mbox}\"}")"
+    else
+      code="000"
+    fi
     if [ "$code" = "204" ]; then
       conn_ok=1
     else
@@ -615,7 +690,8 @@ while :; do
       statusline+="${USERS[i]}:no-instance "
       continue
     }
-    if body="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKENS[i]}" \
+    if t="$(fetch_token "${USERS[i]}")" &&
+      body="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${t}" \
       "${GATEWAY_URL}/v1/connectors" 2>/dev/null)"; then
       read -r phase docs lasterr <<<"$(python3 "$TMP/sync.py" "${INSTANCE[i]}" <<<"$body")"
     else
@@ -641,9 +717,6 @@ while :; do
     echo "   sync progress (${elapsed}s): ${statusline}"
   fi
   iter=$((iter + 1))
-  if [ $((iter % 30)) -eq 0 ]; then
-    refresh_tokens || true # access tokens live 300s
-  fi
   sleep 5
 done
 
@@ -661,7 +734,7 @@ echo "-- waiting for pipeline drain: per-tenant isolation token searchable --"
 for i in 0 1 2; do
   user="${USERS[i]}"
   begin "${user}: seeded token '${ISO_TOKEN[i]}' searchable (pipeline drain)"
-  wait_hits "drain-${user}" "$user" "${ISO_TOKEN[i]}" "${MAILBOX[i]}" pos "$E2E_DRAIN_TIMEOUT"
+  wait_hits "drain-${user}" "$user" "${ISO_TOKEN[i]}" "${MAILBOX[i]}" pos "$E2E_DRAIN_TIMEOUT" "${ISO_ID[i]:-}"
   if [ "$WAIT_OK" = "1" ]; then
     DRAIN_SECS[i]="$WAIT_ELAPSED"
     pass
@@ -673,7 +746,6 @@ done
 
 # --- 5. Correctness per tenant ---------------------------------------------------
 
-refresh_tokens || true
 for i in 0 1 2; do
   user="${USERS[i]}"
   mbox="${MAILBOX[i]}"
@@ -681,15 +753,16 @@ for i in 0 1 2; do
   begin "${user}: rare token '${P0_TOK[i]}' -> exactly 1 doc, title match, <hi> snippet"
   rare_ok=0
   diag=""
-  if search_as "${TOKENS[i]}" "q=${P0_TOK[i]}" "limit=50"; then
+  if search_marker_as "$user" "${P0_TOK[i]}" "limit=50"; then
     mcount="$(xt marker_count "$mbox")"
     mtitle="$(xt marker_field "$mbox" title)"
     msnip="$(xt marker_field "$mbox" snippet)"
+    mid="$(xt marker_field "$mbox" metadata.message_id)"
     if [ "$mcount" = "1" ] && [ "$mtitle" = "${P0_SUBJ[i]}" ] &&
-      [[ "$msnip" == *"<hi>"* ]]; then
+      [ "$mid" = "${P0_ID[i]}" ] && [[ "$msnip" == *"<hi>"* ]]; then
       rare_ok=1
     else
-      diag="marker hits=${mcount} (want 1); title='${mtitle}' (want '${P0_SUBJ[i]}'); snippet highlight=$([[ "$msnip" == *'<hi>'* ]] && echo yes || echo NO)"
+      diag="marker hits=${mcount} (want 1); message_id=${mid} (want ${P0_ID[i]}); title='${mtitle}' (want '${P0_SUBJ[i]}'); snippet highlight=$([[ "$msnip" == *'<hi>'* ]] && echo yes || echo NO)"
     fi
   else
     diag="search failed"
@@ -701,22 +774,26 @@ for i in 0 1 2; do
     fail "$diag"
   fi
 
-  begin "${user}: common word 'tighter' -> multiple hits, all EMAIL, scores descending"
+  begin "${user}: hybrid common word 'tighter' -> multiple hits, all EMAIL, scores descending"
   # The full 10K-email corpus is still indexing asynchronously (TEI embeddings)
   # when this runs, so a tenant's 'tighter' matches can be landing one at a time
   # (seen in CI: one tenant at 1 hit while the others already had >=2). Poll until
-  # the assertion holds or a bounded timeout, varying limit to bust the 60s
-  # query-result cache.
-  scount="?"; stypes="?"; sdesc="?"; common_ok=""; c21_start=$(date +%s); c21_n=0
+  # the assertion holds or a bounded timeout. Wait for lexical readiness too:
+  # dense-only hybrid hits do not prove the word has finished indexing.
+  scount="?"; stypes="?"; sdesc="?"; common_ok=""; c21_start=$(date +%s)
   while :; do
-    if search_as "${TOKENS[i]}" "q=tighter" "types=EMAIL" "limit=$((20 + c21_n % 30))" &&
+    kw_ready=0
+    if search_as "$user" "q=tighter" "mode=keyword" "types=EMAIL" "limit=10"; then
+      kw_ready="$(xt count)"
+    fi
+    if [ "$kw_ready" -ge 1 ] &&
+      search_as "$user" "q=tighter" "mode=hybrid" "types=EMAIL" "limit=20" &&
       read -r scount stypes sdesc <<<"$(xt shape)" &&
       [ "$scount" -ge 2 ] && [ "$stypes" = "yes" ] && [ "$sdesc" = "yes" ]; then
       common_ok=1
       break
     fi
     [ "$(($(date +%s) - c21_start))" -ge "${COMMON_WORD_TIMEOUT:-300}" ] && break
-    c21_n=$((c21_n + 1))
     sleep 5
   done
   if [ -n "$common_ok" ]; then
@@ -730,10 +807,10 @@ for i in 0 1 2; do
   kw_count=""
   hy_count=""
   hy_degraded="(search failed)"
-  if search_as "${TOKENS[i]}" "q=tighter" "mode=keyword" "limit=10"; then
+  if search_as "$user" "q=tighter" "mode=keyword" "limit=10"; then
     kw_count="$(xt count)"
   fi
-  if search_as "${TOKENS[i]}" "q=tighter" "mode=hybrid" "limit=10"; then
+  if search_as "$user" "q=tighter" "mode=hybrid" "limit=10"; then
     hy_count="$(xt count)"
     hy_degraded="$(xt degraded)"
   fi
@@ -764,9 +841,9 @@ for i in 0 1 2; do
   )
   for case_spec in "${filter_cases[@]}"; do
     IFS='|' read -r cname cwant cp1 cp2 <<<"$case_spec"
-    params=("q=${P0_TOK[i]}" "limit=50" "$cp1")
+    params=("limit=50" "$cp1")
     [ -n "${cp2:-}" ] && params+=("$cp2")
-    if ! search_as "${TOKENS[i]}" "${params[@]}"; then
+    if ! search_marker_as "$user" "${P0_TOK[i]}" "${params[@]}"; then
       f_ok=0
       diag="${cname}: search failed"
       break
@@ -788,12 +865,11 @@ done
 
 # --- 6. Tenant isolation (the core check) ----------------------------------------
 
-refresh_tokens || true
 for i in 0 1 2; do
   for j in 0 1 2; do
     [ "$i" = "$j" ] && continue
     begin "isolation: ${USERS[i]}'s token '${ISO_TOKEN[i]}' invisible to ${USERS[j]} (0 hits)"
-    if search_as "${TOKENS[j]}" "q=${ISO_TOKEN[i]}" "limit=50" &&
+    if search_marker_as "${USERS[j]}" "${ISO_TOKEN[i]}" "limit=50" &&
       iso_hits="$(xt count)" && iso_total="$(xt total)" &&
       [ "$iso_hits" = "0" ] && [ "$iso_total" = "0" ]; then
       pass
@@ -814,11 +890,11 @@ if body="$("${CURL[@]}" -X PUT "${FAKE_GMAIL_URL}/admin/users/${MAILBOX[0]}/mess
   -H 'Content-Type: application/json' \
   -d "{\"subject\":\"Edited subject ${FRESH_TOKEN}\",\"body\":\"Edited at the source. New tracking reference ${FRESH_TOKEN}.\"}" 2>&1)"; then
   echo "(edited, polling)"
-  wait_hits "freshness" alice "$FRESH_TOKEN" "${MAILBOX[0]}" pos "$E2E_FRESHNESS_BUDGET"
+  wait_hits "freshness" alice "$FRESH_TOKEN" "${MAILBOX[0]}" pos "$E2E_FRESHNESS_BUDGET" "${P1_ID[0]:-}"
   printf '     %s ... ' "verdict"
   if [ "$WAIT_OK" = "1" ]; then
     FRESH_SECS=$((WAIT_END - edit_start))
-    etitle="$(xt marker_field "${MAILBOX[0]}" title)"
+    etitle="$(xt target_field "${MAILBOX[0]}" "${P1_ID[0]}" title)"
     if [ "$etitle" = "Edited subject ${FRESH_TOKEN}" ]; then
       pass
       printf '     -> edit -> searchable in %ss (budget %ss)\n' "$FRESH_SECS" "$E2E_FRESHNESS_BUDGET"
@@ -833,7 +909,7 @@ else
 fi
 
 begin "freshness: old body token '${P1_TOK[0]}' no longer matches the edited doc"
-wait_hits "old-version-gone" alice "${P1_TOK[0]}" "${MAILBOX[0]}" zero 120
+wait_hits "old-version-gone" alice "${P1_TOK[0]}" "${MAILBOX[0]}" zero 120 "${P1_ID[0]:-}"
 if [ "$WAIT_OK" = "1" ]; then
   pass
   printf '     -> old version unsearchable after %ss\n' "$WAIT_ELAPSED"
@@ -850,7 +926,7 @@ delete_start=$(date +%s)
 code="$(http_code -X DELETE "${FAKE_GMAIL_URL}/admin/users/${MAILBOX[0]}/messages/${P2_ID[0]}")"
 if [ "$code" = "204" ]; then
   echo "(deleted, polling)"
-  wait_hits "delete" alice "${P2_TOK[0]}" "${MAILBOX[0]}" zero "$E2E_DRAIN_TIMEOUT"
+  wait_hits "delete" alice "${P2_TOK[0]}" "${MAILBOX[0]}" zero "$E2E_DRAIN_TIMEOUT" "${P2_ID[0]:-}"
   printf '     %s ... ' "verdict"
   if [ "$WAIT_OK" = "1" ]; then
     DELETE_SECS=$((WAIT_END - delete_start))
@@ -872,21 +948,24 @@ begin "upload: POST /v1/upload as alice -> 202, doc searchable as FILE"
 upload_file="$TMP/asker-m1-${RUN_ID}.txt"
 printf 'M1 e2e upload probe.\nUnique tracking reference %s.\nRun %s.\n' \
   "$UPLOAD_TOKEN" "$RUN_ID" >"$upload_file"
-alice_tok="$(fetch_token alice)" || alice_tok="${TOKENS[0]}"
 upload_start=$(date +%s)
-code="$(curl -s -o "$TMP/upload.json" -w '%{http_code}' --max-time 60 \
+if alice_tok="$(fetch_token alice)"; then
+  code="$(curl -s -o "$TMP/upload.json" -w '%{http_code}' --max-time 60 \
   -X POST "${GATEWAY_URL}/v1/upload" -H "Authorization: Bearer ${alice_tok}" \
   -F "file=@${upload_file};type=text/plain" -F "title=${UPLOAD_TITLE}")"
+else
+  code="000"
+fi
 if [ "$code" = "202" ] && upload_doc_id="$(json_field doc_id <"$TMP/upload.json")" &&
   [ -n "$upload_doc_id" ]; then
   echo "(accepted, polling)"
-  wait_hits "upload" alice "$UPLOAD_TOKEN" "" pos 300
+  wait_hits "upload" alice "$UPLOAD_TOKEN" "" pos 300 "$upload_doc_id"
   printf '     %s ... ' "verdict"
   if [ "$WAIT_OK" = "1" ]; then
     UPLOAD_SECS=$((WAIT_END - upload_start))
-    utype="$(xt field type)"
-    udoc="$(xt field doc_id)"
-    utitle="$(xt field title)"
+    utype="$(xt target_field "" "$upload_doc_id" type)"
+    udoc="$(xt target_field "" "$upload_doc_id" doc_id)"
+    utitle="$(xt target_field "" "$upload_doc_id" title)"
     if [ "$utype" = "FILE" ] && [ "$udoc" = "$upload_doc_id" ] &&
       [ "$utitle" = "$UPLOAD_TITLE" ]; then
       pass
@@ -902,8 +981,7 @@ else
 fi
 
 begin "upload: bob cannot see alice's uploaded doc (0 hits)"
-if bob_tok="$(fetch_token bob)" &&
-  search_as "$bob_tok" "q=${UPLOAD_TOKEN}" "limit=50" &&
+if search_marker_as bob "$UPLOAD_TOKEN" "limit=50" &&
   up_hits="$(xt count)" && [ "$up_hits" = "0" ]; then
   pass
 else
@@ -915,8 +993,12 @@ fi
 begin "rate limit: 30-request burst as bob -> only 200/429, never 5xx"
 burst_ok=1
 burst_codes=""
-bob_tok="${bob_tok:-${TOKENS[1]}}"
 for _ in $(seq 1 30); do
+  if ! bob_tok="$(fetch_token bob)"; then
+    burst_ok=0
+    burst_codes+="TOKEN-ERR "
+    continue
+  fi
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -G \
     -H "Authorization: Bearer ${bob_tok}" "${GATEWAY_URL}/v1/search" \
     --data-urlencode "q=rlprobe${RUN_ID}" --data-urlencode "limit=1")"
