@@ -41,6 +41,21 @@ Newest entries go first.
   Node/npm versions, clean install, 170 web tests, build, lint and npm audit pass
   with zero reported vulnerabilities. The hosted Go build/image scan, race tests,
   lint, Python contracts and web jobs also passed on the initial remediation head.
+- Verified: the subsequent hosted run passed 10 of 12 jobs, including all
+  dependency audits, 19 smoke checks, 15 GDPR erasure/isolation checks and 15 kind
+  checks. M1 passed 40 of 43 assertions; the three failures exposed stale scores
+  after final diversification. Media exposed a PyAV/faster-whisper API mismatch
+  followed by expired credentials in later assertions.
+- Done: publish final personalized/MMR scores with earlier-stage diagnostics;
+  preserve result order, calendar chronology and cancellation. Added finite
+  overflow handling and versioned result-cache keys. Pin compatible PyAV 18.1.0;
+  its bundled FFmpeg includes the identified native fix. Media auth refreshes at
+  request boundaries and rejects invalid/degraded bodies as isolation evidence.
+- Verified: seven new score regressions, full Go build/race tests/coverage gate,
+  vet and lint pass; query coverage is 88.1%, tenancy remains 100%. All 122 enrich
+  tests pass, including real committed-fixture audio decoding without model
+  inference. Six GDPR/media auth tests and 15 shell regression groups pass;
+  existing media assertions, fixtures and deadlines are retained.
 - Next: verify the full hosted Compose and kind suites on the repaired PR head.
 - Known issues: source-built MinIO is based on archived upstream community
   releases; registry distribution remains an operator step. Offline harness
