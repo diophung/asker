@@ -17,6 +17,31 @@ Newest entries go first.
 
 ---
 
+## 2026-10-05 — Repair PR 47 security and acceptance checks
+
+- Done: upgraded the affected OpenTelemetry family to the advisory's patched
+  release. Replaced the unavailable MinIO registry tag with checksum-pinned
+  official server/client source builds and updated Compose, Helm and operator docs.
+- Done: retained GDPR setup identities in the caller shell; supervised bounded
+  Kubernetes port forwards and scoped probes to authenticated tenant identities.
+  Media polls bypass stale search responses. M1 exact membership probes require
+  the intended document, and request-boundary token refresh survives long waits.
+  Explicit hybrid ranking, isolation, freshness and 10,000-email checks remain.
+- Verified: Go module verification, build/vet/lint, race tests, coverage gate and
+  the CI vulnerability scan pass; tenancy coverage is 100%. Real MinIO S3
+  create/read/delete passes on ARM64 and AMD64, including UID 1000 and a read-only
+  filesystem. Four Helm profiles validate. Two GDPR tests and 15 shell regression
+  groups pass, plus ShellCheck, Bash syntax and workflow parsing.
+- Done: wired harness regressions into CI and made media, GDPR and Kubernetes
+  acceptance jobs blocking. The existing local checkout and running stacks were
+  preserved while fixes were reviewed in the publication worktree.
+- Next: verify the full hosted Compose and kind suites on the repaired PR head.
+- Known issues: source-built MinIO is based on archived upstream community
+  releases; registry distribution remains an operator step. Offline harness
+  regressions do not establish live connector or erasure success. October 4
+  search qualification limits remain: relevance/capacity gates fail, optional
+  reranking stays off, 48 GB hardware and Google parity remain unverified.
+
 ## 2026-10-05 — Review Apple search changes for publication against current main
 
 - Done: copied the complete pending change set into a separate current-main
