@@ -150,16 +150,18 @@ upload() {
   json_field doc_id <"$TMP/upload.json"
 }
 
-# search_as TOKEN PARAM...: GET /v1/search; body to $TMP/search.json. Retries
-# on 429 (the per-tenant rate limit may be shared with concurrent suites).
+# search_as TOKEN PARAM...: GET /v1/search; body to $TMP/search.json. Bypass
+# cached pre-index responses during polling and subsequent media assertions.
+# Retries on 429 (the per-tenant rate limit may be shared with concurrent suites).
 search_as() {
   local token="$1" code attempt p
   shift
   local args=()
   for p in "$@"; do args+=(--data-urlencode "$p"); done
-  for attempt in 1 2 3 4 5; do
+  for ((attempt = 1; attempt <= 5; attempt++)); do
     code="$(curl -s -o "$TMP/search.json" -w '%{http_code}' --max-time 30 -G \
-      -H "Authorization: Bearer ${token}" "${GATEWAY_URL}/v1/search" "${args[@]}")" || code="000"
+      -H "Authorization: Bearer ${token}" -H 'Cache-Control: no-cache' \
+      "${GATEWAY_URL}/v1/search" "${args[@]}")" || code="000"
     [ "$code" = "200" ] && return 0
     [ "$code" = "429" ] && { sleep 3; continue; }
     break
@@ -232,8 +234,8 @@ PYEOF
 xt() { python3 "$TMP/extract.py" "$@" <"$TMP/search.json"; }
 
 # wait_for_doc TOKEN DOC_ID QUERY TIMEOUT LABEL: poll /v1/search for QUERY until
-# a hit with doc_id == DOC_ID appears (or TIMEOUT). The limit varies to bust the
-# 60s result cache without changing matches. Returns 0 once found, 1 on timeout.
+# a hit with doc_id == DOC_ID appears (or TIMEOUT). search_as bypasses cached
+# pre-index responses. Returns 0 once found, 1 on timeout.
 wait_for_doc() {
   local token="$1" doc_id="$2" query="$3" timeout="$4" label="$5"
   local start now elapsed=0 i=0 lim has
