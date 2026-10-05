@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -162,13 +163,17 @@ type personalizeParams struct {
 // scoredHit is a candidate with its computed features and combined score, plus
 // the coarse signals MMR diversifies on.
 type scoredHit struct {
-	hit      *queryv1.Hit
-	features personalization.Features
-	combined float64
-	relNorm  float64 // combined score min-max normalized across the page, for MMR
-	docType  string
-	sender   string
-	reasons  []string
+	hit            *queryv1.Hit
+	features       personalization.Features
+	retrievalScore float64 // incoming retrieval/fusion or model-reranked relevance
+	combined       float64
+	rankScore      float64 // combined relevance or the selected MMR utility
+	relNorm        float64 // combined score min-max normalized across the page, for MMR
+	mmrApplied     bool
+	mmrPenalty     float64 // weighted redundancy penalty at this hit's selection
+	docType        string
+	sender         string
+	reasons        []string
 }
 
 // recencyBonusWeight scales the recency-vs-importance slider's contribution to
@@ -186,14 +191,13 @@ func personalizeRank(hits []*queryv1.Hit, p personalizeParams) ([]*queryv1.Hit, 
 	// so it is comparable to the other [0,1] features regardless of the ranking
 	// profile's raw score scale.
 	minScore, maxScore := scoreRange(candidates)
-	span := maxScore - minScore
 
 	scored := make([]scoredHit, 0, len(candidates))
 	for _, h := range candidates {
 		if p.ctx != nil && p.ctx.Err() != nil {
 			return nil, 0
 		}
-		sh := scoreCandidate(h, p, minScore, span)
+		sh := scoreCandidate(h, p, minScore, maxScore)
 		scored = append(scored, sh)
 	}
 	total := int64(len(scored))
@@ -299,7 +303,7 @@ func calendarOverlaps(start, end time.Time, window timeWindow) bool {
 }
 
 // scoreCandidate builds the feature vector and combined score for one hit.
-func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64) scoredHit {
+func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, maxScore float64) scoredHit {
 	md := h.GetMetadata()
 	docType := h.GetType().String()
 	senders := hitSenders(md)
@@ -310,10 +314,7 @@ func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64)
 	var f personalization.Features
 
 	// Semantic.
-	f.Semantic = 1.0
-	if span > 0 {
-		f.Semantic = (h.GetScore() - minScore) / span
-	}
+	f.Semantic = normalizedRelevance(h.GetScore(), minScore, maxScore)
 
 	// Preference (explicit Settings) and the reasons it contributes.
 	pref, prefReasons := preferenceMatch(p.profile, docType, senders, topics, mutedTopics)
@@ -342,6 +343,12 @@ func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64)
 		combined += p.profile.RecencyVsImportance * recencyBonusWeight *
 			recencyScore(hitTime(h), p.now, p.halfLife)
 	}
+	// Profile weights can be very large finite values. Preserve ordinary
+	// arithmetic/order, but keep an overflowing sum representable on the API
+	// and in MMR normalization; the settings themselves are unchanged.
+	if math.IsInf(combined, 0) {
+		combined = math.Copysign(math.MaxFloat64, combined)
+	}
 
 	var reasons []string
 	if p.intent == intentNeedsAttention {
@@ -353,12 +360,14 @@ func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64)
 	}
 
 	return scoredHit{
-		hit:      h,
-		features: f,
-		combined: combined,
-		docType:  docType,
-		sender:   firstNonEmpty(senders),
-		reasons:  reasons,
+		hit:            h,
+		features:       f,
+		retrievalScore: h.GetScore(),
+		combined:       combined,
+		rankScore:      combined,
+		docType:        docType,
+		sender:         firstNonEmpty(senders),
+		reasons:        reasons,
 	}
 }
 
@@ -403,15 +412,26 @@ func preferenceMatch(profile personalization.Profile, docType string, senders, t
 	return clampPref(pref), reasons
 }
 
-// applyExplanation writes the human-readable explanation and (when debug) the
-// per-term feature contributions onto the hit.
+// applyExplanation publishes the score that selected this hit, its explanation,
+// and (when debug) both the term contributions and the earlier scoring stages.
+// This runs after the ranking cancellation guard, so MMR never mutates a hit
+// while deciding its order. Schedule lookups use combined relevance as their
+// score/tiebreak but retain the explicit chronological ordering.
 func applyExplanation(sh *scoredHit, p personalizeParams) {
+	sh.hit.Score = sh.rankScore
 	sh.hit.Explanation = composeExplanation(sh.reasons)
 	if p.debug {
 		contribs := personalization.Contributions(sh.features, p.profile.Weights)
-		m := make(map[string]float64, len(contribs))
+		m := make(map[string]float64, len(contribs)+5)
 		for _, c := range contribs {
 			m[c.Name] = c.Value
+		}
+		m["retrieval_score"] = sh.retrievalScore
+		m["combined_score"] = sh.combined
+		m["ranking_score"] = sh.rankScore
+		if sh.mmrApplied {
+			m["mmr_relevance"] = sh.relNorm
+			m["mmr_penalty"] = sh.mmrPenalty
 		}
 		sh.hit.Features = m
 	}
@@ -476,6 +496,12 @@ func mmrReorder(ctx context.Context, scored []scoredHit, novelty float64) []scor
 		}
 		used[bestIdx] = true
 		sh := scored[bestIdx]
+		// Every remaining utility can only decrease as maxSimilarity grows,
+		// so these selected utilities follow the existing greedy order without
+		// re-sorting or inventing an ordinal score after diversification.
+		sh.rankScore = bestVal
+		sh.mmrApplied = true
+		sh.mmrPenalty = novelty * maxSimilarity[bestIdx]
 		selected = append(selected, sh)
 		for i := range scored {
 			if used[i] {
@@ -547,14 +573,24 @@ func normalizeRelevance(scored []scoredHit) {
 			hi = s.combined
 		}
 	}
-	span := hi - lo
 	for i := range scored {
-		if span > 0 {
-			scored[i].relNorm = (scored[i].combined - lo) / span
-		} else {
-			scored[i].relNorm = 1
-		}
+		scored[i].relNorm = normalizedRelevance(scored[i].combined, lo, hi)
 	}
+}
+
+// normalizedRelevance keeps the usual min-max arithmetic except when finite
+// opposite-sign bounds overflow their span. Halving all three operands leaves
+// the ratio unchanged while keeping both differences representable.
+func normalizedRelevance(value, lo, hi float64) float64 {
+	span := hi - lo
+	if span <= 0 {
+		return 1
+	}
+	if math.IsInf(span, 1) {
+		value, lo, hi = value/2, lo/2, hi/2
+		span = hi - lo
+	}
+	return (value - lo) / span
 }
 
 // attentionPageLimit shrinks the page for the needs-attention intent per the

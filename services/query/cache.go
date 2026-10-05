@@ -97,7 +97,7 @@ func (s *server) boundCacheKey(base string, plan parsedQuery, personalizing, rer
 		Profile                                      personalization.Profile
 		Model                                        personalization.LearnedModel
 	}{
-		Recipe: "search-v8-anchored-correction-temporal-boundaries", Namespace: s.cacheNamespace,
+		Recipe: "search-v9-final-personalized-score", Namespace: s.cacheNamespace,
 		Personalizing: personalizing, RRF: s.rrfEnabled, Rerank: rerankActive, Debug: debug,
 		CandidateCap: s.candidateCap, RRFK: rrfK,
 		RerankCandidates: s.rerankCandidates, RerankDocChars: s.rerankDocChars,

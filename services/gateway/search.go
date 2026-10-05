@@ -21,15 +21,18 @@ import (
 // searchHitJSON is the pinned REST hit shape (web/src/api.ts Hit). Field
 // names and presence are contractual — every key is always emitted.
 type searchHitJSON struct {
-	DocID       string            `json:"doc_id"`
-	ConnectorID string            `json:"connector_id"`
-	Type        string            `json:"type"`
-	Title       string            `json:"title"`
-	Snippet     string            `json:"snippet"`
-	Score       float64           `json:"score"`
-	Created     string            `json:"created"`
-	Modified    string            `json:"modified"`
-	Metadata    map[string]string `json:"metadata"`
+	DocID       string `json:"doc_id"`
+	ConnectorID string `json:"connector_id"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	Snippet     string `json:"snippet"`
+	// Personalized relevance results expose combined relevance or the selected
+	// MMR utility, in descending order. Schedule lookups retain chronological
+	// order. Earlier scoring stages are available in features when debug=1.
+	Score    float64           `json:"score"`
+	Created  string            `json:"created"`
+	Modified string            `json:"modified"`
+	Metadata map[string]string `json:"metadata"`
 	// SourceURL is a browser-openable link to the original item at its source
 	// (the Gmail message in Gmail, the Drive file, the Slack permalink, ...),
 	// derived from the connector metadata. "" when the source has no web URL
