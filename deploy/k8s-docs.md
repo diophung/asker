@@ -48,6 +48,11 @@ kind/k3d CI stack uses. **Production should prefer managed/operator-run stateful
 each `<dep>.deploy=false`, pointing the matching `config.*` address at the managed instance
 (ADR-014 §4).
 
+When enabling self-hosted MinIO, build and load or publish the repository's
+[pinned source image](minio/README.md), then set `stateful.minio.image` for the
+target cluster. The chart's local default tag is built by Compose and is not
+published to a public registry.
+
 ### (b) Strimzi Kafka operator (required when `kafka.strimzi.enabled=true`)
 
 ```sh

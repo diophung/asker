@@ -23,7 +23,7 @@ make dev-down    # tear down
 | keycloak | `quay.io/keycloak/keycloak:26.3`                        | 8081 (HTTP)                         | admin console: `admin` / `admin`       | bash `/dev/tcp` HTTP GET against management port 9000 `/health/ready` (image has bash, no curl) |
 | vespa    | `vespaengine/vespa:8`                                   | 8082 (query/doc API), 19071 (config) | —                                      | `curl http://localhost:19071/state/v1/health` (config server only; query port comes alive after app deploy) |
 | tei      | `ghcr.io/huggingface/text-embeddings-inference:cpu-1.8` | 8083 (HTTP, container port 80)      | —                                      | `curl http://localhost:80/health` with a 20 min `start_period` |
-| minio    | `minio/minio:RELEASE.2025-09-07T16-13-09Z`              | 9000 (S3 API), 9001 (console)       | `asker-minio` / `asker-minio-secret`   | `mc ready local` |
+| minio    | source-built `asker-minio:RELEASE.2025-10-15T17-29-55Z` ([build guide](../minio/README.md)) | 9000 (S3 API), 9001 (console) | `asker-minio` / `asker-minio-secret` | HTTP GET `/minio/health/ready` |
 | postgres | `postgres:17`                                           | 15432 (5432 is taken on dev host)   | `asker` / `asker`, db `asker`          | `pg_isready -U asker -d asker` |
 | redis    | `redis:7`                                               | 16379 (6379 is taken on dev host)   | —                                      | `redis-cli ping` |
 | redpanda | `redpandadata/redpanda:v24.3.11`                        | 19092 (Kafka external), 9644 (admin) | —                                      | `rpk cluster health` + grep `Healthy: true` |

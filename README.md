@@ -70,6 +70,9 @@ make e2e-smoke  # end-to-end smoke test against the running stack
 Notes:
 - First `make dev-up` downloads the TEI embedding model (~2.3GB) — allow up to 15+ minutes.
 - `make dev-down` tears the stack down; `make dev-logs` tails service logs.
+- MinIO and its `mc` client are built from pinned official source releases by
+  `make dev-up`; the former Docker Hub community image is unavailable. See the
+  [source-build guide](deploy/minio/README.md) for standalone builds and Kubernetes images.
 - Other targets: `make build`, `make test`, `make lint`, `make vet`, `make fmt`,
   `make proto`, `make coverage-gate`, `make vespa-deploy`.
 

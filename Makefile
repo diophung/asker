@@ -46,9 +46,9 @@ test: ## Run all tests with race detector and coverage
 coverage-gate: test ## Enforce coverage floors (platform/tenancy 100%, platform/* >= 75%)
 	bash tools/ci/coverage_gate.sh coverage.out
 
-# Built one at a time: parallel BuildKit builds of 9 images spike memory hard
+# Built one at a time: parallel BuildKit builds spike memory hard
 # enough to OOM-kill running containers on small Docker VMs (observed).
-BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query clip fake-gmail fake-oauth web
+BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query clip fake-gmail fake-oauth web minio
 
 dev-build: ## Build all service images serially (low-memory friendly)
 	@for s in $(BUILT_SERVICES); do echo "== build $$s"; $(COMPOSE) build $$s || exit 1; done
