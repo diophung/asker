@@ -3,17 +3,21 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/asker/asker/platform/personalization"
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
+	documentv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
 
@@ -22,12 +26,16 @@ import (
 type server struct {
 	queryv1.UnimplementedQueryServiceServer
 
-	embed   embedder
-	clip    clipEmbedder
-	vespa   vespaSearcher
-	cache   resultCache
-	logger  *slog.Logger
-	metrics *queryMetrics
+	embed              embedder
+	clip               clipEmbedder
+	vespa              vespaSearcher
+	cache              resultCache
+	logger             *slog.Logger
+	metrics            *queryMetrics
+	searchTimeout      time.Duration
+	clipEnabled        bool
+	cacheNamespace     string
+	resultCacheEnabled bool
 
 	// recencyWeight / recencyHalfLife drive the "most recent, most relevant
 	// first" re-rank applied to the retrieved page (rerank.go). Zero weight
@@ -37,12 +45,11 @@ type server struct {
 	recencyHalfLife time.Duration
 
 	// profiles, when non-nil, turns ON v3 personalization (per-tenant profile +
-	// learned-model re-rank, query understanding, attention scoring). nil — the
-	// newServer default used by every existing test — runs the non-personalized
-	// pipeline byte-for-byte unchanged. main.go wires the Redis loader.
+	// learned-model re-rank, attention scoring). A nil loader leaves preference
+	// ranking off; query understanding still applies. main.go wires the Redis loader.
 	profiles profileLoader
 	// rrfEnabled fuses a keyword arm and a vector arm with RRF on the
-	// personalized path; candidateCap is how many candidates that path retrieves
+	// retrieval path; candidateCap is how many candidates that path retrieves
 	// before re-ranking to the page. Both set from config in main.go.
 	rrfEnabled   bool
 	candidateCap int32
@@ -69,13 +76,30 @@ type server struct {
 }
 
 func newServer(embed embedder, clip clipEmbedder, vespa vespaSearcher, cache resultCache, logger *slog.Logger) *server {
-	return &server{embed: embed, clip: clip, vespa: vespa, cache: cache, logger: logger, metrics: newQueryMetrics()}
+	return &server{embed: embed, clip: clip, vespa: vespa, cache: cache, logger: logger, metrics: newQueryMetrics(), searchTimeout: 4500 * time.Millisecond, clipEnabled: true, resultCacheEnabled: true}
 }
 
 // Search runs the spec §2.6 pipeline: validate/normalize -> understand ->
 // cache -> embed -> Vespa (with the degradation ladder) -> respond.
-func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*queryv1.SearchResponse, error) {
+func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (response *queryv1.SearchResponse, searchErr error) {
 	start := time.Now()
+	budget := s.searchTimeout
+	if budget <= 0 {
+		budget = 4500 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	rerankApplied := false
+	var candidateDebug []byte
+	defer func() {
+		_ = grpc.SetHeader(ctx, metadata.Pairs("x-asker-rerank-applied", fmt.Sprint(rerankApplied)))
+		if candidateDebug != nil {
+			_ = grpc.SetHeader(ctx, metadata.Pairs("x-asker-candidates-bin", string(candidateDebug)))
+		}
+		if searchErr != nil {
+			s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), req.GetMode().String(), "none", "miss", "error")
+		}
+	}()
 
 	tc, err := tenancy.FromContext(ctx)
 	if err != nil {
@@ -90,6 +114,13 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	stage := now
 	norm := normalizeRequest(req)
 	plan := understand(norm)
+	s.metrics.recordStage(ctx, "understand", stage, plan.SyntaxError != "")
+	if plan.SyntaxError != "" {
+		return nil, status.Errorf(codes.InvalidArgument, "query: %s", plan.SyntaxError)
+	}
+	if !plan.From.IsZero() && !plan.To.IsZero() && plan.From.After(plan.To) {
+		return nil, status.Error(codes.InvalidArgument, "query: from date is after to date")
+	}
 	logger.Debug("stage understand",
 		"took", time.Since(stage),
 		"residual_chars", len(plan.Text),
@@ -98,24 +129,29 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		"mode", norm.GetMode().String())
 
 	// Stage 2b (v3): load the tenant's personalization profile + learned model
-	// and enrich the plan with intent + temporal scope. A nil loader leaves
-	// `personalizing` false and the pipeline below runs exactly as before.
+	// used by preference ranking and timezone grounding. A nil loader uses defaults.
 	personalizing := s.profiles != nil
-	var profile personalization.Profile
+	profile := personalization.DefaultProfile()
 	var model personalization.LearnedModel
 	var profileVersion int64
 	if personalizing {
+		profileStart := time.Now()
 		profile, model = s.profiles.Load(ctx, tc.TenantID())
+		s.metrics.recordStage(ctx, "profile", profileStart, ctx.Err() != nil)
 		profileVersion = profile.Version
-		plan = scopeQuery(plan, profile, now)
 		logger.Debug("stage scope", "intent", plan.Intent.String(),
 			"event_window", !plan.EventFrom.IsZero(), "profile_version", profileVersion)
+	}
+	// Intent and dates are search semantics, independent of optional ranking preferences.
+	plan = scopeQuery(plan, profile, now)
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
 	}
 
 	// A schedule/needs-attention intent legitimately drives retrieval with no
 	// query terms (it lists a window / scans for salience), so an empty residual
 	// is only an error when no intent and no filters back it.
-	if plan.Text == "" && !plan.hasFilters() && (!personalizing || !intentDrivenEmptyText(plan)) {
+	if plan.Text == "" && !plan.hasFilters() && !intentDrivenEmptyText(plan) {
 		return nil, status.Error(codes.InvalidArgument, "query: empty query with no filters")
 	}
 
@@ -124,7 +160,7 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	// it is folded into the cache key (a CLIP-planning request never collides
 	// with a CLIP-less one) and decides whether stage 4b runs.
 	mode := norm.GetMode()
-	clipPlanned := plan.Text != "" && mode == queryv1.SearchMode_HYBRID
+	clipPlanned := s.clipEnabled && plan.Text != "" && mode == queryv1.SearchMode_HYBRID && permitsMedia(plan.DocTypes)
 
 	// The cross-encoder rerank pass (Phase 1) fires only when a reranker is
 	// wired, the caller opted in (SearchRequest.rerank), and the request is a
@@ -139,25 +175,78 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	// The cache outcome is both a metric label on the search-duration histogram
 	// and its own counter so a dashboard can read hit ratio directly.
 	stage = time.Now()
-	key := cacheKey(tc.TenantID(), norm, clipPlanned, profileVersion)
-	if cached := s.cacheGet(ctx, logger, key); cached != nil {
-		cached.Cached = true
-		cached.TookMs = time.Since(start).Milliseconds()
-		logger.Debug("stage cache", "took", time.Since(stage), "hit", true)
-		s.metrics.recordCache(ctx, "hit")
-		s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), "", "hit", "ok")
-		return cached, nil
+	key, keyErr := s.boundCacheKey(cacheKey(tc.TenantID(), norm, clipPlanned, profileVersion), plan, personalizing, rerankActive, norm.GetDebug(), profile, model)
+	// A malformed ranking input cannot share a cache entry with a valid one.
+	bypassCache := keyErr != nil || !s.resultCacheEnabled
+	for _, value := range metadata.ValueFromIncomingContext(ctx, "x-asker-cache-bypass") {
+		if value == "true" {
+			bypassCache = true
+		}
+	}
+	if !bypassCache {
+		cached, cacheErr := s.cacheGet(ctx, logger, key)
+		s.metrics.recordStage(ctx, "cache", stage, cacheErr != nil || ctx.Err() != nil)
+		if cached != nil {
+			if ctx.Err() != nil {
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
+			cached.Cached = true
+			cached.TookMs = time.Since(start).Milliseconds()
+			logger.Debug("stage cache", "took", time.Since(stage), "hit", true)
+			s.metrics.recordCache(ctx, "hit")
+			s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), "", "hit", "ok")
+			return cached, nil
+		}
 	}
 	s.metrics.recordCache(ctx, "miss")
 	logger.Debug("stage cache", "took", time.Since(stage), "hit", false)
-
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	// Stage 4: embed the residual text (HYBRID/VECTOR only). Ladder rung 1:
 	// a TEI failure in HYBRID degrades to keyword-only; VECTOR mode errors.
-	var degradedReasons []string
+	degradedReasons := append([]string(nil), plan.Warnings...)
+	if norm.GetRerank() && !rerankActive {
+		if s.reranker == nil {
+			degradedReasons = addDegraded(degradedReasons, degradedRerankNotEnabled)
+		} else {
+			degradedReasons = addDegraded(degradedReasons, degradedRerankNotApplicable)
+		}
+	}
 	var vector []float32
+	var clipVector []float32
+	type embeddingResult struct {
+		vector []float32
+		err    error
+	}
+	textDone := make(chan embeddingResult, 1)
+	clipDone := make(chan embeddingResult, 1)
+	textPlanned := plan.Text != "" && (mode == queryv1.SearchMode_HYBRID || mode == queryv1.SearchMode_VECTOR)
+	if textPlanned {
+		go func() {
+			started := time.Now()
+			v, err := s.embed.Embed(ctx, plan.Text)
+			s.metrics.recordStage(ctx, "embed", started, err != nil)
+			textDone <- embeddingResult{v, err}
+		}()
+	}
+	if clipPlanned {
+		go func() {
+			started := time.Now()
+			v, err := s.clip.EmbedText(ctx, plan.Text)
+			s.metrics.recordStage(ctx, "clip", started, err != nil)
+			clipDone <- embeddingResult{v, err}
+		}()
+	}
 	if plan.Text != "" && (mode == queryv1.SearchMode_HYBRID || mode == queryv1.SearchMode_VECTOR) {
 		stage = time.Now()
-		v, embedErr := s.embed.Embed(ctx, plan.Text)
+		var embedded embeddingResult
+		select {
+		case embedded = <-textDone:
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		v, embedErr := embedded.vector, embedded.err
 		logger.Debug("stage embed", "took", time.Since(stage), "error", embedErr != nil)
 		switch {
 		case embedErr == nil:
@@ -165,7 +254,6 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		case mode == queryv1.SearchMode_VECTOR:
 			// Record the (brownout) latency so the P90 SLO alert sees failed
 			// searches, not just successes (M5 review).
-			s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), "none", "miss", "error")
 			return nil, status.Errorf(codes.Unavailable, "query: embedding unavailable in VECTOR mode: %v", embedErr)
 		default:
 			if errors.Is(embedErr, errEmbedDim) {
@@ -182,10 +270,15 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	// that must behave exactly as before. A clip failure drops the arm
 	// (degraded="clip-unavailable"); it never blocks text retrieval.
 	clipActive := false
-	var clipVector []float32
 	if clipPlanned {
 		stage = time.Now()
-		cv, clipErr := s.clip.EmbedText(ctx, plan.Text)
+		var embedded embeddingResult
+		select {
+		case embedded = <-clipDone:
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		cv, clipErr := embedded.vector, embedded.err
 		logger.Debug("stage clip-embed", "took", time.Since(stage), "error", clipErr != nil)
 		if clipErr != nil {
 			s.logClipError(logger, clipErr)
@@ -204,38 +297,69 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		From:        plan.From,
 		To:          plan.To,
 		Participant: plan.Participant,
+		TextClauses: plan.TextClauses,
+		ToExclusive: plan.ToExclusive,
 		EventFrom:   plan.EventFrom, // event_start window for schedule lookups (v3)
 		EventTo:     plan.EventTo,
 	}
 	limit, offset := norm.GetLimit(), norm.GetOffset()
 
 	var result vespaResult
+	retrievalRecorded := false
 	stage = time.Now()
-	if personalizing {
-		// Personalized path: retrieve a wide candidate set (RRF-fused arms when
-		// enabled) at offset 0, then re-rank to the page by the combined score.
+	if personalizing || s.rrfEnabled || rerankActive {
+		// Retrieve a bounded candidate population at offset 0, then rank and page.
 		var candidates vespaResult
+		base.Hits = min(int32(1000), max(s.candidateCap, limit+offset))
 		candidates, err = s.retrievePersonalized(ctx, logger, base, plan, mode, vector, clipActive, clipVector, &degradedReasons)
-		if err == nil && rerankActive {
+		s.metrics.recordStage(ctx, "retrieve", stage, err != nil)
+		retrievalRecorded = true
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		if err == nil && personalizing {
+			// Eligibility is a hard predicate and belongs before model inference,
+			// so muted/out-of-window candidates never consume rerank depth.
+			candidates.Hits = filterCandidates(candidates.Hits, personalizeParams{
+				ctx: ctx, profile: profile, intent: plan.Intent,
+				window: timeWindow{From: plan.WinFrom, To: plan.WinTo}, now: now,
+			})
+		}
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		if err == nil && norm.GetDebug() && rerankActive {
+			candidateDebug = encodeCandidateDebug(candidates.Hits, s.rerankCandidates)
+		}
+		if err == nil && rerankActive && len(candidates.Hits) > 0 {
 			// Re-score the top fused candidates with the cross-encoder and reorder
 			// them; personalizeRank then reads the improved relevance via its
 			// Semantic feature (Hit.Score). A reranker failure drops the pass.
 			stageRerank := time.Now()
-			reranked, rErr := applyRerank(ctx, s.reranker, plan.Text, candidates.Hits, s.rerankCandidates, s.rerankDocChars)
+			// Correction is restricted to soft content. Hard phrase/exclusion,
+			// source/person/date scopes and unsupported inline syntax stay literal.
+			correctTypos := !plan.hasFilters() && len(plan.Warnings) == 0
+			reranked, rErr := applyRerank(ctx, s.reranker, plan.Text, candidates.Hits, candidates.Passages, correctTypos, s.rerankCandidates, s.rerankDocChars)
+			s.metrics.recordStage(ctx, "rerank", stageRerank, rErr != nil)
 			logger.Debug("stage rerank", "took", time.Since(stageRerank), "error", rErr != nil, "candidates", len(candidates.Hits))
+			if ctx.Err() != nil {
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
 			if rErr != nil {
 				s.logRerankError(logger, rErr)
 				degradedReasons = addDegraded(degradedReasons, degradedRerankUnavailable)
 			} else {
 				candidates.Hits = reranked
+				rerankApplied = len(candidates.Hits) > 0
 			}
 		}
-		if err == nil {
+		if err == nil && personalizing {
 			halfLife := s.recencyHalfLife
 			if halfLife <= 0 {
 				halfLife = defaultPersonalizationHalfLife
 			}
 			page, total := personalizeRank(candidates.Hits, personalizeParams{
+				ctx:      ctx,
 				profile:  profile,
 				model:    model,
 				intent:   plan.Intent,
@@ -247,6 +371,14 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 				offset:   offset,
 			})
 			result = vespaResult{Hits: page, Total: total}
+		} else if err == nil {
+			rerankByRecency(candidates.Hits, s.recencyWeight, s.recencyHalfLife, now)
+			// Total describes this bounded ranking population, not documents that
+			// were never retrieved/scored and cannot appear in its pages.
+			result = vespaResult{Hits: pageHits(candidates.Hits, offset, limit), Total: int64(len(candidates.Hits))}
+		}
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
 		}
 	} else if clipActive {
 		// Two arms merged: each arm must contribute its full prefix up to
@@ -273,13 +405,18 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		}
 	}
 	logger.Debug("stage vespa", "took", time.Since(stage), "personalized", personalizing, "clip_arm", clipActive, "error", err != nil)
+	if !retrievalRecorded {
+		s.metrics.recordStage(ctx, "retrieve", stage, err != nil)
+	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
 		if errors.Is(err, errInvalidFilterValue) {
 			return nil, status.Errorf(codes.InvalidArgument, "query: %v", err)
 		}
 		// A search-backend (Vespa) failure: record the latency it consumed so a
 		// slow-error brownout is visible to the P90 SLO alert (M5 review).
-		s.metrics.recordSearch(ctx, float64(time.Since(start).Milliseconds()), mode.String(), joinDegraded(degradedReasons), "miss", "error")
 		return nil, status.Errorf(codes.Unavailable, "query: search backend: %v", err)
 	}
 
@@ -298,7 +435,7 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 	// same blended order (the sub-minute recency drift over the TTL is noise).
 	// The personalized path already folds recency into its combined score
 	// (recency-vs-importance slider), so this standalone blend is skipped there.
-	if !personalizing {
+	if !personalizing && !s.rrfEnabled && !rerankActive {
 		rerankByRecency(result.Hits, s.recencyWeight, s.recencyHalfLife, now)
 	}
 
@@ -310,11 +447,15 @@ func (s *server) Search(ctx context.Context, req *queryv1.SearchRequest) (*query
 		Degraded: degraded,
 		TookMs:   time.Since(start).Milliseconds(),
 	}
-	if degraded == "" {
+	if degraded == "" && !bypassCache && ctx.Err() == nil {
 		s.cacheSet(ctx, logger, key, resp)
+	}
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
 	}
 	// This is a computed (cache-miss) result; the search-duration histogram is
 	// labeled cache="miss" here, cache="hit" on the early cached return above.
+	resp.TookMs = time.Since(start).Milliseconds()
 	s.metrics.recordSearch(ctx, float64(resp.TookMs), mode.String(), degraded, "miss", "ok")
 	logger.Debug("search complete",
 		"took", time.Since(start), "hits", len(resp.Hits), "total", resp.Total, "degraded", degraded)
@@ -361,18 +502,16 @@ func (s *server) searchMerged(
 
 	textQ.Hits = prefix
 	textQ.Offset = 0
-	textResult, keywordFallback, textErr := s.searchWithDegradation(ctx, textQ)
-	if textErr != nil {
-		// The text arm is the backbone: its failure is the search's failure.
-		return vespaResult{}, textErr
-	}
-	if keywordFallback {
-		*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
-	}
-
 	clipQ.Hits = prefix
 	clipQ.Offset = 0
-	clipResult, clipErr := s.vespa.Search(ctx, clipQ)
+	arms, err := s.parallelSearch(ctx, []vespaQuery{textQ, clipQ}, true)
+	if err != nil {
+		return vespaResult{}, err
+	}
+	textResult, clipResult, clipErr := arms[0].result, arms[1].result, arms[1].err
+	if arms[0].keywordFallback {
+		*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
+	}
 	if clipErr != nil {
 		// Drop the CLIP arm; never fail the search on it (ADR-006).
 		s.logClipError(logger, clipErr)
@@ -383,6 +522,62 @@ func (s *server) searchMerged(
 	merged := mergeHits(textResult.Hits, clipResult.Hits)
 	total := mergedTotal(textResult, clipResult, len(merged))
 	return vespaResult{Hits: pageHits(merged, offset, limit), Total: total}, nil
+}
+
+type retrievalArmResult struct {
+	result          vespaResult
+	err             error
+	keywordFallback bool
+}
+
+// Independent arms share the caller's budget and cancellation. Buffered result
+// channels let canceled HTTP calls finish without blocking abandoned senders.
+func (s *server) parallelSearch(ctx context.Context, queries []vespaQuery, primaryFallback bool) ([]retrievalArmResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	channels := make([]chan retrievalArmResult, len(queries))
+	for i, query := range queries {
+		ch := make(chan retrievalArmResult, 1)
+		channels[i] = ch
+		go func(i int, q vespaQuery) {
+			var arm retrievalArmResult
+			if ctx.Err() != nil {
+				arm.err = ctx.Err()
+			} else if i == 0 && primaryFallback {
+				arm.result, arm.keywordFallback, arm.err = s.searchWithDegradation(ctx, q)
+			} else {
+				arm.result, arm.err = s.vespa.Search(ctx, q)
+			}
+			ch <- arm
+		}(i, query)
+	}
+	arms := make([]retrievalArmResult, len(queries))
+	for i, ch := range channels {
+		select {
+		case arms[i] = <-ch:
+			if i == 0 && arms[i].err != nil {
+				return nil, arms[i].err
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return arms, nil
+}
+
+func permitsMedia(types []documentv1.DocType) bool {
+	if len(types) == 0 {
+		return true
+	}
+	for _, typ := range types {
+		if typ == documentv1.DocType_IMAGE || typ == documentv1.DocType_AUDIO || typ == documentv1.DocType_VIDEO {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeHits unions two arms' hits by doc_id and orders the result by blended
@@ -482,33 +677,38 @@ func retrievalPlan(plan parsedQuery, mode queryv1.SearchMode, vector []float32) 
 	}
 }
 
-// cacheGet returns the cached response for key, or nil on miss or any cache
-// failure (Redis down => skip silently, log once).
-func (s *server) cacheGet(ctx context.Context, logger *slog.Logger, key string) *queryv1.SearchResponse {
+// cacheGet returns nil on miss or failure. Errors are measured but remain
+// non-fatal (Redis down => skip silently, log once).
+func (s *server) cacheGet(ctx context.Context, logger *slog.Logger, key string) (*queryv1.SearchResponse, error) {
 	data, ok, err := s.cache.Get(ctx, key)
 	if err != nil {
 		s.logCacheError(logger, "get", err)
-		return nil
+		return nil, err
 	}
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	resp := &queryv1.SearchResponse{}
 	if err := proto.Unmarshal(data, resp); err != nil {
 		logger.Debug("cache entry undecodable; ignoring", "error", err)
-		return nil
+		return nil, err
 	}
-	return resp
+	return resp, nil
 }
 
 // cacheSet stores resp under key with the contract TTL; failures only log.
 func (s *server) cacheSet(ctx context.Context, logger *slog.Logger, key string, resp *queryv1.SearchResponse) {
+	start := time.Now()
+	failed := false
+	defer func() { s.metrics.recordStage(ctx, "cache", start, failed) }()
 	data, err := proto.Marshal(resp)
 	if err != nil {
+		failed = true
 		logger.Debug("marshal response for cache", "error", err)
 		return
 	}
 	if err := s.cache.Set(ctx, key, data, cacheTTL); err != nil {
+		failed = true
 		s.logCacheError(logger, "set", err)
 	}
 }

@@ -11,6 +11,7 @@ def test_defaults() -> None:
     assert cfg.port == DEFAULT_PORT
     assert cfg.device == "auto"
     assert cfg.host == "0.0.0.0"
+    assert (cfg.admission_wait_ms, cfg.max_waiting, cfg.body_timeout_ms) == (300, 3, 500)
 
 
 def test_env_overrides() -> None:
@@ -20,12 +21,20 @@ def test_env_overrides() -> None:
             "RERANKER_DEVICE": "mps",
             "RERANKER_PORT": "host:9910",
             "RERANKER_MAX_DOCUMENTS": "50",
+            "RERANKER_REVISION": "a" * 40,
+            "RERANKER_MAX_CONNECTIONS": "8",
+            "RERANKER_ADMISSION_WAIT_MS": "0",
+            "RERANKER_MAX_QUEUE": "0",
         }
     )
     assert cfg.model == "Qwen/Qwen3-Reranker-0.6B"
     assert cfg.device == "mps"
     assert (cfg.host, cfg.port) == ("host", 9910)
     assert cfg.max_documents == 50
+    assert cfg.revision == "a" * 40
+    assert cfg.max_connections == 8
+    assert cfg.admission_wait_ms == 0
+    assert cfg.max_waiting == 0
 
 
 def test_bare_port() -> None:
@@ -43,8 +52,24 @@ def test_bare_port() -> None:
         {"RERANKER_MAX_DOCUMENTS": "notint"},
         {"RERANKER_PORT": "host:notaport"},
         {"RERANKER_PORT": ":-1"},
+        {"RERANKER_PORT": ":65536"},
+        {"RERANKER_MAX_CONNECTIONS": "65"},
+        {"RERANKER_SOCKET_TIMEOUT_SECONDS": "31"},
+        {"RERANKER_ADMISSION_WAIT_MS": "3001"},
+        {"RERANKER_ADMISSION_WAIT_MS": "-1"},
+        {"RERANKER_MAX_QUEUE": "17"},
+        {"RERANKER_BODY_TIMEOUT_MS": "1001"},
+        {"RERANKER_MAX_TOTAL_CHARS": "1048577"},
+        {"RERANKER_MAX_DOCUMENTS": "1001"},
+        {"RERANKER_MAX_BODY_BYTES": "16777217"},
     ],
 )
 def test_bad_values_raise(env: dict[str, str]) -> None:
     with pytest.raises(ConfigError):
         Config.from_env(env)
+
+
+def test_explicit_longer_admission_budget_keeps_generic_default_short() -> None:
+    assert Config.from_env({}).admission_wait_ms == 300
+    assert Config.from_env({"RERANKER_ADMISSION_WAIT_MS": "2500"}).admission_wait_ms == 2500
+    assert Config.from_env({"RERANKER_ADMISSION_WAIT_MS": "3000"}).admission_wait_ms == 3000

@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/asker/asker/platform/personalization"
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
 	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
 )
@@ -294,5 +295,76 @@ func TestCacheKey(t *testing.T) {
 	// preference change invalidates this tenant's cached personalized orders.
 	if k := cacheKey("tenant-a", base(), true, 7); k == k1 {
 		t.Error("profile version did not change the cache key")
+	}
+}
+
+func TestCacheBindingIsolatesDeploymentAndRankingInputs(t *testing.T) {
+	base := cacheKey("tenant-a", normalizeRequest(&queryv1.SearchRequest{Query: "budget", Rerank: true}), false, 7)
+	inputs := func() (*server, parsedQuery, personalization.Profile, personalization.LearnedModel) {
+		return &server{cacheNamespace: "corpus-v1-model-a", rrfEnabled: true, candidateCap: 100, rerankCandidates: 30, rerankDocChars: 1024, recencyWeight: 0.4, recencyHalfLife: 720 * time.Hour},
+			parsedQuery{Intent: intentFindItem}, personalization.DefaultProfile(),
+			personalization.LearnedModel{Weights: map[string]float64{"a": 1, "b": 2}}
+	}
+	s, plan, profile, model := inputs()
+	want, err := s.boundCacheKey(base, plan, true, true, false, profile, model)
+	if err != nil || !strings.HasPrefix(want, "q:tenant-a:") || strings.Contains(want, "model-a") {
+		t.Fatalf("invalid hashed cache binding: %q, %v", want, err)
+	}
+	model.Weights = map[string]float64{"b": 2, "a": 1}
+	if got, err := s.boundCacheKey(base, plan, true, true, false, profile, model); err != nil || got != want {
+		t.Fatalf("map order changed binding: %q, %v", got, err)
+	}
+	for name, mutate := range map[string]func(*server, *parsedQuery, *personalization.Profile, *personalization.LearnedModel){
+		"deployment": func(s *server, _ *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			s.cacheNamespace = "corpus-v2-model-b"
+		},
+		"fusion": func(s *server, _ *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			s.rrfEnabled = false
+		},
+		"pool": func(s *server, _ *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			s.candidateCap++
+		},
+		"depth": func(s *server, _ *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			s.rerankCandidates++
+		},
+		"passage": func(s *server, _ *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			s.rerankDocChars++
+		},
+		"recency weight": func(s *server, _ *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			s.recencyWeight = 0.1
+		},
+		"half life": func(s *server, _ *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			s.recencyHalfLife = time.Hour
+		},
+		"resolved date": func(_ *server, p *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			p.WinFrom = time.Unix(1000, 0)
+		},
+		"weights": func(_ *server, _ *parsedQuery, p *personalization.Profile, _ *personalization.LearnedModel) {
+			p.Weights.Semantic = 2
+		},
+		"hard clause": func(_ *server, p *parsedQuery, _ *personalization.Profile, _ *personalization.LearnedModel) {
+			p.TextClauses = []textClause{{Text: "AX-48271"}}
+		},
+		"feedback": func(_ *server, _ *parsedQuery, _ *personalization.Profile, m *personalization.LearnedModel) {
+			m.Weights["b"] = 3
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, plan, profile, model := inputs()
+			mutate(s, &plan, &profile, &model)
+			if got, err := s.boundCacheKey(base, plan, true, true, false, profile, model); err != nil || got == want {
+				t.Fatalf("changed %s reused binding: %q, %v", name, got, err)
+			}
+		})
+	}
+}
+
+func TestQueryRedisClientsHonorContextTimeouts(t *testing.T) {
+	c := newRedisCache("127.0.0.1:6379")
+	defer c.Close()
+	l := newRedisProfileLoader("127.0.0.1:6379")
+	defer l.Close()
+	if !c.client.Options().ContextTimeoutEnabled || !l.client.Options().ContextTimeoutEnabled {
+		t.Fatal("Redis result/profile reads can exceed the query context deadline")
 	}
 }

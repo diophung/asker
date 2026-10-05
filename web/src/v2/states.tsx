@@ -1,5 +1,17 @@
 import { Lock, RotateCw } from "lucide-react";
 
+export function SearchFallback({ reasons }: { reasons: string }) {
+  const keywordOnly = reasons.split(",").includes("keyword-only");
+  const unsupported = reasons.split(",").includes("unsupported-filter-syntax");
+  return <p role="status" className="mb-4 text-[13px] text-gmuted">
+    {unsupported
+      ? "A search filter wasn’t recognized. Check its spelling and value before relying on these matches."
+      : keywordOnly
+      ? "Semantic search is unavailable. Showing keyword matches; try again shortly."
+      : "Some search enhancements are unavailable. Showing the available matches."}
+  </p>;
+}
+
 /**
  * The privacy signature — the one bold move. Where Google signals the AUTHORITY
  * of public pages, Asker signals ISOLATION: this is yours, and only yours.

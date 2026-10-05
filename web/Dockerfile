@@ -7,8 +7,10 @@ COPY . .
 # Build-time configuration (baked into the static bundle).
 ARG VITE_KEYCLOAK_URL=http://localhost:8081
 ARG VITE_API_URL=http://localhost:8080
+ARG VITE_RERANK_DEFAULT=0
 ENV VITE_KEYCLOAK_URL=${VITE_KEYCLOAK_URL} \
-    VITE_API_URL=${VITE_API_URL}
+    VITE_API_URL=${VITE_API_URL} \
+    VITE_RERANK_DEFAULT=${VITE_RERANK_DEFAULT}
 RUN npm run build
 
 # Serve stage: static files behind nginx with SPA fallback.

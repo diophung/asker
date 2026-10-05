@@ -16,8 +16,8 @@ import {
 import type { FileKind, ResultType, SourceName } from "./types";
 
 /**
- * Source brand colors — the ONLY place brand color appears, and only as a small
- * badge dot typing each result (never a background or large fill).
+ * Known source brand colors appear only as a small badge dot. Unknown
+ * connectors use a neutral dot rather than implying a source brand.
  */
 const SOURCE_COLOR: Record<SourceName, string> = {
   Gmail: "#ea4335",
@@ -26,6 +26,12 @@ const SOURCE_COLOR: Record<SourceName, string> = {
   Calendar: "#4285f4",
   Photos: "#fbbc04",
   Contacts: "#9334e6",
+  Email: "#5f6368",
+  Files: "#5f6368",
+  Messages: "#5f6368",
+  Events: "#5f6368",
+  Media: "#5f6368",
+  Source: "#5f6368",
 };
 
 export function SourceDot({ source }: { source: SourceName }) {

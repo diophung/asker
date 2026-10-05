@@ -32,10 +32,11 @@ type redisProfileLoader struct {
 
 func newRedisProfileLoader(addr string) *redisProfileLoader {
 	return &redisProfileLoader{client: redis.NewClient(&redis.Options{
-		Addr:         addr,
-		DialTimeout:  redisOpTimeout,
-		ReadTimeout:  redisOpTimeout,
-		WriteTimeout: redisOpTimeout,
+		Addr:                  addr,
+		DialTimeout:           redisOpTimeout,
+		ReadTimeout:           redisOpTimeout,
+		WriteTimeout:          redisOpTimeout,
+		ContextTimeoutEnabled: true,
 		// A sick Redis must not eat the search latency budget; a missing/slow
 		// read degrades to defaults at the caller, so never retry.
 		MaxRetries: -1,
@@ -45,6 +46,9 @@ func newRedisProfileLoader(addr string) *redisProfileLoader {
 // Load implements profileLoader.
 func (l *redisProfileLoader) Load(ctx context.Context, tenant tenancy.TenantID) (personalization.Profile, personalization.LearnedModel) {
 	profile := personalization.DefaultProfile()
+	if ctx.Err() != nil {
+		return profile, personalization.LearnedModel{}
+	}
 	if data, err := l.client.Get(ctx, personalization.RedisProfileKey(string(tenant))).Bytes(); err == nil {
 		var p personalization.Profile
 		if json.Unmarshal(data, &p) == nil {
@@ -53,6 +57,9 @@ func (l *redisProfileLoader) Load(ctx context.Context, tenant tenancy.TenantID) 
 	}
 
 	var model personalization.LearnedModel
+	if ctx.Err() != nil {
+		return profile, model
+	}
 	if data, err := l.client.Get(ctx, personalization.RedisWeightsKey(string(tenant))).Bytes(); err == nil {
 		_ = json.Unmarshal(data, &model)
 	}

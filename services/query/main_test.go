@@ -208,6 +208,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("CLIP_URL", "http://clip-host:9800")
 		t.Setenv("CLIP_DIM", "512")
 		t.Setenv("QUERY_CLIP_TIMEOUT", "1500ms")
+		t.Setenv("QUERY_CACHE_NAMESPACE", "fixture-v1-native-bge")
 		cfg, err := loadConfig()
 		if err != nil {
 			t.Fatalf("loadConfig: %v", err)
@@ -226,6 +227,9 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if cfg.ClipTimeout != 1500*time.Millisecond {
 			t.Errorf("ClipTimeout = %v, want 1500ms", cfg.ClipTimeout)
+		}
+		if cfg.CacheNamespace != "fixture-v1-native-bge" {
+			t.Errorf("CacheNamespace = %q, want deployment override", cfg.CacheNamespace)
 		}
 	})
 	t.Run("invalid dim rejected", func(t *testing.T) {

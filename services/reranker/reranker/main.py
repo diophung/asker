@@ -62,6 +62,7 @@ def run(config: Config) -> None:
         precision=config.precision,
         max_length=config.max_length,
         batch_size=config.batch_size,
+        revision=config.revision,
     )
 
     def warmup() -> None:

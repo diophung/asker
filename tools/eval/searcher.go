@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,10 +23,10 @@ import (
 // a pipeline whose backing feature is not built yet — the runner records it as
 // "n/a" instead of silently aliasing it to another pipeline.
 type Pipeline struct {
-	Name      string
-	APIMode   string
-	Extra     url.Values
-	Supported bool
+	Name      string     `json:"name"`
+	APIMode   string     `json:"api_mode"`
+	Extra     url.Values `json:"extra,omitempty"`
+	Supported bool       `json:"supported"`
 }
 
 // standardPipelines are the four the prompt compares. hybrid_rerank drives the
@@ -45,9 +46,44 @@ func standardPipelines() []Pipeline {
 // views — WallMs (client round-trip, closest to user-perceived) and ServerMs
 // (the query service's own took_ms).
 type SearchOutcome struct {
-	DocIDs   []string
-	WallMs   float64
-	ServerMs int64
+	DocIDs          []string
+	WallMs          float64
+	ServerMs        int64
+	Cached          bool
+	Degraded        string
+	RerankRequested bool
+	RerankApplied   bool
+	ExecutionKnown  bool           // false when the server omits execution telemetry
+	PreRerankHead   *CandidateHead // nil means absent, incomplete or invalid telemetry
+}
+
+// CandidateHead is the actual authorized head supplied to the reranker, not
+// the final hit list and not the complete eligible retrieval population.
+type CandidateHead struct {
+	DocIDs []string
+	Count  int
+	Depth  int
+}
+
+func decodeCandidateHead(raw json.RawMessage) *CandidateHead {
+	if len(raw) == 0 || len(raw) > 4096 {
+		return nil
+	}
+	var wire struct {
+		Scope    string   `json:"scope"`
+		DocIDs   []string `json:"doc_ids"`
+		Count    *int     `json:"count"`
+		Depth    *int     `json:"depth"`
+		Complete *bool    `json:"complete"`
+	}
+	if json.Unmarshal(raw, &wire) != nil || wire.Scope != "pre_rerank_head" || wire.Complete == nil || !*wire.Complete ||
+		wire.Count == nil || wire.Depth == nil || wire.DocIDs == nil || *wire.Depth < 0 || *wire.Count < *wire.Depth || len(wire.DocIDs) != *wire.Depth {
+		return nil
+	}
+	if len(dedupeStable(wire.DocIDs)) != len(wire.DocIDs) {
+		return nil
+	}
+	return &CandidateHead{DocIDs: wire.DocIDs, Count: *wire.Count, Depth: *wire.Depth}
 }
 
 // Searcher runs a single query for a tenant under a pipeline configuration.
@@ -62,9 +98,10 @@ type TokenFunc func(tenant string) (string, error)
 
 // GatewaySearcher hits the live gateway REST search API.
 type GatewaySearcher struct {
-	BaseURL string // e.g. http://localhost:8080
-	Token   TokenFunc
-	Client  *http.Client
+	BaseURL     string // e.g. http://localhost:8080
+	Token       TokenFunc
+	Client      *http.Client
+	BypassCache bool
 }
 
 // NewGatewaySearcher builds a GatewaySearcher with a sane default client.
@@ -83,12 +120,17 @@ type gwHit struct {
 }
 
 type gwResponse struct {
-	Hits   []gwHit `json:"hits"`
-	TookMs int64   `json:"took_ms"`
+	Hits            []gwHit         `json:"hits"`
+	TookMs          int64           `json:"took_ms"`
+	Cached          bool            `json:"cached"`
+	Degraded        string          `json:"degraded"`
+	RerankRequested *bool           `json:"rerank_requested"`
+	RerankApplied   *bool           `json:"rerank_applied"`
+	CandidateDebug  json.RawMessage `json:"candidate_debug"`
 }
 
 // Search issues GET /v1/search and returns the ranked doc_ids.
-func (g *GatewaySearcher) Search(ctx context.Context, tenant, query string, p Pipeline, limit int) (SearchOutcome, error) {
+func (g *GatewaySearcher) Search(ctx context.Context, tenant, query string, p Pipeline, limit int) (out SearchOutcome, err error) {
 	tok, err := g.Token(tenant)
 	if err != nil {
 		return SearchOutcome{}, fmt.Errorf("token for tenant %q: %w", tenant, err)
@@ -96,6 +138,7 @@ func (g *GatewaySearcher) Search(ctx context.Context, tenant, query string, p Pi
 
 	params := url.Values{}
 	params.Set("q", query)
+	params.Set("debug", "1") // bounded actual pre-rerank head telemetry, when available
 	if p.APIMode != "" {
 		params.Set("mode", p.APIMode)
 	}
@@ -114,34 +157,51 @@ func (g *GatewaySearcher) Search(ctx context.Context, tenant, query string, p Pi
 		return SearchOutcome{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
+	if g.BypassCache {
+		req.Header.Set("Cache-Control", "no-cache")
+	}
 
 	start := time.Now()
+	defer func() { out.WallMs = float64(time.Since(start).Microseconds()) / 1000 }()
 	resp, err := g.Client.Do(req)
 	if err != nil {
-		return SearchOutcome{}, fmt.Errorf("search %q: %w", query, err)
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return SearchOutcome{}, fmt.Errorf("search transport: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	wallMs := float64(time.Since(start).Microseconds()) / 1000.0
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+	if err != nil {
+		return out, fmt.Errorf("search: read response: %w", err)
+	}
+	if len(body) > 8<<20 {
+		return out, fmt.Errorf("search: response exceeds 8 MiB")
+	}
 	if resp.StatusCode != http.StatusOK {
-		return SearchOutcome{}, fmt.Errorf("search %q: HTTP %d: %s", query, resp.StatusCode, truncate(string(body), 200))
+		return SearchOutcome{}, fmt.Errorf("search: HTTP %d", resp.StatusCode)
 	}
 
 	var parsed gwResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return SearchOutcome{}, fmt.Errorf("search %q: decode response: %w", query, err)
+		return SearchOutcome{}, fmt.Errorf("search: decode response: %w", err)
 	}
 	ids := make([]string, 0, len(parsed.Hits))
 	for _, h := range parsed.Hits {
 		ids = append(ids, h.DocID)
 	}
-	return SearchOutcome{DocIDs: ids, WallMs: wallMs, ServerMs: parsed.TookMs}, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+	out.DocIDs, out.ServerMs = ids, parsed.TookMs
+	out.Cached, out.Degraded = parsed.Cached, parsed.Degraded
+	out.ExecutionKnown = parsed.RerankRequested != nil && parsed.RerankApplied != nil
+	if parsed.RerankRequested != nil {
+		out.RerankRequested = *parsed.RerankRequested
 	}
-	return s[:n] + "…"
+	if parsed.RerankApplied != nil {
+		out.RerankApplied = *parsed.RerankApplied
+	}
+	if out.ExecutionKnown && out.RerankRequested {
+		out.PreRerankHead = decodeCandidateHead(parsed.CandidateDebug)
+	}
+	return out, nil
 }

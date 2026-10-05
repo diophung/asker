@@ -143,6 +143,34 @@ jobs:
           pip-audit --strict --requirement services/enrich/requirements.txt
           pip-audit --strict --requirement services/clip/requirements.txt
 
+  local-search-contracts:
+    name: local search contracts (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/reranker/requirements-dev.txt
+      # Fake scorers and stdlib HTTP fixtures exercise admission and wire
+      # contracts without installing torch, downloading models or requiring MPS.
+      - name: Install contract-test tooling
+        run: pip install -r services/reranker/requirements-dev.txt
+      - name: Lint search Python sources
+        run: |
+          ruff check services/local-inference services/reranker tools/local \
+            tools/eval/*.py tools/eval/fixtures/*.py
+      - name: Native encoder contracts
+        run: PYTHONPATH=services/local-inference python -m unittest discover -s services/local-inference/tests -v
+      - name: Reranker contracts
+        working-directory: services/reranker
+        run: pytest
+      - name: Evaluation and local-tool contracts
+        run: |
+          python -m unittest discover -s tools/eval -p 'test_*.py' -v
+          PYTHONPATH=tools/local python -m unittest discover -s tools/local -p 'test_*.py' -v
+
   enrich:
     name: enrich (python)
     runs-on: ubuntu-latest

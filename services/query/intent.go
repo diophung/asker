@@ -1,6 +1,11 @@
 package main
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Query understanding — intent class (spec v3.2 §1.5). A natural-language query
 // carries an intent that selects which sources, filters, and ranking profile to
@@ -39,40 +44,38 @@ func (c intentClass) String() string {
 	}
 }
 
-// attentionKeywords signal the needs-attention intent (action/urgency framing).
-var attentionKeywords = []string{
-	"need my attention", "needs my attention", "need attention", "needs attention",
-	"my attention", "attention", "action item", "action items", "needs action",
-	"need action", "requires action", "require action", "to-do", "to do", "todo",
-	"follow up", "follow-up", "followup", "urgent", "overdue", "respond to",
-	"awaiting", "waiting on", "unanswered", "unread", "deadline", "due",
-	"what should i", "focus on",
-}
-
-// scheduleKeywords signal the schedule-lookup intent (calendar framing).
-var scheduleKeywords = []string{
-	"on my calendar", "my calendar", "calendar", "my schedule", "schedule",
-	"my agenda", "agenda", "meeting", "meetings", "appointment", "appointments",
-	"event", "events", "what's on", "whats on", "do i have on",
-}
-
 // classifyIntent picks the intent from the residual query text and any explicit
 // type filters. needs-attention is checked first (it is the salience use case
 // and can co-occur with calendar words); schedule-lookup next; otherwise the
-// query is a content lookup. An explicit calendar-only type filter also implies
-// schedule-lookup.
+// query is a content lookup. An empty calendar-only lookup lists the schedule.
 func classifyIntent(text string, docTypes []string) intentClass {
-	lower := strings.ToLower(text)
-	if containsAny(lower, attentionKeywords) {
+	lower := strings.ToLower(unquotedText(text))
+	if containsAny(lower, []string{"need my attention", "needs my attention", "need attention", "needs attention", "my attention", "action item", "action items", "needs action", "requires action", "focus on", "unread", "unanswered"}) ||
+		(strings.HasPrefix(strings.TrimSpace(lower), "what ") && containsAny(lower, []string{"follow up", "follow-up", "respond to", "waiting on", "overdue", "deadline"})) {
 		return intentNeedsAttention
 	}
-	if containsAny(lower, scheduleKeywords) || onlyCalendarTypes(docTypes) {
+	// A noun occurring in a document title ("meeting notes", "due diligence")
+	// must not turn a content lookup into a hard calendar/attention filter.
+	if (onlyCalendarTypes(docTypes) && strings.TrimSpace(text) == "") || containsAny(lower, []string{"on my calendar", "my calendar", "my schedule", "my agenda", "what's on", "whats on", "do i have on"}) || scheduleRequest.MatchString(lower) {
 		return intentScheduleLookup
 	}
 	if strings.TrimSpace(contentResidual(lower)) != "" {
 		return intentFindItem
 	}
 	return intentFreeform
+}
+
+var scheduleRequest = regexp.MustCompile(`^(?:(?:show|list|find|get)\s+(?:me\s+)?(?:my\s+)?)?(?:calendar|schedule|agenda|meetings?|appointments?|events?)(?:\s+(?:today|tomorrow|yesterday|this|next|last|upcoming|in|with|about|on|for)\b.*)?$|^(?:today|tomorrow|yesterday|this\s+week|next\s+week|last\s+week)(?:'s|’s)?\s+(?:calendar|schedule|agenda|meetings?|appointments?|events?)$`)
+
+func unquotedText(text string) string {
+	tokens, _ := queryTokens(text)
+	var plain []string
+	for _, tok := range tokens {
+		if !strings.Contains(tok, "\"") {
+			plain = append(plain, tok)
+		}
+	}
+	return strings.Join(plain, " ")
 }
 
 // onlyCalendarTypes reports whether the explicit type filter is exactly the
@@ -125,7 +128,7 @@ func contentResidual(text string) string {
 }
 
 // scheduleSignals are softer availability/“what’s ahead” cues. Unlike
-// scheduleKeywords they do NOT classify a query as a schedule lookup on their
+// explicit calendar phrases they do NOT classify as schedule lookups on their
 // own (they collide with content — "busy season", "free trial"). scopeQuery
 // promotes to schedule_lookup only when one is present AND the content residual
 // is empty, so a real content query that merely contains one is unaffected.
@@ -140,8 +143,26 @@ func hasScheduleSignal(text string) bool {
 
 func containsAny(haystack string, needles []string) bool {
 	for _, n := range needles {
-		if strings.Contains(haystack, n) {
-			return true
+		for offset := 0; offset < len(haystack); {
+			idx := strings.Index(haystack[offset:], n)
+			if idx < 0 {
+				break
+			}
+			idx += offset
+			left, right := true, true
+			if idx > 0 {
+				r, _ := utf8.DecodeLastRuneInString(haystack[:idx])
+				left = !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_'
+			}
+			end := idx + len(n)
+			if end < len(haystack) {
+				r, _ := utf8.DecodeRuneInString(haystack[end:])
+				right = !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_'
+			}
+			if left && right {
+				return true
+			}
+			offset = idx + len(n)
 		}
 	}
 	return false

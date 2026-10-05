@@ -44,15 +44,15 @@ func TestApplyRerankReordersAndRewritesScores(t *testing.T) {
 	}
 	fr := &fakeReranker{byDoc: map[string]float64{"alpha": 10, "bravo": 1, "charlie": 5}}
 
-	got, err := applyRerank(context.Background(), fr, "q", hits, 10, 100)
+	got, err := applyRerank(context.Background(), fr, "q", hits, nil, false, 10, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ids := hitIDsOf(got); len(ids) != 3 || ids[0] != "a" || ids[1] != "c" || ids[2] != "b" {
 		t.Fatalf("order=%v want [a c b]", hitIDsOf(got))
 	}
-	// Scores rewritten to the cross-encoder relevance.
-	if got[0].GetScore() != 10 || got[1].GetScore() != 5 || got[2].GetScore() != 1 {
+	// Relevance uses one ordinal scale after the model has determined order.
+	if got[0].GetScore() != 1 || got[1].GetScore() != 2.0/3 || got[2].GetScore() != 1.0/3 {
 		t.Fatalf("scores=%v/%v/%v", got[0].GetScore(), got[1].GetScore(), got[2].GetScore())
 	}
 	if fr.gotQuery != "q" {
@@ -60,34 +60,37 @@ func TestApplyRerankReordersAndRewritesScores(t *testing.T) {
 	}
 }
 
-func TestApplyRerankTruncatesToDepth(t *testing.T) {
+func TestApplyRerankPreservesTailBelowDepth(t *testing.T) {
 	hits := []*queryv1.Hit{
 		{DocId: "a", Title: "a"}, {DocId: "b", Title: "b"}, {DocId: "c", Title: "c"},
 	}
 	fr := &fakeReranker{byDoc: map[string]float64{"a": 1, "b": 2, "c": 3}}
-	got, err := applyRerank(context.Background(), fr, "q", hits, 2, 100) // depth 2
+	got, err := applyRerank(context.Background(), fr, "q", hits, nil, false, 2, 100) // depth 2
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("len=%d want 2 (truncated to rerank depth)", len(got))
+	if ids := hitIDsOf(got); len(ids) != 3 || ids[0] != "b" || ids[1] != "a" || ids[2] != "c" {
+		t.Fatalf("order=%v want [b a c] (reranked head and original tail)", ids)
 	}
 	if len(fr.gotDocs) != 2 {
 		t.Fatalf("reranker was sent %d docs, want 2", len(fr.gotDocs))
+	}
+	if got[0].Score <= got[1].Score || got[1].Score <= got[2].Score {
+		t.Fatalf("head/tail relevance is not monotonic: %v", got)
 	}
 }
 
 func TestApplyRerankErrorPassesThrough(t *testing.T) {
 	hits := []*queryv1.Hit{{DocId: "a", Title: "a"}}
 	fr := &fakeReranker{err: errors.New("boom")}
-	got, err := applyRerank(context.Background(), fr, "q", hits, 10, 100)
+	got, err := applyRerank(context.Background(), fr, "q", hits, nil, false, 10, 100)
 	if err == nil || got != nil {
 		t.Fatalf("want (nil, err), got (%v, %v)", got, err)
 	}
 }
 
 func TestApplyRerankEmpty(t *testing.T) {
-	got, err := applyRerank(context.Background(), &fakeReranker{}, "q", nil, 10, 100)
+	got, err := applyRerank(context.Background(), &fakeReranker{}, "q", nil, nil, false, 10, 100)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("empty: got=%v err=%v", got, err)
 	}

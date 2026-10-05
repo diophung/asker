@@ -1,0 +1,5 @@
+# Native macOS wheels include MPS; never install the Linux CPU wheel index here.
+# Keep the encoder runtime aligned with services/reranker/requirements.txt.
+sentence-transformers==5.1.0
+torch==2.13.0
+numpy==1.26.4

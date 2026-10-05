@@ -10,7 +10,7 @@
 // same-origin and no CORS / redirect-URI config is touched). In production the
 // seam swaps back to the real OIDC token from src/auth.ts. NEVER ship this.
 
-import { getToken } from "./auth";
+import { getToken, invalidateToken } from "./auth";
 import { safeHttpUrl } from "../safeUrl";
 import type {
   CalendarResult,
@@ -28,9 +28,17 @@ const env = import.meta.env;
 /** Backend is on unless explicitly disabled (and never under vitest). */
 export const BACKEND_ENABLED =
   env.MODE !== "test" && env.VITE_USE_BACKEND !== "0";
+// Enable only after the deployed profile passes relevance and latency gates.
+const RERANK_DEFAULT = env.VITE_RERANK_DEFAULT === "1";
 
 // Same-origin path the proxy forwards to the gateway.
 const SEARCH_PATH = "/v1/search";
+
+async function authenticatedFetch(token: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  if (response.status === 401) invalidateToken(token);
+  return response;
+}
 
 /**
  * The endpoint for a source tab. "all" is the unfiltered /v1/search; every
@@ -62,7 +70,7 @@ export interface Me {
 
 export async function getMe(): Promise<Me> {
   const token = await getToken();
-  const res = await fetch("/v1/me", {
+  const res = await authenticatedFetch(token, "/v1/me", {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -75,7 +83,7 @@ export async function getMe(): Promise<Me> {
 /** GDPR per-tenant erasure (DELETE /v1/me/data) — DESTRUCTIVE, caller-confirmed. */
 export async function deleteMyData(): Promise<Record<string, unknown>> {
   const token = await getToken();
-  const res = await fetch("/v1/me/data", {
+  const res = await authenticatedFetch(token, "/v1/me/data", {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -240,7 +248,7 @@ export async function getPreferences(): Promise<PreferencesResponse> {
     return { profile: mockProfile, sampleCount: mockSampleCount };
   }
   const token = await getToken();
-  const res = await fetch("/v1/preferences", {
+  const res = await authenticatedFetch(token, "/v1/preferences", {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -259,7 +267,7 @@ export async function savePreferences(profile: Profile): Promise<number> {
     return mockProfile.version;
   }
   const token = await getToken();
-  const res = await fetch("/v1/preferences", {
+  const res = await authenticatedFetch(token, "/v1/preferences", {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -306,7 +314,7 @@ export async function sendFeedback(ev: FeedbackEvent): Promise<FeedbackResponse>
   }
   try {
     const token = await getToken();
-    const res = await fetch("/v1/feedback", {
+    const res = await authenticatedFetch(token, "/v1/feedback", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -339,7 +347,7 @@ export async function resetLearning(): Promise<number> {
     return deleted;
   }
   const token = await getToken();
-  const res = await fetch("/v1/preferences/reset", {
+  const res = await authenticatedFetch(token, "/v1/preferences/reset", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -362,7 +370,7 @@ export async function exportPersonalization(): Promise<Record<string, unknown>> 
     };
   }
   const token = await getToken();
-  const res = await fetch("/v1/preferences/export", {
+  const res = await authenticatedFetch(token, "/v1/preferences/export", {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -427,7 +435,7 @@ export async function getIndexStatus(): Promise<IndexStatus> {
     };
   }
   const token = await getToken();
-  const res = await fetch("/v1/index/status", {
+  const res = await authenticatedFetch(token, "/v1/index/status", {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -461,7 +469,7 @@ export async function reindexConnector(id: string): Promise<void> {
     return;
   }
   const token = await getToken();
-  const res = await fetch(
+  const res = await authenticatedFetch(token,
     `/v1/connectors/${encodeURIComponent(id)}/reindex`,
     {
       method: "POST",
@@ -498,6 +506,10 @@ interface GatewayResponse {
   hits: GatewayHit[];
   total: number;
   took_ms: number;
+  cached?: boolean;
+  degraded?: string;
+  rerank_requested?: boolean;
+  rerank_applied?: boolean;
 }
 
 // The /v1/search/people wire shape (derived contacts — not document hits).
@@ -514,23 +526,25 @@ interface PeopleResponse {
   took_ms: number;
 }
 
-let lastMeta: { query: string; approx: string; seconds: string } | null = null;
+let lastMeta: { query: string; approx: string; seconds: string; degraded?: string } | null = null;
 
 export function backendMeta(
   query: string,
-): { approx: string; seconds: string } | null {
+): { approx: string; seconds: string; degraded?: string } | null {
   return lastMeta && lastMeta.query === query
-    ? { approx: lastMeta.approx, seconds: lastMeta.seconds }
+    ? { approx: lastMeta.approx, seconds: lastMeta.seconds, degraded: lastMeta.degraded }
     : null;
 }
 
 export async function searchBackend(
   query: string,
   source: SourceFilter,
+  signal?: AbortSignal,
 ): Promise<SearchResult[]> {
+  const started = performance.now();
   // People are derived (no person index): a separate endpoint + wire shape.
   if (source === "people") {
-    return searchPeople(query);
+    return searchPeople(query, signal);
   }
   const token = await getToken();
   const params = new URLSearchParams({
@@ -539,36 +553,48 @@ export async function searchBackend(
     offset: "0",
     mode: searchMode,
   });
-  const res = await fetch(`${endpointFor(source)}?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  if (RERANK_DEFAULT && searchMode === "hybrid") params.set("rerank", "1");
+  const res = await authenticatedFetch(token, `${endpointFor(source)}?${params.toString()}`, {
+    // Searches and retries must see newly indexed items rather than a cached
+    // empty response. The gateway still supports caching for other API callers.
+    headers: { Authorization: `Bearer ${token}`, "Cache-Control": "no-cache" },
+    signal,
   });
   if (!res.ok) {
     throw new Error(`search failed (HTTP ${res.status})`);
   }
   const data = (await res.json()) as GatewayResponse;
+  signal?.throwIfAborted();
   lastMeta = {
     query,
     approx: data.total.toLocaleString(),
-    seconds: (data.took_ms / 1000).toFixed(2),
+    seconds: ((performance.now() - started) / 1000).toFixed(2),
+    degraded: data.degraded || (
+      data.hits.length > 0 && data.rerank_requested === true && data.rerank_applied !== true
+        ? "rerank-unavailable" : data.degraded
+    ),
   };
   return data.hits.map(mapHit);
 }
 
 /** The People tab: derived contacts from /v1/search/people. */
-async function searchPeople(query: string): Promise<SearchResult[]> {
+async function searchPeople(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
+  const started = performance.now();
   const token = await getToken();
   const params = new URLSearchParams({ q: query });
-  const res = await fetch(`${SEARCH_PATH}/people?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const res = await authenticatedFetch(token, `${SEARCH_PATH}/people?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}`, "Cache-Control": "no-cache" },
+    signal,
   });
   if (!res.ok) {
     throw new Error(`people search failed (HTTP ${res.status})`);
   }
   const data = (await res.json()) as PeopleResponse;
+  signal?.throwIfAborted();
   lastMeta = {
     query,
     approx: data.total.toLocaleString(),
-    seconds: (data.took_ms / 1000).toFixed(2),
+    seconds: ((performance.now() - started) / 1000).toFixed(2),
   };
   return data.people.map(mapPerson);
 }
@@ -599,7 +625,7 @@ function mapPerson(p: GatewayPerson): PersonResult {
 export async function getRecentSearches(): Promise<string[]> {
   try {
     const token = await getToken();
-    const res = await fetch("/v1/searches/recent", {
+    const res = await authenticatedFetch(token, "/v1/searches/recent", {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
@@ -616,7 +642,7 @@ export async function getRecentSearches(): Promise<string[]> {
 export async function removeRecentSearch(q: string): Promise<void> {
   try {
     const token = await getToken();
-    await fetch(`/v1/searches?q=${encodeURIComponent(q)}`, {
+    await authenticatedFetch(token, `/v1/searches?q=${encodeURIComponent(q)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -645,8 +671,24 @@ const CONNECTOR_SOURCE: Record<string, SourceName> = {
   contacts: "Contacts",
 };
 
-function sourceOf(connectorId: string): SourceName {
-  return CONNECTOR_SOURCE[connectorId] ?? "Drive";
+function sourceOf(connectorId: string, docType: string): SourceName {
+  if (Object.hasOwn(CONNECTOR_SOURCE, connectorId)) {
+    return CONNECTOR_SOURCE[connectorId];
+  }
+  // A connector instance can have any id. Its document type tells us the
+  // category, but cannot establish a source brand.
+  switch (docType) {
+    case "EMAIL": return "Email";
+    case "CHAT_MESSAGE": return "Messages";
+    case "CALENDAR_EVENT": return "Events";
+    case "FILE":
+    case "WIKI_PAGE":
+    case "TICKET": return "Files";
+    case "IMAGE":
+    case "VIDEO":
+    case "AUDIO": return "Media";
+    default: return "Source";
+  }
 }
 
 /** "Paraform <team@paraform.com>" -> "Paraform"; bare email -> the email. */
@@ -715,7 +757,7 @@ function linkFor(hit: GatewayHit): string {
 
 function mapHit(hit: GatewayHit): SearchResult {
   const md = hit.metadata ?? {};
-  const source = sourceOf(hit.connector_id);
+  const source = sourceOf(hit.connector_id, hit.type);
   const when = relativeTime(hit.modified || hit.created);
   const snippet = sanitizeSnippet(hit.snippet) || "(no preview)";
   const title = hit.title || "(untitled)";

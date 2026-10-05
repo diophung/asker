@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LogOut, Settings as SettingsIcon } from "lucide-react";
-import { currentUser, isSignedIn, signOut } from "./auth";
+import { currentUser, isSignedIn, signOut, subscribe } from "./auth";
 import {
   BACKEND_ENABLED,
   getRecentSearches,
@@ -20,7 +20,7 @@ import { ResultItem, type FeedbackAction } from "./ResultItem";
 import { SearchBox } from "./SearchBox";
 import { SignIn } from "./SignIn";
 import { SourceTabs } from "./SourceTabs";
-import { ErrorState, LoadingSkeleton, MetaLine, NoResults } from "./states";
+import { ErrorState, LoadingSkeleton, MetaLine, NoResults, SearchFallback } from "./states";
 import { homeUrl, parseLocation, searchUrl } from "./router";
 
 type Phase = "idle" | "loading" | "done" | "error";
@@ -65,6 +65,7 @@ export function SearchApp() {
     initialRoute.query === "" ? "idle" : "loading",
   );
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [meta, setMeta] = useState(() => metaFor(initialRoute.query, 0));
   const [panel, setPanel] = useState<Panel | null>(null);
   const [recents, setRecents] = useState<string[]>([]);
   // Backend mode needs a token — gate on a dev sign-in (restored from
@@ -75,31 +76,71 @@ export function SearchApp() {
   const reqId = useRef(0);
   const jumpToTop = useRef(false);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const resultsContainerRef = useRef<HTMLElement>(null);
   const initialFetched = useRef(false);
+  const activeSearch = useRef<AbortController | null>(null);
+  const searchStarted = useRef<number | null>(null);
+  const [sessionNotice, setSessionNotice] = useState("");
+
+  useEffect(() => {
+    if (!BACKEND_ENABLED) return;
+    return subscribe(() => {
+      const signedIn = isSignedIn();
+      setAuthed(signedIn);
+      if (!signedIn) {
+        activeSearch.current?.abort();
+        ++reqId.current;
+        searchStarted.current = null;
+        initialFetched.current = false;
+        setResults([]);
+        setPanel(null);
+        setRecents([]);
+        setView("search");
+        setSessionNotice("Your session ended. Sign in to continue your search.");
+      } else {
+        setSessionNotice("");
+      }
+    });
+  }, []);
 
   const isHome = query === "";
   const suggestions = useMemo(
     () => getSuggestions(box, BACKEND_ENABLED ? recents : undefined),
     [box, recents],
   );
-  const meta = useMemo(() => metaFor(query, results.length), [query, results.length]);
 
   // A single source's results (the active tab). Each tab is its own endpoint.
   const run = useCallback(async (q: string, src: SourceFilter) => {
+    activeSearch.current?.abort();
+    resultsContainerRef.current?.removeAttribute("data-search-elapsed-ms");
+    const controller = new AbortController();
+    activeSearch.current = controller;
+    searchStarted.current = performance.now();
     const id = ++reqId.current;
     setPhase("loading");
+    // Include token refresh, HTTP and decoding in the browser's work budget.
+    // A stalled request must reach the recoverable error state as well as abort.
+    const timer = window.setTimeout(() => {
+      if (id === reqId.current && !controller.signal.aborted) {
+        controller.abort();
+        setPhase("error");
+      }
+    }, 5_000);
     try {
-      const hits = await searchPersonalData(q, src);
-      if (id !== reqId.current) {
+      const hits = await searchPersonalData(q, src, controller.signal);
+      if (id !== reqId.current || controller.signal.aborted) {
         return; // a newer request superseded this one
       }
       setResults(hits);
+      setMeta(metaFor(q, hits.length));
       setPanel(resolvePanel(q));
       setPhase("done");
     } catch {
-      if (id === reqId.current) {
+      if (id === reqId.current && !controller.signal.aborted) {
         setPhase("error");
       }
+    } finally {
+      window.clearTimeout(timer);
     }
   }, []);
 
@@ -136,6 +177,9 @@ export function SearchApp() {
   );
 
   const goHome = useCallback(() => {
+    activeSearch.current?.abort();
+    ++reqId.current;
+    searchStarted.current = null;
     setBox("");
     setQuery("");
     setSource("all");
@@ -178,8 +222,9 @@ export function SearchApp() {
       return;
     }
     initialFetched.current = true;
-    if (initialRoute.query !== "") {
-      void run(initialRoute.query, initialRoute.source);
+    const route = parseLocation();
+    if (route.query !== "") {
+      void run(route.query, route.source);
     }
     if (BACKEND_ENABLED) {
       void refreshRecents();
@@ -196,6 +241,9 @@ export function SearchApp() {
       if (r.query !== "") {
         void run(r.query, r.source);
       } else {
+        activeSearch.current?.abort();
+        ++reqId.current;
+        searchStarted.current = null;
         setResults([]);
         setPanel(null);
         setPhase("idle");
@@ -204,6 +252,34 @@ export function SearchApp() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [run]);
+
+  useEffect(() => () => {
+    activeSearch.current?.abort();
+    ++reqId.current;
+    // StrictMode replays mount effects after cleanup. The canceled initial
+    // fetch must be restarted rather than leaving a bookmarked query loading.
+    initialFetched.current = false;
+  }, []);
+
+  // Record submit-to-render completion without retaining query or document data.
+  // The event and read-only DOM attribute expose the same sample, including
+  // empty results. API latency is reported separately.
+  useEffect(() => {
+    if (phase !== "done" || searchStarted.current === null) return;
+    const started = searchStarted.current;
+    const request = reqId.current;
+    const frame = requestAnimationFrame(() => {
+      if (request !== reqId.current || activeSearch.current?.signal.aborted) return;
+      const container = resultsContainerRef.current;
+      if (!container) return;
+      const elapsedMs = performance.now() - started;
+      container.setAttribute("data-search-elapsed-ms", String(elapsedMs));
+      window.dispatchEvent(new CustomEvent("asker:search-rendered", {
+        detail: { elapsedMs, resultCount: results.length, source },
+      }));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [phase, results, source]);
 
   // "Open top match": land the user on the single best result.
   useEffect(() => {
@@ -216,7 +292,11 @@ export function SearchApp() {
   }, [phase, results]);
 
   const signOutAll = useCallback(() => {
+    activeSearch.current?.abort();
+    ++reqId.current;
+    searchStarted.current = null;
     signOut();
+    setSessionNotice("");
     setQuery("");
     setBox("");
     setSource("all");
@@ -231,7 +311,7 @@ export function SearchApp() {
 
   // Auth gate (after all hooks). Backend mode requires a signed-in dev session.
   if (BACKEND_ENABLED && !authed) {
-    return <SignIn onSignedIn={() => setAuthed(true)} />;
+    return <SignIn notice={sessionNotice} onSignedIn={() => setAuthed(true)} />;
   }
 
   if (BACKEND_ENABLED && view === "settings") {
@@ -345,7 +425,8 @@ export function SearchApp() {
 
       <div className="mx-auto max-w-[1100px] px-4 py-5">
         <div className="flex flex-col gap-10 lg:flex-row lg:gap-12">
-          <section className="min-w-0 max-w-[600px] flex-1" aria-live="polite">
+          <section ref={resultsContainerRef} className="min-w-0 max-w-[600px] flex-1" aria-live="polite">
+            {phase === "done" && meta.degraded && <SearchFallback reasons={meta.degraded} />}
             {phase === "error" ? (
               <ErrorState onRetry={() => run(query, source)} />
             ) : phase === "loading" ? (

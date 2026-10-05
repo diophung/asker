@@ -17,6 +17,15 @@ type queryConfig struct {
 	TEIURL     string `env:"TEI_URL" envDefault:"http://tei:80"`
 	VespaURL   string `env:"VESPA_URL" envDefault:"http://vespa:8080"`
 	RedisAddr  string `env:"REDIS_ADDR" envDefault:"redis:6379"`
+	// CacheNamespace identifies the deployed corpus/model/config revision. Change
+	// it when a deployment changes inputs outside the normalized search request.
+	CacheNamespace string `env:"QUERY_CACHE_NAMESPACE" envDefault:""`
+	// Disable result-cache reads and writes when fresh searches must observe
+	// index changes immediately after they become visible to Vespa.
+	ResultCacheEnabled bool `env:"QUERY_RESULT_CACHE_ENABLED" envDefault:"true"`
+	// Reserve 500ms of the 5s user budget for gateway transfer and rendering.
+	SearchTimeout time.Duration `env:"QUERY_SEARCH_TIMEOUT" envDefault:"4.5s"`
+	ClipEnabled   bool          `env:"QUERY_CLIP_ENABLED" envDefault:"true"`
 	// EmbeddingDim is the query-vector dimensionality; a TEI response of any
 	// other length is rejected (ADR-005: loud operator error, never a
 	// silently wrong-size vector).
@@ -51,16 +60,15 @@ type queryConfig struct {
 
 	// --- Personalization (v3.2) ---------------------------------------------
 
-	// PersonalizationEnabled wires the Redis profile loader (main.go). When false
-	// the query path runs the non-personalized pipeline exactly as before — a
-	// rollback switch. Per-user profiles still cold-start to sensible defaults.
+	// PersonalizationEnabled wires the Redis profile loader (main.go). Query
+	// understanding and hybrid fusion work independently of this preference switch.
 	PersonalizationEnabled bool `env:"QUERY_PERSONALIZATION_ENABLED" envDefault:"true"`
 	// HybridRRF fuses a keyword arm and a vector arm with Reciprocal Rank Fusion
-	// on the personalized path (spec §1.4). Off => the personalized path reuses
-	// the single-pass hybrid retrieval. Personal corpora are tiny (exact
+	// independently of personalization (spec §1.4). Off => retrieval reuses
+	// the single-pass hybrid profile. Personal corpora are tiny (exact
 	// streaming scan), so the extra arm is within budget.
 	HybridRRF bool `env:"QUERY_HYBRID_RRF" envDefault:"true"`
-	// CandidateCap is how many candidates the personalized path retrieves (at
+	// CandidateCap is how many candidates the fusion/rerank path retrieves (at
 	// offset 0) before re-ranking down to the requested page. Larger => better
 	// recall for the re-ranker, more work. Clamped to [maxLimit, 1000].
 	CandidateCap int `env:"QUERY_CANDIDATE_CAP" envDefault:"100"`
@@ -68,19 +76,20 @@ type queryConfig struct {
 	// --- Cross-encoder reranking (Phase 1) ----------------------------------
 
 	// RerankEnabled wires the reranker client (main.go). When false the reranker
-	// is not constructed and the SearchRequest.rerank flag is ignored — a clean
-	// rollback switch, and the default so existing deployments are unchanged.
+	// is not constructed and requested reranking is disclosed as unavailable.
+	// It remains off by default so deployment enablement is explicit.
 	RerankEnabled bool `env:"QUERY_RERANK_ENABLED" envDefault:"false"`
 	// RerankURL is the reranker model service (bge-reranker-v2-m3 by default),
 	// analogous to TEI/CLIP: it scores (query, candidate) pairs.
 	RerankURL string `env:"QUERY_RERANK_URL" envDefault:"http://reranker:9900"`
 	// RerankTimeout bounds the reranker /rerank call; on expiry the rerank pass
 	// is skipped (degraded="rerank-unavailable") — retrieval is unaffected
-	// (never fail closed). Default fits the ~300ms/50-candidate budget with slack.
+	// (never fail closed). This is a configured bound; performance must be measured.
 	RerankTimeout time.Duration `env:"QUERY_RERANK_TIMEOUT" envDefault:"1s"`
 	// RerankCandidates is how many of the top fused candidates are handed to the
-	// cross-encoder (rerank depth). The reranked set is what the page is drawn
-	// from. Larger => better recall for the reranker, more per-query cost.
+	// cross-encoder (rerank depth). That reordered head precedes the unscored
+	// retrieval tail on a common ordinal relevance scale, preserving deeper pages.
+	// Larger => better recall for the reranker, more per-query cost.
 	RerankCandidates int `env:"QUERY_RERANK_CANDIDATES" envDefault:"50"`
 	// RerankDocChars caps how much of each candidate's text is sent to the
 	// reranker (cross-encoders truncate long inputs anyway; this bounds payload
@@ -98,6 +107,9 @@ func loadConfig() (queryConfig, error) {
 	}
 	if cfg.EmbeddingDim <= 0 {
 		return queryConfig{}, fmt.Errorf("config: EMBEDDING_DIM must be > 0, got %d", cfg.EmbeddingDim)
+	}
+	if cfg.SearchTimeout <= 0 || cfg.SearchTimeout > 4500*time.Millisecond {
+		return queryConfig{}, fmt.Errorf("config: QUERY_SEARCH_TIMEOUT must be in (0,4.5s], got %s", cfg.SearchTimeout)
 	}
 	if cfg.EmbedTimeout <= 0 {
 		return queryConfig{}, fmt.Errorf("config: QUERY_EMBED_TIMEOUT must be > 0, got %s", cfg.EmbedTimeout)
@@ -124,11 +136,11 @@ func loadConfig() (queryConfig, error) {
 		if cfg.RerankTimeout <= 0 {
 			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_TIMEOUT must be > 0 when QUERY_RERANK_ENABLED, got %s", cfg.RerankTimeout)
 		}
-		if cfg.RerankCandidates <= 0 {
-			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_CANDIDATES must be > 0 when QUERY_RERANK_ENABLED, got %d", cfg.RerankCandidates)
+		if cfg.RerankCandidates <= 0 || cfg.RerankCandidates > 200 {
+			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_CANDIDATES must be in [1,200] when QUERY_RERANK_ENABLED, got %d", cfg.RerankCandidates)
 		}
-		if cfg.RerankDocChars <= 0 {
-			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_DOC_CHARS must be > 0 when QUERY_RERANK_ENABLED, got %d", cfg.RerankDocChars)
+		if cfg.RerankDocChars <= 0 || cfg.RerankDocChars > 8192 {
+			return queryConfig{}, fmt.Errorf("config: QUERY_RERANK_DOC_CHARS must be in [1,8192] when QUERY_RERANK_ENABLED, got %d", cfg.RerankDocChars)
 		}
 		// The reranker reorders the top RerankCandidates of the retrieved
 		// candidate pool, so the pool must be at least that deep.

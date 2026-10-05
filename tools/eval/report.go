@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -30,6 +31,13 @@ func fms(v float64) string {
 	return fmt.Sprintf("%.0f", v)
 }
 
+func headRecall(a Aggregate) string {
+	if a.PreRerankRecall == nil {
+		return "unmeasured"
+	}
+	return fmt.Sprintf("%s (%d/%d)", fnum(*a.PreRerankRecall), a.PreRerankN, a.QualityN)
+}
+
 // renderText writes the console table: one block per pipeline, overall row then
 // per-slice rows.
 func renderText(r Report) string {
@@ -39,7 +47,7 @@ func renderText(r Report) string {
 	fmt.Fprintf(&b, "slices: %s\n\n", sliceCountsLine(r.SliceCounts))
 
 	tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "PIPELINE\tSLICE\tN\tRECALL@k\tnDCG@k\tMRR\tp50ms\tp95ms")
+	_, _ = fmt.Fprintln(tw, "PIPELINE\tSLICE\tTASKS\tRECALL@k\tnDCG@k\tMRR@k\tSUCCESS@k\tALL NEEDS@k\tp50ms\tp95ms\tp99ms\tERR\tCACHE\tDEGRADED\tRERANK APPLIED/REQUESTED\tPRE-RERANK HEAD RECALL (n)")
 	for _, a := range r.Aggregates {
 		slice := a.Slice
 		if slice == "" {
@@ -49,12 +57,8 @@ func renderText(r Report) string {
 		if !a.Supported {
 			name += " (n/a)"
 		}
-		errs := ""
-		if a.Errors > 0 {
-			errs = fmt.Sprintf("  !%d err", a.Errors)
-		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s%s\n",
-			name, slice, a.N, fnum(a.Recall), fnum(a.NDCG), fnum(a.MRR), fms(a.P50Ms), fms(a.P95Ms), errs)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d/%d\t%s\n",
+			name, slice, a.N, a.Expected, fnum(a.Recall), fnum(a.NDCG), fnum(a.MRR), fnum(a.TaskSuccess), fnum(a.NeedCoverage), fms(a.P50Ms), fms(a.P95Ms), fms(a.P99Ms), a.Errors, a.CacheHits, a.Degraded, a.RerankApplied, a.RerankRequested, headRecall(a))
 	}
 	_ = tw.Flush()
 
@@ -65,10 +69,13 @@ func renderText(r Report) string {
 
 func sliceCountsLine(c map[string]int) string {
 	parts := make([]string, 0, len(c))
-	for _, s := range []string{SliceExact, SliceKeyword, SliceSemantic, SliceMultilingual} {
-		if n, ok := c[s]; ok {
-			parts = append(parts, fmt.Sprintf("%s=%d", s, n))
-		}
+	labels := make([]string, 0, len(c))
+	for label := range c {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		parts = append(parts, fmt.Sprintf("%s=%d", label, c[label]))
 	}
 	if len(parts) == 0 {
 		return "(none)"
@@ -79,14 +86,14 @@ func sliceCountsLine(c map[string]int) string {
 func gateLine(g GateResult) string {
 	switch {
 	case g.Skipped:
-		return fmt.Sprintf("QUALITY GATE: skipped — %s\n", g.Reason)
+		return fmt.Sprintf("QUALIFICATION GATE: skipped (unqualified) — %s\n", g.Reason)
 	case g.Pass:
-		return fmt.Sprintf("QUALITY GATE: PASS — %q matches-or-beats %q on every slice and improves overall\n", g.Candidate, g.Baseline)
+		return fmt.Sprintf("QUALIFICATION GATE: PASS — %q satisfies the recorded correctness, quality and latency criteria against %q\n", g.Candidate, g.Baseline)
 	default:
 		var b strings.Builder
-		fmt.Fprintf(&b, "QUALITY GATE: FAIL — %q regressed vs %q:\n", g.Candidate, g.Baseline)
+		fmt.Fprintf(&b, "QUALIFICATION GATE: FAIL — %q vs %q:\n", g.Candidate, g.Baseline)
 		for _, v := range g.Violations {
-			fmt.Fprintf(&b, "  - %s %s: baseline %s > candidate %s\n", v.Slice, v.Metric, fnum(v.Baseline), fnum(v.Candidate))
+			fmt.Fprintf(&b, "  - %s %s: threshold/reference %s; observed %s\n", v.Slice, v.Metric, fnum(v.Baseline), fnum(v.Candidate))
 		}
 		return b.String()
 	}
@@ -99,8 +106,22 @@ func renderMarkdown(r Report) string {
 	fmt.Fprintf(&b, "- generated: `%s`\n- golden: `%s`\n- queries: %d (k=%d)\n- slices: %s\n\n",
 		r.Generated, r.Golden, r.Queries, r.K, sliceCountsLine(r.SliceCounts))
 
-	fmt.Fprintf(&b, "| pipeline | slice | n | Recall@%d | nDCG@%d | MRR | p50ms | p95ms |\n", r.K, r.K)
-	fmt.Fprintf(&b, "|---|---|--:|--:|--:|--:|--:|--:|\n")
+	if data, err := json.MarshalIndent(r.Config, "", "  "); err == nil {
+		fmt.Fprintf(&b, "Recorded acceptance configuration:\n\n```json\n%s\n```\n\n", data)
+	}
+	fmt.Fprintf(&b, "Golden SHA-256: `%s`\n\n", r.GoldenSHA256)
+	keys := make([]string, 0, len(r.Metadata))
+	for key := range r.Metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Fprintf(&b, "- %s: %s\n", key, r.Metadata[key])
+	}
+	fmt.Fprintf(&b, "\nLatency covers the entire HTTP response and decode, including failed requests. It excludes browser rendering and token acquisition. No-match tasks are excluded from ranked-relevance means; failed positive tasks score zero. Repeated samples do not increase the number of independently judged queries. A small synthetic corpus does not establish Google-level quality or large-corpus performance.\n\n")
+	fmt.Fprintf(&b, "Pre-rerank head recall uses complete authorized head IDs from debug telemetry, when available, and excludes no-match tasks. It does not measure recall over the full eligible retrieval population. Absent, truncated or malformed telemetry is unmeasured; partial sample coverage is shown explicitly. No candidate IDs or query text are retained in reports.\n\n")
+	fmt.Fprintf(&b, "| pipeline | slice | attempted/expected | quality n | Recall@%d | nDCG@%d | MRR@%d | task success@%d | exact@1 | all-needs coverage (n) | p50 ms | p95 ms | p99 ms | errors | cache | degraded | rerank applied/requested | unfulfilled/unknown | constraint violations |\n", r.K, r.K, r.K, r.K)
+	fmt.Fprintf(&b, "|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|\n")
 	for _, a := range r.Aggregates {
 		slice := a.Slice
 		if slice == "" {
@@ -110,8 +131,16 @@ func renderMarkdown(r Report) string {
 		if !a.Supported {
 			name += " _(n/a)_"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %d | %s | %s | %s | %s | %s |\n",
-			name, slice, a.N, fnum(a.Recall), fnum(a.NDCG), fnum(a.MRR), fms(a.P50Ms), fms(a.P95Ms))
+		fmt.Fprintf(&b, "| %s | %s | %d/%d | %d | %s | %s | %s | %s | %s | %s (%d) | %s | %s | %s | %d | %d | %d | %d/%d | %d/%d | %d |\n",
+			name, slice, a.N, a.Expected, a.QualityN, fnum(a.Recall), fnum(a.NDCG), fnum(a.MRR), fnum(a.TaskSuccess), fnum(a.ExactSuccess), fnum(a.NeedCoverage), a.NeedN, fms(a.P50Ms), fms(a.P95Ms), fms(a.P99Ms), a.Errors, a.CacheHits, a.Degraded, a.RerankApplied, a.RerankRequested, a.RerankUnfulfilled, a.ExecutionMissing, a.ConstraintViolations)
+	}
+	fmt.Fprintf(&b, "\n| pipeline | slice | pre-rerank head recall | measured / positive samples | unmeasured positive samples |\n|---|---|--:|--:|--:|\n")
+	for _, a := range r.Aggregates {
+		slice := a.Slice
+		if slice == "" {
+			slice = "overall"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %d/%d | %d |\n", a.Pipeline, slice, headRecall(a), a.PreRerankN, a.QualityN, a.PreRerankUnknown)
 	}
 	fmt.Fprintf(&b, "\n**%s**\n", strings.TrimSpace(gateLine(r.Gate)))
 	return b.String()

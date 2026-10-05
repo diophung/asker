@@ -97,6 +97,12 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 	// (rerank.go). newServer leaves this off; configure it from the environment.
 	srv.recencyWeight = cfg.RecencyWeight
 	srv.recencyHalfLife = cfg.RecencyHalfLife
+	srv.searchTimeout = cfg.SearchTimeout
+	srv.cacheNamespace = cfg.CacheNamespace
+	srv.resultCacheEnabled = cfg.ResultCacheEnabled
+	srv.clipEnabled = cfg.ClipEnabled
+	srv.rrfEnabled = cfg.HybridRRF
+	srv.candidateCap = int32(cfg.CandidateCap)
 
 	// v3 personalization: wire the Redis profile loader (turns the personalized
 	// re-rank ON). newServer leaves srv.profiles nil — the non-personalized
@@ -106,8 +112,6 @@ func run(ctx context.Context, cfg queryConfig, logger *slog.Logger) error {
 		loader := newRedisProfileLoader(cfg.RedisAddr)
 		defer loader.Close()
 		srv.profiles = loader
-		srv.rrfEnabled = cfg.HybridRRF
-		srv.candidateCap = int32(cfg.CandidateCap)
 		logger.Info("personalization enabled", "rrf", cfg.HybridRRF, "candidate_cap", cfg.CandidateCap)
 	}
 

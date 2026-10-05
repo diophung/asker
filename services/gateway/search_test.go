@@ -92,14 +92,47 @@ func TestSearchTenantChokepointAndShape(t *testing.T) {
 			"thumbnail_key": "",
 			"explanation":   "",
 		}},
-		"total":    float64(42),
-		"degraded": "keyword-only",
-		"took_ms":  float64(12),
-		"cached":   true,
+		"total":            float64(42),
+		"degraded":         "keyword-only",
+		"took_ms":          float64(12),
+		"cached":           true,
+		"rerank_requested": false,
+		"rerank_applied":   false,
 	}
 	got := decodeObject(t, rec)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("response =\n%#v\nwant\n%#v", got, want)
+	}
+}
+
+func TestSearchCacheControlAndRerankEvidence(t *testing.T) {
+	for _, path := range []string{"/v1/search", "/v1/search/email"} {
+		t.Run(path, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.query.rerankApplied = true
+			rec := env.do(http.MethodGet, path+"?q=budget&rerank=1", nil,
+				http.Header{"Cache-Control": {"max-age=0, No-Cache"}, "X-Asker-Tenant": {"attacker"}})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			got := decodeObject(t, rec)
+			if got["rerank_requested"] != true || got["rerank_applied"] != true {
+				t.Fatalf("missing real execution evidence: %v", got)
+			}
+			env.query.mu.Lock()
+			bypassed := env.query.cacheBypass
+			env.query.mu.Unlock()
+			if !bypassed {
+				t.Fatal("Cache-Control:no-cache did not reach QueryService")
+			}
+			tenant, _ := env.query.captured()
+			if string(tenant) != testSubject {
+				t.Fatalf("cache hint altered tenant: %s", tenant)
+			}
+			if rec.Header().Get("Cache-Control") != "private, no-store" {
+				t.Fatal("private search response can enter a shared HTTP cache")
+			}
+		})
 	}
 }
 

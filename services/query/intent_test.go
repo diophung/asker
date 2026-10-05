@@ -18,6 +18,8 @@ func TestClassifyIntent(t *testing.T) {
 		{"follow up", "what should I follow up on", nil, intentNeedsAttention},
 		{"unread framing", "unread important email", nil, intentNeedsAttention},
 		{"content lookup", "quarterly revenue deck", nil, intentFindItem},
+		{"conditional how-to", "what should I do if the workstation overheats?", nil, intentFindItem},
+		{"procedural advice", "what should I install to recover corrupted records?", nil, intentFindItem},
 		{"attention beats schedule when both", "meetings that need my attention", nil, intentNeedsAttention},
 		{"empty freeform", "", nil, intentFreeform},
 	}

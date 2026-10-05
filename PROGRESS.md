@@ -17,6 +17,107 @@ Newest entries go first.
 
 ---
 
+## 2026-10-05 — Review Apple search changes for publication against current main
+
+- Done: copied the complete pending change set into a separate current-main
+  worktree, preserving the running checkout and indexed data. Resolved gateway
+  and browser conflicts while retaining main's security headers and URL safety.
+  Preserved the independent historical CI prompt with an explicit context note.
+- Done: included a synthetic browser screenshot and sanitized aggregate/freeze
+  evidence in the repository; credentials, model caches, raw runtime reports and
+  private profiles remain ignored. Marked both local benchmark holdouts consumed.
+- Verified: merged-source Go build/vet/full race tests/coverage gate/lint pass;
+  tenancy coverage remains 100%. Fresh web install, 170 tests/build/lint pass;
+  25 native encoder, 72 reranker, 18 local-tool and 12 evaluation Python tests
+  pass. Both Compose profiles resolve; shell syntax/ShellCheck and Ruff pass.
+- Verified: 12 authenticated searches across keyword/vector/hybrid prove the
+  two synthetic exact cases and forged-tenant isolation on newly built merged
+  query/gateway images; 200/401 security headers are retained. Temporary review
+  services were removed and the original six services/data were unchanged.
+  Added a lightweight CI job and reproduced its 127 Python tests in a clean
+  pinned test environment without Torch or model downloads.
+- Next: review the PR against `main` and its hosted CI results before merging.
+- Known issues: October 4 measured timings qualify the frozen local source,
+  not the rebased publication head. Relevance/capacity gates still fail;
+  reranking remains off by default, 48 GB hardware is unverified, and no
+  production or provider-connector validation is claimed.
+
+## 2026-10-04 — Persistent native search, bounded queues and fresh qualification
+
+- Done: checkout-scoped launchd model jobs and container restart policies;
+  bounded FIFO native admission and remaining-request deadlines; Apple API cache
+  disabled; auth refresh/session ownership, expired-session recovery and a
+  five-second browser completion bound. Preserved previous work and indexed data.
+- Done: content-aware diversity, rich authorized rerank passages, conservative
+  title-supported model-query typo correction and Unicode temporal boundaries.
+  Added bounded actual pre-rerank head telemetry and a real 10,000-document
+  capacity tool. Native BGE-M3/reranker are pinned, resident MPS/fp32.
+- Verified: Docker remains configured at 32 GB; all six Apple containers healthy,
+  browser http://localhost:13002 returns 200, native jobs persist after terminal
+  exit. Actual M5 Pro Mac17,8 has 64 GiB. Browser 104 warm uncached attempts:
+  p95 67.2 ms, no errors/fallback. Sustained 1,596 uncached API requests:
+  hybrid p95 43.180 ms, optional rerank 857.444 ms, no errors/fallback.
+- Verified: normal hybrid has zero embedding errors/fallback at C2/C4 in retained
+  regression probes and the actual 10,000-document capacity probe. Short batch-8
+  indexing contention has hybrid p95 110.861 ms without fallback. Final 49-sample
+  memory window shows no swap growth; partial counters are not a whole-app peak.
+  Direct-feed add/update/delete and forged-tenant final/head isolation checks pass.
+- Verified: local Go race/vet/scoped lint, 163 web tests/build/lint, native/rerank
+  and evaluation/tool tests, Ruff/ShellCheck/Compose. Frozen v2 development passes;
+  regression and first untouched holdout fail against dense. Source/config/model
+  settings were frozen before those splits and not tuned afterward.
+- Next: repair exact-evidence fusion and final demotion on development; improve
+  typo/combined-needs ordering without regressions; independently adjudicate a
+  fresh sealed benchmark before another default decision. See the
+  [dated validation report](docs/search-quality-validation-2026-10-04.md).
+- Known issues: ordinary hybrid retains the existing default; optional rerank
+  remains off. Holdout rerank nDCG .88239 trails dense .89785, with typo and
+  combined-needs regressions. All six capacity gates fail: normal C1 misses
+  3/40 constructed lookups@10; optional C4 has seven disclosed rerank fallbacks and
+  two lookup misses in 100 attempts. Head diagnostics confirm ranking failures.
+  The v2 holdout is now consumed. Actual 48 GB hardware, independent labels,
+  full retrieval recall@50, exact whole-app memory peak, source ACL revocation,
+  connector freshness, ambiguity and follow-up UX remain unqualified. No Google
+  parity claim; no commit or PR created.
+
+## 2026-10-01 — Native Apple search implementation and live validation
+
+- Done: preserve quoted phrases/exclusions across retrieval arms; explicit
+  source/date precedence and calendar overlap/history; independent RRF/rerank,
+  candidate-tail pagination, parallel calls and whole-search deadlines; browser
+  cancellation/fallback notices/render timing; model/config-bound cache namespace.
+- Done: isolated 48/64 GiB Apple profiles, resident native BGE-M3 with actual MPS
+  identity/memory telemetry, bounded encoder/reranker admission, frozen synthetic
+  dev/regression/holdout fixture and error-inclusive evaluation gates.
+- Done: Docker now has 32 GB configured; its authorized restart recovered all
+  16 previous containers. All six isolated Apple containers are healthy, with
+  resident MPS models and verified browser URL http://localhost:13002. Fixed the
+  live calendar YQL parse error, exact-identifier candidate pollution, unknown
+  source labels, and browser retries reusing cached results.
+- Verified: Go race/vet/build/lint, final query race/vet/lint, 133 web tests/build/
+  lint, native/reranker/seeder/sampler tests, Ruff/ShellCheck/Compose. The frozen
+  36-document suite completed every dev/regression/holdout task in every mode
+  without errors, degradation, cache hits or forbidden hits at concurrency one.
+  Controlled original-HEAD hybrid task success improved from 9/13 to 13/13;
+  changed dev nDCG@10 is .950 hybrid, .993 dense and .997 optional rerank.
+- Verified: 520 sustained uncached requests per mode yielded hybrid p95 27.022 ms
+  and optional rerank p95 280.378 ms. Browser 104-request p95 was 49.100 ms. Final
+  memory sampling observed ~2.91 GiB of Apple container memory and no swap growth;
+  model RSS/MPS counters are partial and must not be summed. Tenant-spoof checks
+  and direct-feed uncached addition/update/deletion checks passed.
+- Next: independent, more discriminating relevance judgments; mailbox-scale and
+  indexing-contention evaluation; bounded inference admission at concurrency
+  2/4; source ACL/cache invalidation and idle-session recovery. See the
+  [validation report](docs/search-quality-validation.md) for evidence and commands.
+- Known issues: rerank fails the strongest dense baseline's semantic-slice gate
+  on dev/regression; holdout saturates at 1.0 and fails strict improvement.
+  Defaults remain rerank-off. Native overload caused 216/312 c2 and 273/312 c4
+  normal searches to fall back to keywords. Cached API results can lag index
+  changes for 60s; browser search bypasses cache. 48 GiB hardware, complete app
+  memory peak, candidate recall, connector freshness and full ACL revocation
+  remain unqualified. No Google parity claim. Existing prompt/spec work and
+  indexed data were preserved; no commit or PR created.
+
 ## 2026-07-18 — Dependabot: fix all 14 open vulnerabilities (x/crypto + torch)
 
 - Context: GitHub reported 14 open Dependabot alerts on main (7 critical, 2 high, 4 moderate,

@@ -5,3 +5,8 @@ golden/*.local.jsonl
 
 # Bearer-token files for the eval runner must never be committed.
 tokens*.json
+
+# Generated reports, resolved token labels and direct-feed receipts stay local.
+# Existing report files are preserved. Export a deliberate, reviewed evidence
+# selection outside this generated directory rather than publishing every run.
+reports/**

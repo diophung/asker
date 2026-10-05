@@ -56,6 +56,11 @@ func TestQueryMetricsExportedOnScrape(t *testing.T) {
 	}
 
 	out := scrape(t)
+	for _, want := range []string{"asker_query_stage_duration_milliseconds", `stage="embed"`, `stage="retrieve"`, `outcome="error"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("scrape missing stage diagnostic %q", want)
+		}
+	}
 
 	// Histogram: documented scrape name asker_query_search_duration_milliseconds,
 	// with the SLO boundary bucket present.

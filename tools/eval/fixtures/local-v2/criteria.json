@@ -1,0 +1,15 @@
+{
+  "allow_equal": false,
+  "baseline_selection": "strongest eligible development baseline; freeze pipeline/config before holdout",
+  "comparison": "strict overall nDCG improvement; no per-slice nDCG/task regression",
+  "execution": "zero errors, degraded, forbidden, missing telemetry or unfulfilled requested reranking",
+  "k": 10,
+  "limit": 20,
+  "max_p95_ms": 5000,
+  "min_exact_success": 0.98,
+  "min_latency_samples": 100,
+  "min_need_coverage": 0.95,
+  "min_task_success": 0.9,
+  "qualification_concurrency": 1,
+  "require_uncached": true
+}

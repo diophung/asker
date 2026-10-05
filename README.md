@@ -73,6 +73,20 @@ Notes:
 - Other targets: `make build`, `make test`, `make lint`, `make vet`, `make fmt`,
   `make proto`, `make coverage-gate`, `make vespa-deploy`.
 
+For a standalone M5 Pro text-search deployment, use `make apple-setup` followed
+by `make apple-up APPLE_PROFILE=apple64` (or `apple48`). The
+[Apple Silicon guide](docs/apple-silicon.md) covers native MPS embeddings,
+isolated ports, memory requirements and qualification. The October 4 run on an
+actual 64 GiB M5 Pro achieved warm uncached browser p95 67.2 ms over 104 attempts;
+the 48 GB profile remains unverified. The
+[evaluation guide](tools/eval/README.md) documents frozen synthetic queries,
+uncached comparisons and gates.
+See the [current validation report](docs/search-quality-validation-2026-10-04.md)
+for before/after evidence and the 10,000-document probe. Reranking remains off by
+default because regression/holdout relevance gates and capacity lookup gates
+fail; these measurements do not establish Gmail/Calendar parity. The
+[October 1 report](docs/search-quality-validation.md) preserves earlier evidence.
+
 ## Dev URLs and credentials
 
 All credentials below are **dev-only** and hardcoded in the compose stack. Never reuse them.

@@ -67,6 +67,9 @@ func (c *rerankHTTPClient) Rerank(ctx context.Context, query string, documents [
 		return nil, fmt.Errorf("reranker: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := setRequestTimeoutHeader(req); err != nil {
+		return nil, fmt.Errorf("reranker: %w", err)
+	}
 
 	resp, err := c.httpc.Do(req)
 	if err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,7 @@ const (
 	instSearchDuration    = "asker_query_search_duration"
 	instCacheRequests     = "asker_query_cache_requests"
 	instDegradationEvents = "asker_query_degradation_events"
+	instStageDuration     = "asker_query_stage_duration"
 )
 
 // queryMetrics holds the query-path instruments. They are created from the
@@ -43,6 +45,7 @@ type queryMetrics struct {
 	searchDuration    metric.Float64Histogram
 	cacheRequests     metric.Int64Counter
 	degradationEvents metric.Int64Counter
+	stageDuration     metric.Float64Histogram
 }
 
 // searchDurationBucketsMs are explicit latency buckets (milliseconds) chosen to
@@ -81,11 +84,27 @@ func newQueryMetrics() *queryMetrics {
 		otel.Handle(err)
 	}
 
+	stageDuration, err := meter.Float64Histogram(instStageDuration, metric.WithDescription("Query stage wall time, including failed attempts."), metric.WithUnit("ms"), metric.WithExplicitBucketBoundaries(searchDurationBucketsMs...))
+	if err != nil {
+		otel.Handle(err)
+	}
 	return &queryMetrics{
 		searchDuration:    searchDuration,
 		cacheRequests:     cacheRequests,
 		degradationEvents: degradationEvents,
+		stageDuration:     stageDuration,
 	}
+}
+
+func (m *queryMetrics) recordStage(ctx context.Context, stage string, start time.Time, failed bool) {
+	if m == nil || m.stageDuration == nil {
+		return
+	}
+	outcome := "ok"
+	if failed {
+		outcome = "error"
+	}
+	m.stageDuration.Record(ctx, float64(time.Since(start).Microseconds())/1000, metric.WithAttributes(attribute.String("stage", stage), attribute.String("outcome", outcome)))
 }
 
 // recordSearch records the Search latency labeled by mode, degraded marker,

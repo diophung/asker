@@ -1,0 +1,27 @@
+{
+  "acceptance": {
+    "max_p95_ms": 5000,
+    "min_exact_success": 0.98,
+    "min_latency_samples": 100,
+    "min_need_coverage": 0.95,
+    "min_task_success": 0.9
+  },
+  "benchmark_id": "asker-local-v1",
+  "corpus_scope": "Small synthetic mail/calendar/files/chat fixture. Not a scale, authorization-completeness, or Google parity benchmark.",
+  "documents": 36,
+  "files_sha256": {
+    "dev.jsonl": "1f23b9de6f56b26fbd865f0e5a3aa307ced0ba4229a106b1b50f8e00bc8d1c02",
+    "documents.jsonl": "868e823d51404d9a08a51b2ef772cb94e61f9c452e8e8cf37437af7b1a4c5b79",
+    "holdout.jsonl": "97468df68ae6735b5883e3b47f1b91808d56af99e1f54624ec8c6e364ba3127e",
+    "regression.jsonl": "443bc9071d532ca7941d45ed67534077c7630f5c5cda47eb68437c25f8e6658b"
+  },
+  "frozen_at": "2026-10-01",
+  "label_status": "synthetic engineering labels; independent domain adjudication pending",
+  "queries_per_split": 13,
+  "splits": {
+    "dev": "tuning permitted",
+    "holdout": "run only after implementation and acceptance criteria freeze; never tune using results",
+    "regression": "fixed regression checks"
+  },
+  "version": 1
+}

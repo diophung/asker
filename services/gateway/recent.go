@@ -67,6 +67,10 @@ func (d *deps) recordRecent(ctx context.Context, q string) {
 	if norm == "" {
 		return
 	}
+	// Search history is best effort and may not consume the interactive search
+	// budget when Redis is slow or unavailable.
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
 	if err := d.recent.RecordRecent(ctx, recentKey(tc.TenantID()), norm, maxRecentSearches, recentSearchTTL); err != nil {
 		d.logger.Debug("record recent search failed", "error", err)
 	}

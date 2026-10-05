@@ -19,9 +19,7 @@ const rrfK = 60
 //	Σ over lists  1 / (rrfK + rank)      (rank is 1-based within each list)
 //
 // so a document ranked highly by EITHER the sparse/keyword arm OR the dense/
-// vector arm rises, which is exactly why hybrid + RRF beats a single linear
-// blend for queries where one arm misses (exact names/IDs vs. paraphrased
-// intent). RRF needs only the RANK from each arm, so arms with incomparable raw
+// vector arm rises. RRF needs only the RANK from each arm, so arms with incomparable raw
 // score scales (nativeRank vs. cosine closeness vs. CLIP closeness) fuse
 // cleanly.
 //
@@ -37,12 +35,16 @@ func rrfFuse(lists ...[]*queryv1.Hit) []*queryv1.Hit {
 	fused := make(map[string]float64)
 
 	for _, list := range lists {
-		for rank, h := range list {
+		seen := make(map[string]bool)
+		rank := 0
+		for _, h := range list {
 			id := h.GetDocId()
-			if id == "" {
+			if id == "" || seen[id] {
 				continue
 			}
-			fused[id] += 1.0 / float64(rrfK+rank+1) // rank+1 => 1-based
+			seen[id] = true
+			rank++
+			fused[id] += 1.0 / float64(rrfK+rank)
 			existing, ok := byDoc[id]
 			if !ok {
 				// The arms' hits are freshly allocated by parseVespaResponse and

@@ -24,14 +24,20 @@ export type ResultType =
   | "photo"
   | "person";
 
-/** The connector/source a result came from — drives the brand-colored dot. */
+/** Known source brands, or a generic document category for unknown connectors. */
 export type SourceName =
   | "Gmail"
   | "Drive"
   | "Slack"
   | "Calendar"
   | "Photos"
-  | "Contacts";
+  | "Contacts"
+  | "Email"
+  | "Files"
+  | "Messages"
+  | "Events"
+  | "Media"
+  | "Source";
 
 /** Common provenance + body every result carries. */
 interface ResultBase {
