@@ -1,0 +1,166 @@
+# Standalone Apple text-search stack. Run this file alone, never merge the base
+# dev/two-host files: ports, volumes and credentials remain isolated.
+name: ${ASKER_APPLE_PROJECT:-asker-apple}
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+
+services:
+  gateway:
+    <<: *restart-policy
+    build:
+      context: ../..
+      dockerfile: services/gateway/Dockerfile
+    ports: ["127.0.0.1:${ASKER_APPLE_GATEWAY_PORT:-18080}:8080"]
+    environment:
+      GATEWAY_ADDR: ":8080"
+      GATEWAY_PUBLIC_URL: "http://localhost:${ASKER_APPLE_GATEWAY_PORT:-18080}"
+      WEB_APP_URL: "http://localhost:${ASKER_APPLE_WEB_PORT:-13002}"
+      OIDC_ISSUER: "http://localhost:${ASKER_APPLE_KEYCLOAK_PORT:-18081}/realms/asker"
+      OIDC_JWKS_URL: "http://keycloak:8080/realms/asker/protocol/openid-connect/certs"
+      OIDC_AUDIENCE: "asker-web"
+      QUERY_GRPC_ADDR: "dns:///query:9200"
+      # No connector/admin plane or provider credentials in this search-only lane.
+      CONTROL_PLANE_GRPC_ADDR: "127.0.0.1:1"
+      HUB_HTTP_URL: "http://127.0.0.1:1"
+      REDIS_ADDR: "redis:6379"
+      RATE_LIMIT_PER_MINUTE: "0"
+      PREAUTH_PER_IP_PER_MINUTE: "0"
+      PREAUTH_GLOBAL_PER_SEC: "0"
+      CORS_ALLOWED_ORIGINS: "http://localhost:${ASKER_APPLE_WEB_PORT:-13002},http://127.0.0.1:${ASKER_APPLE_WEB_PORT:-13002}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    mem_limit: 256m
+    depends_on:
+      keycloak: {condition: service_healthy}
+      query: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/gateway", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  query:
+    <<: *restart-policy
+    build:
+      context: ../..
+      dockerfile: services/query/Dockerfile
+    environment:
+      QUERY_ADDR: ":9200"
+      QUERY_HEALTH_ADDR: ":9201"
+      VESPA_URL: "http://vespa:8080"
+      REDIS_ADDR: "redis:6379"
+      TEI_URL: "http://host.docker.internal:${LOCAL_EMBED_PORT:-18083}"
+      QUERY_CACHE_NAMESPACE: ${QUERY_CACHE_NAMESPACE:-apple-bge-m3-local-v1}
+      QUERY_RESULT_CACHE_ENABLED: ${QUERY_RESULT_CACHE_ENABLED:-false}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      QUERY_SEARCH_TIMEOUT: ${QUERY_SEARCH_TIMEOUT:-4.5s}
+      QUERY_EMBED_TIMEOUT: ${QUERY_EMBED_TIMEOUT:-1.5s}
+      QUERY_CLIP_ENABLED: "false"
+      QUERY_PERSONALIZATION_ENABLED: "true"
+      QUERY_HYBRID_RRF: "true"
+      QUERY_CANDIDATE_CAP: ${QUERY_CANDIDATE_CAP:-100}
+      QUERY_RERANK_ENABLED: ${ASKER_APPLE_RERANK_ENABLED:-false}
+      QUERY_RERANK_URL: "http://host.docker.internal:${ASKER_APPLE_RERANK_PORT:-19900}"
+      QUERY_RERANK_TIMEOUT: ${QUERY_RERANK_TIMEOUT:-1s}
+      QUERY_RERANK_CANDIDATES: ${QUERY_RERANK_CANDIDATES:-30}
+      QUERY_RERANK_DOC_CHARS: ${QUERY_RERANK_DOC_CHARS:-1024}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    mem_limit: 512m
+    depends_on:
+      vespa: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/query", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  keycloak:
+    <<: *restart-policy
+    image: quay.io/keycloak/keycloak:26.3
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HOSTNAME: "http://localhost:${ASKER_APPLE_KEYCLOAK_PORT:-18081}"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: "admin"
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "admin"
+      JAVA_OPTS_KC_HEAP: "-Xms64m -Xmx400m"
+    ports: ["127.0.0.1:${ASKER_APPLE_KEYCLOAK_PORT:-18081}:8080"]
+    volumes:
+      - ${ASKER_APPLE_STATE_DIR:-../../services/local-inference/.venv/asker-state}/realm-asker.json:/opt/keycloak/data/import/realm-asker.json:ro
+    mem_limit: 768m
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          cat <&3 | grep -q '200 OK'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
+  vespa:
+    <<: *restart-policy
+    image: vespaengine/vespa:8
+    hostname: vespa
+    environment:
+      VESPA_IGNORE_NOT_ENOUGH_MEMORY: "true"
+      VESPA_CONFIGSERVER_JVMARGS: "-Xms32m -Xmx256m"
+    ports:
+      - "127.0.0.1:${ASKER_APPLE_VESPA_PORT:-18082}:8080"
+      - "127.0.0.1:${ASKER_APPLE_VESPA_CONFIG_PORT:-19072}:19071"
+    volumes:
+      - vespa-var:/opt/vespa/var
+      - vespa-logs:/opt/vespa/logs
+    mem_limit: ${ASKER_APPLE_VESPA_MEMORY:-4g}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:19071/state/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  redis:
+    <<: *restart-policy
+    image: redis:7
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    mem_limit: 192m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    <<: *restart-policy
+    build:
+      context: ../../web
+      dockerfile: Dockerfile
+      args:
+        VITE_KEYCLOAK_URL: "http://localhost:${ASKER_APPLE_KEYCLOAK_PORT:-18081}"
+        VITE_API_URL: "http://localhost:${ASKER_APPLE_GATEWAY_PORT:-18080}"
+        VITE_RERANK_DEFAULT: "${ASKER_APPLE_RERANK_DEFAULT:-0}"
+    ports: ["127.0.0.1:${ASKER_APPLE_WEB_PORT:-13002}:80"]
+    volumes:
+      - ${ASKER_APPLE_STATE_DIR:-../../services/local-inference/.venv/asker-state}/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    mem_limit: 128m
+    depends_on:
+      gateway: {condition: service_healthy}
+      keycloak: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  vespa-var:
+  vespa-logs:
+  redis-data:

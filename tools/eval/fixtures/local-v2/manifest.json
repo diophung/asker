@@ -1,0 +1,77 @@
+{
+  "acceptance": {
+    "allow_equal": false,
+    "baseline_selection": "strongest eligible development baseline; freeze pipeline/config before holdout",
+    "comparison": "strict overall nDCG improvement; no per-slice nDCG/task regression",
+    "execution": "zero errors, degraded, forbidden, missing telemetry or unfulfilled requested reranking",
+    "k": 10,
+    "limit": 20,
+    "max_p95_ms": 5000,
+    "min_exact_success": 0.98,
+    "min_latency_samples": 100,
+    "min_need_coverage": 0.95,
+    "min_task_success": 0.9,
+    "qualification_concurrency": 1,
+    "require_uncached": true
+  },
+  "benchmark_id": "asker-local-v2",
+  "corpus_scope": "Synthetic mail/calendar/files/chat retrieval with hard distractors across all splits; engineering labels, no parity/scale/ACL/ingestion claim.",
+  "documents": 147,
+  "evidence_scope": "Relevance judged against complete source bodies. evidence.jsonl contains sealed holdout judgments; do not inspect while tuning. This harness scores IDs and cannot establish returned snippet sufficiency, full-body reranker exposure, candidate recall, or answer faithfulness.",
+  "files_sha256": {
+    "criteria.json": "75ace8671e6e25d952fd2623698fe71d0356e64a3071972d9fe3605b0d250654",
+    "dev.jsonl": "4425d7535b025fb8a92cdc8bc1c9fe61c3cc5d9b05a2c972a92723d680ee5949",
+    "documents.jsonl": "db0929d0eb14f15fe64bce594caca66c5824d76a75979f9cd209b6dc6506bdbf",
+    "evidence.jsonl": "bbfc431cfff17aef5ba5da6e38d9c32527f7f9017cc71c055f1fc933bf8edbb3",
+    "holdout.jsonl": "ebad35fb81321bacd7c1af3c46795ba0e4f10e8ee62d3ae4bc3aade46a4b1c5d",
+    "regression.jsonl": "d58bda66382f4ce2056b8cadbacf29d032f2fe2b86b4e855e7a8137d4aca67ad"
+  },
+  "frozen_at": "2026-10-04",
+  "label_status": "synthetic engineering labels; independent domain adjudication pending",
+  "queries_per_split": {
+    "dev": 38,
+    "holdout": 40,
+    "regression": 39
+  },
+  "slice_counts": {
+    "dev": {
+      "exact": 6,
+      "filter": 6,
+      "keyword": 3,
+      "multi_need": 3,
+      "multilingual": 3,
+      "negation": 6,
+      "no_match": 2,
+      "semantic": 6,
+      "typo": 3
+    },
+    "holdout": {
+      "exact": 6,
+      "filter": 6,
+      "keyword": 3,
+      "multi_need": 3,
+      "multilingual": 3,
+      "negation": 6,
+      "no_match": 4,
+      "semantic": 6,
+      "typo": 3
+    },
+    "regression": {
+      "exact": 6,
+      "filter": 6,
+      "keyword": 3,
+      "multi_need": 3,
+      "multilingual": 3,
+      "negation": 6,
+      "no_match": 3,
+      "semantic": 6,
+      "typo": 3
+    }
+  },
+  "splits": {
+    "dev": "tuning permitted",
+    "holdout": "sealed until implementation/model/config/source freeze; first final run only; never tune on results",
+    "regression": "fixed regression checks"
+  },
+  "version": 2
+}

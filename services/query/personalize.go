@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/asker/asker/platform/personalization"
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
@@ -27,7 +29,7 @@ func (s *server) retrievePersonalized(
 	base vespaQuery, plan parsedQuery, mode queryv1.SearchMode,
 	vector []float32, clipActive bool, clipVector []float32, degradedReasons *[]string,
 ) (vespaResult, error) {
-	candCap := s.candidateCap
+	candCap := max(s.candidateCap, base.Hits)
 	if candCap <= 0 {
 		candCap = maxLimit
 	}
@@ -41,14 +43,14 @@ func (s *server) retrievePersonalized(
 	textQ.Vector = vector
 	textQ.Hits = candCap
 	textQ.Offset = 0
-	textRes, keywordFallback, err := s.searchWithDegradation(ctx, textQ)
-	if err != nil {
-		return vespaResult{}, err
-	}
-	if keywordFallback {
-		*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
-	}
 	if !clipActive {
+		textRes, keywordFallback, err := s.searchWithDegradation(ctx, textQ)
+		if err != nil {
+			return vespaResult{}, err
+		}
+		if keywordFallback {
+			*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
+		}
 		return textRes, nil
 	}
 	clipQ := base
@@ -56,14 +58,21 @@ func (s *server) retrievePersonalized(
 	clipQ.ClipVector = clipVector
 	clipQ.Hits = candCap
 	clipQ.Offset = 0
-	clipRes, clipErr := s.vespa.Search(ctx, clipQ)
+	arms, err := s.parallelSearch(ctx, []vespaQuery{textQ, clipQ}, true)
+	if err != nil {
+		return vespaResult{}, err
+	}
+	textRes, clipRes, clipErr := arms[0].result, arms[1].result, arms[1].err
+	if arms[0].keywordFallback {
+		*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
+	}
 	if clipErr != nil {
 		s.logClipError(logger, clipErr)
 		*degradedReasons = addDegraded(*degradedReasons, degradedClipUnavailable)
 		return textRes, nil
 	}
 	fused := rrfFuse(textRes.Hits, clipRes.Hits)
-	return vespaResult{Hits: fused, Total: mergedTotal(textRes, clipRes, len(fused))}, nil
+	return vespaResult{Hits: fused, Total: mergedTotal(textRes, clipRes, len(fused)), Passages: mergeRerankPassages(textRes, clipRes)}, nil
 }
 
 // retrieveRRF runs the keyword and vector arms as SEPARATE Vespa queries and
@@ -78,42 +87,43 @@ func (s *server) retrieveRRF(
 	kq.Kind = retrieveKeyword
 	kq.Hits = candCap
 	kq.Offset = 0
-	kwRes, kwErr := s.vespa.Search(ctx, kq)
-	if kwErr != nil {
-		return vespaResult{}, kwErr
-	}
-	lists := [][]*queryv1.Hit{kwRes.Hits}
-	maxTotal := kwRes.Total
-
 	vq := base
 	vq.Kind = retrieveVector
 	vq.Vector = vector
 	vq.Hits = candCap
 	vq.Offset = 0
-	if vRes, vErr := s.vespa.Search(ctx, vq); vErr == nil {
-		lists = append(lists, vRes.Hits)
-		if vRes.Total > maxTotal {
-			maxTotal = vRes.Total
-		}
-	} else {
-		logger.Warn("rrf vector arm failed; fusing keyword-only", "error", vErr)
-		*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
-	}
-
+	queries := []vespaQuery{kq, vq}
 	if clipActive {
 		cq := base
 		cq.Kind = retrieveCLIP
 		cq.ClipVector = clipVector
 		cq.Hits = candCap
 		cq.Offset = 0
-		if cRes, cErr := s.vespa.Search(ctx, cq); cErr == nil {
-			lists = append(lists, cRes.Hits)
-			if cRes.Total > maxTotal {
-				maxTotal = cRes.Total
+		queries = append(queries, cq)
+	}
+	arms, err := s.parallelSearch(ctx, queries, false)
+	if err != nil {
+		return vespaResult{}, err
+	}
+	lists := [][]*queryv1.Hit{arms[0].result.Hits}
+	passageResults := []vespaResult{arms[0].result}
+	maxTotal := arms[0].result.Total
+	for i := 1; i < len(arms); i++ {
+		arm := arms[i]
+		if arm.err != nil {
+			if i == 1 {
+				logger.Warn("rrf vector arm failed; fusing keyword-only", "error", arm.err)
+				*degradedReasons = addDegraded(*degradedReasons, degradedKeywordOnly)
+			} else {
+				s.logClipError(logger, arm.err)
+				*degradedReasons = addDegraded(*degradedReasons, degradedClipUnavailable)
 			}
-		} else {
-			s.logClipError(logger, cErr)
-			*degradedReasons = addDegraded(*degradedReasons, degradedClipUnavailable)
+			continue
+		}
+		lists = append(lists, arm.result.Hits)
+		passageResults = append(passageResults, arm.result)
+		if arm.result.Total > maxTotal {
+			maxTotal = arm.result.Total
 		}
 	}
 
@@ -122,7 +132,7 @@ func (s *server) retrieveRRF(
 	if maxTotal > total {
 		total = maxTotal
 	}
-	return vespaResult{Hits: fused, Total: total}, nil
+	return vespaResult{Hits: fused, Total: total, Passages: mergeRerankPassages(passageResults...)}, nil
 }
 
 // Personalized re-ranking (spec v3.2 §1.7 + §3). This is the stage that turns
@@ -138,6 +148,7 @@ func (s *server) retrieveRRF(
 
 // personalizeParams bundles the inputs to a personalized re-rank.
 type personalizeParams struct {
+	ctx      context.Context
 	profile  personalization.Profile
 	model    personalization.LearnedModel
 	intent   intentClass
@@ -152,13 +163,17 @@ type personalizeParams struct {
 // scoredHit is a candidate with its computed features and combined score, plus
 // the coarse signals MMR diversifies on.
 type scoredHit struct {
-	hit      *queryv1.Hit
-	features personalization.Features
-	combined float64
-	relNorm  float64 // combined score min-max normalized across the page, for MMR
-	docType  string
-	sender   string
-	reasons  []string
+	hit            *queryv1.Hit
+	features       personalization.Features
+	retrievalScore float64 // incoming retrieval/fusion or model-reranked relevance
+	combined       float64
+	rankScore      float64 // combined relevance or the selected MMR utility
+	relNorm        float64 // combined score min-max normalized across the page, for MMR
+	mmrApplied     bool
+	mmrPenalty     float64 // weighted redundancy penalty at this hit's selection
+	docType        string
+	sender         string
+	reasons        []string
 }
 
 // recencyBonusWeight scales the recency-vs-importance slider's contribution to
@@ -176,11 +191,13 @@ func personalizeRank(hits []*queryv1.Hit, p personalizeParams) ([]*queryv1.Hit, 
 	// so it is comparable to the other [0,1] features regardless of the ranking
 	// profile's raw score scale.
 	minScore, maxScore := scoreRange(candidates)
-	span := maxScore - minScore
 
 	scored := make([]scoredHit, 0, len(candidates))
 	for _, h := range candidates {
-		sh := scoreCandidate(h, p, minScore, span)
+		if p.ctx != nil && p.ctx.Err() != nil {
+			return nil, 0
+		}
+		sh := scoreCandidate(h, p, minScore, maxScore)
 		scored = append(scored, sh)
 	}
 	total := int64(len(scored))
@@ -195,8 +212,11 @@ func personalizeRank(hits []*queryv1.Hit, p personalizeParams) ([]*queryv1.Hit, 
 		// Exploration vs. Exploitation: reserve slots for novel/diverse results.
 		if p.profile.NoveltyVsFamiliarity > 0 && len(scored) > 1 {
 			normalizeRelevance(scored)
-			scored = mmrReorder(scored, p.profile.NoveltyVsFamiliarity)
+			scored = mmrReorder(p.ctx, scored, p.profile.NoveltyVsFamiliarity)
 		}
+	}
+	if p.ctx != nil && p.ctx.Err() != nil {
+		return nil, total
 	}
 
 	// Cognitive Load (Hick's/Miller's): for needs-attention, show only the
@@ -244,6 +264,9 @@ func sortByEventStart(scored []scoredHit) {
 func filterCandidates(hits []*queryv1.Hit, p personalizeParams) []*queryv1.Hit {
 	out := make([]*queryv1.Hit, 0, len(hits))
 	for _, h := range hits {
+		if p.ctx != nil && p.ctx.Err() != nil {
+			return nil
+		}
 		md := h.GetMetadata()
 		if p.profile.IsMutedSource(h.GetType().String()) {
 			continue
@@ -253,7 +276,8 @@ func filterCandidates(hits []*queryv1.Hit, p personalizeParams) []*queryv1.Hit {
 		}
 		if p.intent == intentScheduleLookup && !p.window.isZero() {
 			start, ok := flexibleTime(md["start"])
-			if !ok || start.Before(p.window.From) || !start.Before(p.window.To) {
+			end, _ := flexibleTime(md["end"])
+			if !ok || !calendarOverlaps(start, end, p.window) {
 				continue
 			}
 		}
@@ -267,8 +291,19 @@ func filterCandidates(hits []*queryv1.Hit, p personalizeParams) []*queryv1.Hit {
 	return out
 }
 
+func calendarOverlaps(start, end time.Time, window timeWindow) bool {
+	if !window.To.IsZero() && !start.Before(window.To) {
+		return false
+	}
+	if window.From.IsZero() || !start.Before(window.From) {
+		return true
+	}
+	// Missing/invalid ends fall back to a start-in-window test.
+	return end.After(start) && end.After(window.From)
+}
+
 // scoreCandidate builds the feature vector and combined score for one hit.
-func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64) scoredHit {
+func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, maxScore float64) scoredHit {
 	md := h.GetMetadata()
 	docType := h.GetType().String()
 	senders := hitSenders(md)
@@ -279,10 +314,7 @@ func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64)
 	var f personalization.Features
 
 	// Semantic.
-	f.Semantic = 1.0
-	if span > 0 {
-		f.Semantic = (h.GetScore() - minScore) / span
-	}
+	f.Semantic = normalizedRelevance(h.GetScore(), minScore, maxScore)
 
 	// Preference (explicit Settings) and the reasons it contributes.
 	pref, prefReasons := preferenceMatch(p.profile, docType, senders, topics, mutedTopics)
@@ -291,15 +323,12 @@ func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64)
 	// Behavioral (learned model).
 	f.Behavioral = p.model.Predict(personalization.FeatureKeys(docType, h.GetConnectorId(), senders, topics))
 
-	// Attention / salience, gated by intent (full for needs-attention, a smaller
-	// constant otherwise so urgency still nudges but does not dominate a content
-	// search).
+	// Salience answers an explicit attention request. An imminent event is not
+	// a stronger answer to an ordinary content query merely because it is urgent.
 	att := scoreAttention(h, p.profile, p.window, p.now)
-	gate := nonAttentionGate
 	if p.intent == intentNeedsAttention {
-		gate = 1.0
+		f.Attention = att.score
 	}
-	f.Attention = att.score * gate
 
 	// Fatigue/repetition: no per-session shown-history is threaded into the
 	// stateless query path yet, so this is 0 here; the term is kept in the score
@@ -314,27 +343,35 @@ func scoreCandidate(h *queryv1.Hit, p personalizeParams, minScore, span float64)
 		combined += p.profile.RecencyVsImportance * recencyBonusWeight *
 			recencyScore(hitTime(h), p.now, p.halfLife)
 	}
+	// Profile weights can be very large finite values. Preserve ordinary
+	// arithmetic/order, but keep an overflowing sum representable on the API
+	// and in MMR normalization; the settings themselves are unchanged.
+	if math.IsInf(combined, 0) {
+		combined = math.Copysign(math.MaxFloat64, combined)
+	}
 
-	reasons := att.reasons
+	var reasons []string
+	if p.intent == intentNeedsAttention {
+		reasons = append(reasons, att.reasons...)
+	}
 	reasons = append(reasons, prefReasons...)
 	if f.Behavioral >= behavioralReasonThreshold {
 		reasons = append(reasons, "matches your usual activity")
 	}
 
 	return scoredHit{
-		hit:      h,
-		features: f,
-		combined: combined,
-		docType:  docType,
-		sender:   firstNonEmpty(senders),
-		reasons:  reasons,
+		hit:            h,
+		features:       f,
+		retrievalScore: h.GetScore(),
+		combined:       combined,
+		rankScore:      combined,
+		docType:        docType,
+		sender:         firstNonEmpty(senders),
+		reasons:        reasons,
 	}
 }
 
 const (
-	// nonAttentionGate scales the attention term outside the needs-attention
-	// intent: urgency still nudges a content search but never dominates it.
-	nonAttentionGate = 0.25
 	// behavioralReasonThreshold is the learned-affinity level above which we tell
 	// the user the result matches their usual activity.
 	behavioralReasonThreshold = 0.62
@@ -375,15 +412,26 @@ func preferenceMatch(profile personalization.Profile, docType string, senders, t
 	return clampPref(pref), reasons
 }
 
-// applyExplanation writes the human-readable explanation and (when debug) the
-// per-term feature contributions onto the hit.
+// applyExplanation publishes the score that selected this hit, its explanation,
+// and (when debug) both the term contributions and the earlier scoring stages.
+// This runs after the ranking cancellation guard, so MMR never mutates a hit
+// while deciding its order. Schedule lookups use combined relevance as their
+// score/tiebreak but retain the explicit chronological ordering.
 func applyExplanation(sh *scoredHit, p personalizeParams) {
+	sh.hit.Score = sh.rankScore
 	sh.hit.Explanation = composeExplanation(sh.reasons)
 	if p.debug {
 		contribs := personalization.Contributions(sh.features, p.profile.Weights)
-		m := make(map[string]float64, len(contribs))
+		m := make(map[string]float64, len(contribs)+5)
 		for _, c := range contribs {
 			m[c.Name] = c.Value
+		}
+		m["retrieval_score"] = sh.retrievalScore
+		m["combined_score"] = sh.combined
+		m["ranking_score"] = sh.rankScore
+		if sh.mmrApplied {
+			m["mmr_relevance"] = sh.relNorm
+			m["mmr_penalty"] = sh.mmrPenalty
 		}
 		sh.hit.Features = m
 	}
@@ -414,44 +462,101 @@ func composeExplanation(reasons []string) string {
 
 // mmrReorder greedily reorders by Maximal Marginal Relevance: it balances the
 // combined relevance against dissimilarity to the already-selected items, so a
-// run of near-identical results (same type AND sender) is broken up. lambda is
+// run of near-identical passages is broken up. lambda is
 // the novelty rate in (0,1]: 0 keeps pure relevance order, 1 maximizes novelty.
-// Similarity is a coarse, embedding-free proxy (shared type or sender) — enough
-// to combat filter-bubble monotony without a second vector pass.
-func mmrReorder(scored []scoredHit, novelty float64) []scoredHit {
+// Token overlap is a conservative, embedding-free redundancy signal. Shared
+// type/sender can strengthen overlapping passages, but cannot make two distinct
+// answers duplicates just because both are files or came from the same person.
+func mmrReorder(ctx context.Context, scored []scoredHit, novelty float64) []scoredHit {
 	n := len(scored)
 	selected := make([]scoredHit, 0, n)
 	used := make([]bool, n)
-	selTypes := map[string]bool{}
-	selSenders := map[string]bool{}
+	tokens := make([]map[string]struct{}, n)
+	maxSimilarity := make([]float64, n)
+	for i, sh := range scored {
+		if ctx != nil && ctx.Err() != nil {
+			return scored
+		}
+		tokens[i] = redundancyTokens(sh.hit.GetTitle() + " " + stripHighlights(sh.hit.GetSnippet()))
+	}
 
 	for len(selected) < n {
+		if ctx != nil && ctx.Err() != nil {
+			return scored // the caller returns the context error, never partial ranking
+		}
 		bestIdx, bestVal := -1, 0.0
 		for i := range scored {
 			if used[i] {
 				continue
 			}
-			sim := 0.0
-			if selTypes[scored[i].docType] {
-				sim += 0.5
-			}
-			if scored[i].sender != "" && selSenders[scored[i].sender] {
-				sim += 0.5
-			}
-			val := (1-novelty)*scored[i].relNorm - novelty*sim
+			val := (1-novelty)*scored[i].relNorm - novelty*maxSimilarity[i]
 			if bestIdx < 0 || val > bestVal {
 				bestIdx, bestVal = i, val
 			}
 		}
 		used[bestIdx] = true
 		sh := scored[bestIdx]
+		// Every remaining utility can only decrease as maxSimilarity grows,
+		// so these selected utilities follow the existing greedy order without
+		// re-sorting or inventing an ordinal score after diversification.
+		sh.rankScore = bestVal
+		sh.mmrApplied = true
+		sh.mmrPenalty = novelty * maxSimilarity[bestIdx]
 		selected = append(selected, sh)
-		selTypes[sh.docType] = true
-		if sh.sender != "" {
-			selSenders[sh.sender] = true
+		for i := range scored {
+			if used[i] {
+				continue
+			}
+			sim := tokenJaccard(tokens[bestIdx], tokens[i])
+			// Source/sender are tie-breaking diversity context, gated by actual
+			// content overlap. Similarity stays in [0,1].
+			contextWeight := 0.5
+			if sh.docType == scored[i].docType {
+				contextWeight += 0.25
+			}
+			if sh.sender != "" && sh.sender == scored[i].sender {
+				contextWeight += 0.25
+			}
+			maxSimilarity[i] = max(maxSimilarity[i], sim*contextWeight)
 		}
 	}
 	return selected
+}
+
+// Bound token work independently of corpus size; no additional embedding call
+// is needed for diversification. Unicode letters/numbers preserve non-English
+// passages, and empty/missing text provides no redundancy evidence.
+func redundancyTokens(text string) map[string]struct{} {
+	const maxTokens = 128
+	tokens := make(map[string]struct{})
+	for _, token := range strings.FieldsFunc(strings.ToLower(truncateRunes(text, 2048)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		if len([]rune(token)) < 2 {
+			continue
+		}
+		tokens[token] = struct{}{}
+		if len(tokens) == maxTokens {
+			break
+		}
+	}
+	return tokens
+}
+
+func tokenJaccard(a, b map[string]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	intersection := 0
+	for token := range a {
+		if _, ok := b[token]; ok {
+			intersection++
+		}
+	}
+	return float64(intersection) / float64(len(a)+len(b)-intersection)
 }
 
 // normalizeRelevance fills relNorm (combined score min-max normalized) for MMR.
@@ -468,14 +573,24 @@ func normalizeRelevance(scored []scoredHit) {
 			hi = s.combined
 		}
 	}
-	span := hi - lo
 	for i := range scored {
-		if span > 0 {
-			scored[i].relNorm = (scored[i].combined - lo) / span
-		} else {
-			scored[i].relNorm = 1
-		}
+		scored[i].relNorm = normalizedRelevance(scored[i].combined, lo, hi)
 	}
+}
+
+// normalizedRelevance keeps the usual min-max arithmetic except when finite
+// opposite-sign bounds overflow their span. Halving all three operands leaves
+// the ratio unchanged while keeping both differences representable.
+func normalizedRelevance(value, lo, hi float64) float64 {
+	span := hi - lo
+	if span <= 0 {
+		return 1
+	}
+	if math.IsInf(span, 1) {
+		value, lo, hi = value/2, lo/2, hi/2
+		span = hi - lo
+	}
+	return (value - lo) / span
 }
 
 // attentionPageLimit shrinks the page for the needs-attention intent per the

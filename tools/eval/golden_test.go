@@ -74,3 +74,38 @@ func TestSliceCounts(t *testing.T) {
 		t.Fatalf("sortedSlices=%v", got)
 	}
 }
+
+func TestExtendedGoldenLabelsAndFrozenFixtures(t *testing.T) {
+	in := `{"id":"none","query":"unknown","tenant":"alice","slice":"no_match","no_match":true,"split":"dev","filters":{"types":"EMAIL"}}
+{"id":"constraint","query":"approved -draft","tenant":"alice","slice":"negation","relevant":["a"],"forbidden":["b"],"required":[["a"]],"split":"regression"}`
+	if _, err := parseGolden(strings.NewReader(in)); err != nil {
+		t.Fatal(err)
+	}
+	for _, split := range []string{"dev", "regression", "holdout"} {
+		recs, err := LoadGolden("fixtures/local-v1/" + split + ".jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(recs) != 13 {
+			t.Fatalf("%s frozen fixture query count changed: %d", split, len(recs))
+		}
+		for _, rec := range recs {
+			if rec.Split != split {
+				t.Fatalf("unexpected split: %+v", rec)
+			}
+		}
+	}
+}
+
+func TestExtendedGoldenRejectsContradictoryLabels(t *testing.T) {
+	for _, in := range []string{
+		`{"query":"q","tenant":"a","slice":"no_match","no_match":true,"relevant":["d"]}`,
+		`{"query":"q","tenant":"a","slice":"negation","relevant":["d"],"forbidden":["d"]}`,
+		`{"query":"q","tenant":"a","slice":"filter","relevant":["d"],"filters":{"tenant":"victim"}}`,
+		`{"query":"q","tenant":"a","slice":"multi_need","relevant":["d"],"required":[["missing"]]}`,
+	} {
+		if _, err := parseGolden(strings.NewReader(in)); err == nil {
+			t.Fatalf("contradictory labels accepted: %s", in)
+		}
+	}
+}

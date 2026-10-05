@@ -60,6 +60,9 @@ func (e *teiEmbedder) Embed(ctx context.Context, text string) ([]float32, error)
 		return nil, fmt.Errorf("tei: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := setRequestTimeoutHeader(req); err != nil {
+		return nil, fmt.Errorf("tei: %w", err)
+	}
 
 	resp, err := e.httpc.Do(req)
 	if err != nil {

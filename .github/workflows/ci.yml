@@ -143,6 +143,40 @@ jobs:
           pip-audit --strict --requirement services/enrich/requirements.txt
           pip-audit --strict --requirement services/clip/requirements.txt
 
+  local-search-contracts:
+    name: local search contracts (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/reranker/requirements-dev.txt
+      # Fake scorers and stdlib HTTP fixtures exercise admission and wire
+      # contracts without installing torch, downloading models or requiring MPS.
+      - name: Install contract-test tooling
+        run: pip install -r services/reranker/requirements-dev.txt
+      - name: Lint search Python sources
+        run: |
+          ruff check services/local-inference services/reranker tools/local \
+            tools/eval/*.py tools/eval/fixtures/*.py tools/e2e/test_*.py
+      - name: Native encoder contracts
+        run: PYTHONPATH=services/local-inference python -m unittest discover -s services/local-inference/tests -v
+      - name: Reranker contracts
+        working-directory: services/reranker
+        run: pytest
+      - name: Evaluation and local-tool contracts
+        run: |
+          python -m unittest discover -s tools/eval -p 'test_*.py' -v
+          PYTHONPATH=tools/local python -m unittest discover -s tools/local -p 'test_*.py' -v
+      - name: End-to-end harness contracts
+        run: |
+          python -m unittest discover -s tools/e2e -p 'test_*.py' -v
+          bash tools/e2e/k8s-chaos-test.sh
+          bash tools/e2e/m3-media-test.sh
+          bash tools/e2e/m1-e2e-test.sh
+
   enrich:
     name: enrich (python)
     runs-on: ubuntu-latest
@@ -265,10 +299,6 @@ jobs:
     name: e2e-m3-media
     runs-on: ubuntu-latest
     needs: [build]
-    # Non-blocking: OCR/thumbnail enrichment is consistently absent on GitHub
-    # runners (CLIP works) — a functional env gap tracked in issue #7. Runs for
-    # signal but does not gate the workflow until that is debugged hands-on.
-    continue-on-error: true
     # Heavy ML images (clip/torch, enrich/whisper+ffmpeg+tesseract) + first-run
     # model downloads (CLIP ViT-B/32, whisper-tiny) — allow generous time.
     timeout-minutes: 75
@@ -304,10 +334,6 @@ jobs:
     name: e2e-gdpr
     runs-on: ubuntu-latest
     needs: [build]
-    # Non-blocking: the upload->blob/DEK path produces no blob/DEK on GitHub
-    # runners though docs index fine — a functional env gap tracked in issue #6.
-    # Runs for signal but does not gate the workflow until debugged hands-on.
-    continue-on-error: true
     timeout-minutes: 40
     env:
       # Small embedding model for CI speed (mirrors the other e2e jobs).
@@ -340,6 +366,8 @@ jobs:
       # blob prefix gone, token gone, DEK crypto-shredded) AND a second tenant is
       # untouched. Destructive by design (erases its test tenant), so it runs in a
       # dedicated job on a fresh stack — not alongside the leakage/m1 suites.
+      - name: Verify source-built MinIO image
+        run: bash tools/e2e/minio-image.sh
       - name: Run M6 GDPR delete drill
         run: make e2e-smoke && make e2e-gdpr
       - name: Dump compose logs

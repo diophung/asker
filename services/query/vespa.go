@@ -112,6 +112,8 @@ type vespaQuery struct {
 	DocTypes    []askerv1.DocType
 	From, To    time.Time
 	Participant string
+	TextClauses []textClause
+	ToExclusive bool
 
 	// EventFrom/EventTo bound event_start (occurrence time) for a schedule
 	// lookup — the correct field for "what's on my calendar next week" (created_at
@@ -125,6 +127,9 @@ type vespaQuery struct {
 type vespaResult struct {
 	Hits  []*queryv1.Hit
 	Total int64
+	// Passages retain authorized summary text before result-card truncation.
+	// They are request-local ranking inputs, never exposed in Hit or cached.
+	Passages map[string]string
 }
 
 // vespaSearcher is the retrieval dependency of the server (stubbed in tests
@@ -198,12 +203,20 @@ func buildYQL(q vespaQuery) (string, error) {
 		clauses = append(clauses, fmt.Sprintf("created_at >= %d", q.From.Unix()))
 	}
 	if !q.To.IsZero() {
-		clauses = append(clauses, fmt.Sprintf("created_at <= %d", q.To.Unix()))
+		op := "<="
+		if q.ToExclusive {
+			op = "<"
+		}
+		clauses = append(clauses, fmt.Sprintf("created_at %s %d", op, q.To.Unix()))
 	}
 	// event_start (occurrence time) range for schedule lookups (v3.2). The
 	// half-open [EventFrom, EventTo) window is rendered as >= From and < To.
 	if !q.EventFrom.IsZero() {
-		clauses = append(clauses, fmt.Sprintf("event_start >= %d", q.EventFrom.Unix()))
+		// Include multi-day/ongoing events. If end is absent/invalid, the
+		// start-in-window arm is the fallback; an end before start cannot
+		// qualify an event that started before the lower bound.
+		// Vespa YQL supports NOT(EQ), not SQL's != operator.
+		clauses = append(clauses, fmt.Sprintf("(event_start >= %d or (!(event_start = 0) and event_end > %d))", q.EventFrom.Unix(), q.EventFrom.Unix()))
 	}
 	if !q.EventTo.IsZero() {
 		clauses = append(clauses, fmt.Sprintf("event_start < %d", q.EventTo.Unix()))
@@ -213,7 +226,43 @@ func buildYQL(q vespaQuery) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("participant filter: %w", err)
 		}
-		clauses = append(clauses, "participants contains ({substring:true}"+lit+")")
+		if words := strings.Fields(q.Participant); len(words) > 1 && !strings.ContainsAny(q.Participant, "\"\\") {
+			literals := make([]string, len(words))
+			for i, word := range words {
+				literals[i], err = yqlStringLiteral(word)
+				if err != nil {
+					return "", err
+				}
+			}
+			clauses = append(clauses, "participants contains ({stem:false}phrase("+strings.Join(literals, ", ")+"))")
+		} else {
+			clauses = append(clauses, "participants contains ({substring:true}"+lit+")")
+		}
+	}
+	for _, clause := range q.TextClauses {
+		terms := strings.Fields(clause.Text)
+		literals := make([]string, 0, len(terms))
+		for _, term := range terms {
+			lit, err := yqlStringLiteral(term)
+			if err != nil {
+				return "", fmt.Errorf("text clause: %w", err)
+			}
+			literals = append(literals, lit)
+		}
+		if len(literals) == 0 {
+			return "", fmt.Errorf("%w: empty text clause", errInvalidFilterValue)
+		}
+		match := literals[0]
+		if len(literals) > 1 {
+			match = "phrase(" + strings.Join(literals, ", ") + ")"
+		}
+		match = "({stem:false}" + match + ")"
+		parts := []string{"title contains " + match, "body contains " + match, "chunks contains " + match}
+		expression := "(" + strings.Join(parts, " or ") + ")"
+		if clause.Exclude {
+			expression = "!" + expression
+		}
+		clauses = append(clauses, expression)
 	}
 
 	yql := "select * from sources * where " + strings.Join(clauses, " and ")
@@ -251,6 +300,9 @@ func yqlStringLiteral(s string) (string, error) {
 // as degradable (degrade.go); HTTP 4xx and response-body query errors are
 // terminal.
 func (c *vespaClient) Search(ctx context.Context, q vespaQuery) (vespaResult, error) {
+	if err := ctx.Err(); err != nil {
+		return vespaResult{}, err
+	}
 	yql, err := buildYQL(q)
 	if err != nil {
 		return vespaResult{}, err
@@ -266,6 +318,15 @@ func (c *vespaClient) Search(ctx context.Context, q vespaQuery) (vespaResult, er
 		"ranking.profile":      q.Kind.profile(),
 		"presentation.summary": "search",
 		"timeout":              vespaQueryTimeout,
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return vespaResult{}, context.DeadlineExceeded
+		}
+		if remaining < 2*time.Second {
+			body["timeout"] = fmt.Sprintf("%dms", max(int64(1), remaining.Milliseconds()))
+		}
 	}
 	// The free-text query= drives userQuery(); the CLIP arm has no userQuery()
 	// clause, so it must not carry it.
@@ -367,7 +428,7 @@ func parseVespaResponse(raw []byte, kind retrievalKind) (vespaResult, error) {
 		return vespaResult{}, fmt.Errorf("vespa: query error %d (%s): %s", e.Code, e.Summary, e.Message)
 	}
 
-	out := vespaResult{Total: vr.Root.Fields.TotalCount}
+	out := vespaResult{Total: vr.Root.Fields.TotalCount, Passages: make(map[string]string)}
 	for _, child := range vr.Root.Children {
 		f := child.Fields
 		if f.DocID == "" {
@@ -391,6 +452,7 @@ func parseVespaResponse(raw []byte, kind retrievalKind) (vespaResult, error) {
 		}
 		populateMediaFields(hit, f, kind)
 		out.Hits = append(out.Hits, hit)
+		out.Passages[f.DocID] = chooseRerankPassage(f)
 	}
 	return out, nil
 }

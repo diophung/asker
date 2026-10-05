@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -23,25 +24,37 @@ const (
 	SliceKeyword      = "keyword"      // ordinary lexical queries
 	SliceSemantic     = "semantic"     // paraphrase / conceptual queries
 	SliceMultilingual = "multilingual" // non-English or cross-lingual queries
+	SliceFilter       = "filter"
+	SliceNegation     = "negation"
+	SliceNoMatch      = "no_match"
+	SliceTypo         = "typo"
+	SliceMultiNeed    = "multi_need"
 )
 
 var knownSlices = map[string]bool{
 	SliceExact: true, SliceKeyword: true, SliceSemantic: true, SliceMultilingual: true,
+	SliceFilter: true, SliceNegation: true, SliceNoMatch: true, SliceTypo: true, SliceMultiNeed: true,
 }
 
 // GoldenRecord is one labeled query. Relevance is binary via Relevant, or
-// graded via Gains (doc_id -> gain); at least one relevant doc is required.
+// graded via Gains (doc_id -> gain); positive tasks require a relevant doc,
+// while an explicit NoMatch task expects an empty result.
 // When both are set, Gains wins and Relevant is treated as gain-1 fallbacks for
 // any id not in Gains.
 type GoldenRecord struct {
-	ID       string             `json:"id"`                  // stable identifier for the query (for diffs/reports)
-	Query    string             `json:"query"`               // the search text, verbatim
-	Tenant   string             `json:"tenant"`              // whose corpus to search (resolves to a bearer token)
-	Slice    string             `json:"slice"`               // one of the Slice* constants
-	Relevant []string           `json:"relevant"`            // expected relevant doc_ids (binary relevance)
-	Gains    map[string]float64 `json:"gains,omitempty"`     // optional graded relevance, doc_id -> gain
-	ModeHint string             `json:"mode_hint,omitempty"` // informational: the mode this query is meant to exercise
-	Note     string             `json:"note,omitempty"`      // free-form provenance / curation note
+	ID        string             `json:"id"`                  // stable identifier for the query (for diffs/reports)
+	Query     string             `json:"query"`               // the search text, verbatim
+	Tenant    string             `json:"tenant"`              // whose corpus to search (resolves to a bearer token)
+	Slice     string             `json:"slice"`               // one of the Slice* constants
+	Relevant  []string           `json:"relevant"`            // expected relevant doc_ids (binary relevance)
+	Gains     map[string]float64 `json:"gains,omitempty"`     // optional graded relevance, doc_id -> gain
+	ModeHint  string             `json:"mode_hint,omitempty"` // informational: the mode this query is meant to exercise
+	Note      string             `json:"note,omitempty"`      // free-form provenance / curation note
+	Split     string             `json:"split,omitempty"`     // dev, regression, or frozen holdout
+	NoMatch   bool               `json:"no_match,omitempty"`
+	Forbidden []string           `json:"forbidden,omitempty"` // explicit constraint violations, checked across every returned hit
+	Required  [][]string         `json:"required,omitempty"`  // each need must have at least one alternative in top-k
+	Filters   map[string]string  `json:"filters,omitempty"`   // explicit supported REST filters
 }
 
 // judged builds the relevance map used by the metrics.
@@ -69,9 +82,43 @@ func (r GoldenRecord) validate() error {
 		return fmt.Errorf("empty tenant")
 	}
 	if !knownSlices[r.Slice] {
-		return fmt.Errorf("unknown slice %q (want one of exact/keyword/semantic/multilingual)", r.Slice)
+		return fmt.Errorf("unknown slice %q", r.Slice)
 	}
-	if r.judged().totalRelevant() == 0 {
+	if r.Split != "" && r.Split != "dev" && r.Split != "regression" && r.Split != "holdout" {
+		return fmt.Errorf("invalid split %q", r.Split)
+	}
+	for key := range r.Filters {
+		if key != "types" && key != "participant" && key != "from" && key != "to" {
+			return fmt.Errorf("unsupported filter %q", key)
+		}
+	}
+	for id, gain := range r.Gains {
+		if id == "" || math.IsNaN(gain) || math.IsInf(gain, 0) || gain < 0 {
+			return fmt.Errorf("invalid relevance gain for %q", id)
+		}
+	}
+	if r.NoMatch && (r.judged().totalRelevant() > 0 || len(r.Required) > 0) {
+		return fmt.Errorf("no_match cannot also require relevant documents")
+	}
+	if r.Slice == SliceMultiNeed && len(r.Required) < 2 {
+		return fmt.Errorf("multi_need slice requires at least two labeled need groups")
+	}
+	for _, alternatives := range r.Required {
+		if len(alternatives) == 0 {
+			return fmt.Errorf("empty required need")
+		}
+		for _, id := range alternatives {
+			if r.judged().gainOf(id) <= 0 {
+				return fmt.Errorf("required doc %q must have positive relevance", id)
+			}
+		}
+	}
+	for _, id := range r.Forbidden {
+		if id == "" || r.judged().gainOf(id) > 0 {
+			return fmt.Errorf("invalid forbidden doc %q", id)
+		}
+	}
+	if !r.NoMatch && r.judged().totalRelevant() == 0 {
 		return fmt.Errorf("no relevant docs (set \"relevant\" or \"gains\")")
 	}
 	return nil
@@ -106,6 +153,10 @@ func parseGolden(r io.Reader) ([]GoldenRecord, error) {
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&rec); err != nil {
 			return nil, fmt.Errorf("eval: golden line %d: %w", line, err)
+		}
+		var extra any
+		if err := dec.Decode(&extra); err != io.EOF {
+			return nil, fmt.Errorf("eval: golden line %d: expected exactly one JSON record", line)
 		}
 		if err := rec.validate(); err != nil {
 			return nil, fmt.Errorf("eval: golden line %d (%s): %w", line, rec.ID, err)

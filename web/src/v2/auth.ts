@@ -57,6 +57,8 @@ function persistSession(): void {
 }
 
 let session: Session | null = loadStoredSession();
+let generation = 0;
+let refreshing: { owner: Session; promise: Promise<void> } | null = null;
 const subscribers = new Set<() => void>();
 
 function notify(): void {
@@ -90,7 +92,7 @@ function userOf(jwt: string): string {
   }
 }
 
-async function grant(body: URLSearchParams): Promise<void> {
+async function grant(body: URLSearchParams): Promise<Session> {
   const res = await fetch(TOKEN_PATH, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -108,17 +110,17 @@ async function grant(body: URLSearchParams): Promise<void> {
     refresh_token: string;
     expires_in: number;
   };
-  session = {
+  return {
     token: json.access_token,
     refresh: json.refresh_token,
     expiresAt: Date.now() + json.expires_in * 1000,
     user: userOf(json.access_token),
   };
-  persistSession();
 }
 
 export async function signIn(username: string, password: string): Promise<void> {
-  await grant(
+  const attempt = ++generation;
+  const next = await grant(
     new URLSearchParams({
       grant_type: "password",
       client_id: CLIENT_ID,
@@ -126,13 +128,22 @@ export async function signIn(username: string, password: string): Promise<void> 
       password,
     }),
   );
+  if (attempt !== generation) throw new Error("Sign-in was canceled.");
+  session = next;
+  persistSession();
   notify();
 }
 
 export function signOut(): void {
+  ++generation;
   session = null;
   persistSession();
   notify();
+}
+
+/** A rejected old request cannot invalidate a newer token/account. */
+export function invalidateToken(token: string): void {
+  if (session?.token === token) signOut();
 }
 
 /** Fresh access token, refreshing within 30s of expiry. Throws when signed out. */
@@ -141,20 +152,34 @@ export async function getToken(): Promise<string> {
     throw new Error("not signed in");
   }
   if (Date.now() > session.expiresAt - 30_000) {
-    try {
-      await grant(
+    const owner = session;
+    if (!refreshing || refreshing.owner !== owner) {
+      const promise = grant(
         new URLSearchParams({
           grant_type: "refresh_token",
           client_id: CLIENT_ID,
-          refresh_token: session.refresh,
+          refresh_token: owner.refresh,
         }),
-      );
-    } catch {
-      session = null;
-      persistSession();
-      notify();
-      throw new Error("session expired — please sign in again");
+      ).then((next) => {
+        if (session !== owner) throw new Error("Session changed.");
+        session = next;
+        persistSession();
+      }).catch(() => {
+        // A late failed refresh must never sign out a newer account.
+        if (session === owner) {
+          session = null;
+          persistSession();
+          notify();
+        }
+        throw new Error("Session expired — please sign in again.");
+      });
+      refreshing = { owner, promise };
+      void promise.finally(() => {
+        if (refreshing?.promise === promise) refreshing = null;
+      }).catch(() => {});
     }
+    await refreshing.promise;
   }
+  if (!session) throw new Error("not signed in");
   return session.token;
 }

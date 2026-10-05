@@ -258,6 +258,7 @@ type envConfig struct {
 func withTEIDown() envOption       { return func(c *envConfig) { c.teiDown = true } }
 func withTEIDim(dim int) envOption { return func(c *envConfig) { c.teiDim = dim } }
 func withClipDown() envOption      { return func(c *envConfig) { c.clipDown = true } }
+func withRRF() envOption           { return func(c *envConfig) { c.rrf = true } }
 func withClipDim(dim int) envOption {
 	return func(c *envConfig) { c.clipDim = dim }
 }
@@ -301,6 +302,7 @@ func newQueryEnv(t *testing.T, opts ...envOption) *queryEnv {
 		cache,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+	srv.rrfEnabled = ec.rrf
 	if ec.profiles != nil {
 		srv.profiles = ec.profiles
 		srv.rrfEnabled = ec.rrf

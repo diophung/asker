@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -231,13 +232,15 @@ func (f *fakePrefs) wasDeleted(key string) bool {
 // interceptor) and the request, then plays back a canned response.
 type fakeQuery struct {
 	queryv1.UnimplementedQueryServiceServer
-	mu        sync.Mutex
-	gotTenant tenancy.TenantID
-	gotReq    *queryv1.SearchRequest
-	resp      *queryv1.SearchResponse
-	err       error
-	indexed   int64 // returned by Count
-	countErr  error
+	mu            sync.Mutex
+	gotTenant     tenancy.TenantID
+	gotReq        *queryv1.SearchRequest
+	resp          *queryv1.SearchResponse
+	err           error
+	indexed       int64 // returned by Count
+	countErr      error
+	cacheBypass   bool
+	rerankApplied bool
 }
 
 func (f *fakeQuery) Count(ctx context.Context, _ *queryv1.CountRequest) (*queryv1.CountResponse, error) {
@@ -261,6 +264,11 @@ func (f *fakeQuery) Search(ctx context.Context, req *queryv1.SearchRequest) (*qu
 	defer f.mu.Unlock()
 	f.gotTenant = tc.TenantID()
 	f.gotReq = req
+	md, _ := metadata.FromIncomingContext(ctx)
+	f.cacheBypass = len(md.Get("x-asker-cache-bypass")) > 0
+	if f.rerankApplied {
+		_ = grpc.SetHeader(ctx, metadata.Pairs("x-asker-rerank-applied", "true"))
+	}
 	if f.err != nil {
 		return nil, f.err
 	}

@@ -20,9 +20,9 @@
 #      their /readyz live-pings Vespa :8080, so they cannot be Ready until step 2.
 #      (This ordering is why the CI `helm install` does NOT use --wait.)
 #   4. Feeds ONE tenant-scoped doc carrying a rare token via the Vespa
-#      document/v1 API (exactly like tools/e2e/smoke.sh), scoped to a streaming
-#      group g=<tenant>.
-#   5. Mints an OIDC token from Keycloak (dev password grant, user alice).
+#      document/v1 API only AFTER minting an OIDC token and verifying its
+#      tenant via authenticated /v1/me. The streaming group is that tenant.
+#   5. The token comes from Keycloak (dev password grant, user alice).
 #   6. BASELINE: queries the rare token through the gateway /v1/search -> 1 hit.
 #   7. CHAOS: in a background loop, fires CHAOS_REQUESTS gateway /v1/search calls
 #      continuously WITH a bounded client retry (CLIENT_RETRIES on 5xx / connect
@@ -46,6 +46,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=tools/e2e/k8s-chaos-lib.sh
+source "$REPO_ROOT/tools/e2e/k8s-chaos-lib.sh"
 
 # --- Config (env-overridable) -------------------------------------------------
 NAMESPACE="${NAMESPACE:-asker}"
@@ -68,6 +70,7 @@ VESPA_CFG_LPORT="${VESPA_CFG_LPORT:-19071}"
 
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-600}"     # seconds to wait for each rollout
 VESPA_DEPLOY_TIMEOUT="${VESPA_DEPLOY_TIMEOUT:-900}" # vespa/deploy.sh per-step
+PORT_FORWARD_TIMEOUT="${PORT_FORWARD_TIMEOUT:-2400}" # bounded to the CI job budget
 # (generous: proton is slow to serve :8080 on a constrained kind node)
 EMBEDDING_DIM="${EMBEDDING_DIM:-384}"         # MUST match the CI TEI model
 CLIP_DIM="${CLIP_DIM:-512}"
@@ -83,7 +86,7 @@ RETRY_BACKOFF="${RETRY_BACKOFF:-2}"           # seconds between retries
 REQUEST_INTERVAL="${REQUEST_INTERVAL:-0.3}"   # seconds between query launches
 
 # Tenant-scoped probe doc (rare token; like smoke.sh).
-CHAOS_TENANT="${CHAOS_TENANT:-chaos-tenant}"
+CHAOS_TENANT="${CHAOS_TENANT:-}" # optional assertion; /v1/me supplies authority
 CHAOS_DOC_ID="${CHAOS_DOC_ID:-chaos-1}"
 CHAOS_TOKEN="${CHAOS_TOKEN:-plughxyzzy}"
 
@@ -147,8 +150,9 @@ declare -a PF_PIDS=()
 # port_forward TARGET LOCAL REMOTE: background `kubectl port-forward`, record PID.
 port_forward() {
   local target="$1" lport="$2" rport="$3"
-  "$KUBECTL" -n "$NAMESPACE" port-forward "$target" "${lport}:${rport}" \
-    >/dev/null 2>&1 &
+  k8s_supervise_forward "$PORT_FORWARD_TIMEOUT" \
+    "$KUBECTL" -n "$NAMESPACE" port-forward "$target" "${lport}:${rport}" \
+    >/dev/null &
   PF_PIDS+=("$!")
 }
 
@@ -165,16 +169,17 @@ start_gateway_pf() {
     kill "$GATEWAY_PF_PID" >/dev/null 2>&1 || true
     wait "$GATEWAY_PF_PID" 2>/dev/null || true
   fi
-  "$KUBECTL" -n "$NAMESPACE" port-forward "svc/${GATEWAY_SVC}" \
-    "${GATEWAY_LPORT}:8080" >/dev/null 2>&1 &
+  k8s_supervise_forward "$PORT_FORWARD_TIMEOUT" \
+    "$KUBECTL" -n "$NAMESPACE" port-forward "svc/${GATEWAY_SVC}" \
+    "${GATEWAY_LPORT}:8080" >/dev/null &
   GATEWAY_PF_PID=$!
   PF_PIDS+=("$GATEWAY_PF_PID")
 }
 
 # wait_local_http URL ATTEMPTS: poll a local URL until it answers (any code).
 wait_local_http() {
-  local url="$1" attempts="${2:-30}" i
-  for i in $(seq 1 "$attempts"); do
+  local url="$1" attempts="${2:-30}"
+  for _ in $(seq 1 "$attempts"); do
     if curl -s -o /dev/null --max-time 5 "$url"; then
       return 0
     fi
@@ -186,18 +191,20 @@ wait_local_http() {
 cleanup() {
   set +e
   # Best-effort: delete the probe doc, then kill all port-forwards.
-  curl -fsS --max-time 15 -X DELETE \
-    "http://localhost:${VESPA_QUERY_LPORT}/document/v1/asker/doc/group/${CHAOS_TENANT}/${CHAOS_DOC_ID}" \
-    >/dev/null 2>&1
+  if [ -n "${CHAOS_DOC_URL:-}" ] && [ "${FED:-0}" = 1 ]; then
+    curl -fsS --max-time 15 -X DELETE "$CHAOS_DOC_URL" >/dev/null 2>&1
+  fi
   local pid
   for pid in "${PF_PIDS[@]:-}"; do
     [ -n "$pid" ] && kill "$pid" >/dev/null 2>&1
+    [ -n "$pid" ] && wait "$pid" 2>/dev/null
   done
-  rm -f "$TMP_REQLOG" 2>/dev/null
+  rm -f "$TMP_REQLOG" "$TMP_DEPLOYLOG" 2>/dev/null
 }
 trap cleanup EXIT
 
 TMP_REQLOG="$(mktemp "${TMPDIR:-/tmp}/k8s-chaos.XXXXXX")"
+TMP_DEPLOYLOG="$(mktemp "${TMPDIR:-/tmp}/k8s-chaos-deploy.XXXXXX")"
 
 echo "== Asker M4 kind chaos test =="
 echo "   namespace=${NAMESPACE} release=${RELEASE}"
@@ -245,10 +252,11 @@ if VESPA_CFG_URL="http://localhost:${VESPA_CFG_LPORT}" \
   VESPA_QUERY_URL="http://localhost:${VESPA_QUERY_LPORT}" \
   WAIT_TIMEOUT_SECS="$VESPA_DEPLOY_TIMEOUT" \
   EMBEDDING_DIM="$EMBEDDING_DIM" CLIP_DIM="$CLIP_DIM" \
-  bash "${REPO_ROOT}/vespa/deploy.sh" >/dev/null 2>&1; then
+  bash "${REPO_ROOT}/vespa/deploy.sh" >"$TMP_DEPLOYLOG" 2>&1; then
   pass
 else
   fail "vespa/deploy.sh failed against :${VESPA_CFG_LPORT} (config server up; proton slow to serve :8080?)"
+  tail -n 30 "$TMP_DEPLOYLOG"
 fi
 
 # --- 3. NOW wait for query + gateway (their /readyz needs the live Vespa :8080) -
@@ -267,29 +275,6 @@ if "$KUBECTL" -n "$NAMESPACE" rollout status "deployment/${GATEWAY_DEPLOY}" \
   pass
 else
   fail "gateway rollout not ready within ${ROLLOUT_TIMEOUT}s"
-fi
-
-# --- 4. Feed the tenant-scoped probe doc --------------------------------------
-
-FED=0
-CHAOS_DOC_URL="http://localhost:${VESPA_QUERY_LPORT}/document/v1/asker/doc/group/${CHAOS_TENANT}/${CHAOS_DOC_ID}"
-begin "vespa: feed probe doc for ${CHAOS_TENANT} (rare token ${CHAOS_TOKEN})"
-if out="$("${CURL[@]}" -X POST "$CHAOS_DOC_URL" \
-  -H 'Content-Type: application/json' \
-  -d "{
-    \"fields\": {
-      \"doc_id\": \"${CHAOS_DOC_ID}\",
-      \"connector_id\": \"chaos\",
-      \"type\": \"FILE\",
-      \"title\": \"asker chaos probe ${CHAOS_TOKEN}\",
-      \"body\": \"this body contains the rare token ${CHAOS_TOKEN} for chaos query-path testing\",
-      \"created_at\": 1718000000
-    }
-  }" 2>&1)"; then
-  FED=1
-  pass
-else
-  fail "${out:0:300}"
 fi
 
 # --- 5. Mint an OIDC token via Keycloak ---------------------------------------
@@ -333,22 +318,55 @@ fi
 
 GATEWAY_BASE="http://localhost:${GATEWAY_LPORT}"
 
+FED=0
+CHAOS_DOC_URL=""
+begin "gateway: verify OIDC tenant before feeding probe"
+if [ -n "$TOKEN" ] && me="$("${CURL[@]}" -H "Authorization: Bearer ${TOKEN}" \
+  "${GATEWAY_BASE}/v1/me" 2>/dev/null)" && \
+  verified_tenant="$(k8s_verified_tenant "$CHAOS_TENANT" <<<"$me")"; then
+  CHAOS_TENANT="$verified_tenant"
+  CHAOS_DOC_URL="http://localhost:${VESPA_QUERY_LPORT}/document/v1/asker/doc/group/${CHAOS_TENANT}/${CHAOS_DOC_ID}"
+  pass
+else
+  fail "could not verify the token tenant or explicit CHAOS_TENANT assertion differs"
+fi
+
+begin "vespa: feed probe doc in verified token tenant (rare token ${CHAOS_TOKEN})"
+out=""
+if [ -n "$CHAOS_DOC_URL" ] && out="$("${CURL[@]}" -X POST "$CHAOS_DOC_URL" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"fields\": {
+      \"doc_id\": \"${CHAOS_DOC_ID}\",
+      \"connector_id\": \"chaos\",
+      \"type\": \"FILE\",
+      \"title\": \"asker chaos probe ${CHAOS_TOKEN}\",
+      \"body\": \"this body contains the rare token ${CHAOS_TOKEN} for chaos query-path testing\",
+      \"created_at\": 1718000000
+    }
+  }" 2>&1)"; then
+  FED=1
+  pass
+else
+  fail "probe not fed into a verified tenant: ${out:0:300}"
+fi
+
 # search_once: GET /v1/search for the rare token. Prints HTTP code to stdout;
 # writes the body to $TMP_REQLOG. No retry (the retry wrapper handles that).
 search_once() {
-  curl -s -o "$TMP_REQLOG" -w '%{http_code}' --max-time 20 -G \
+  k8s_http_code curl -s -o "$TMP_REQLOG" -w '%{http_code}' --max-time 20 -G \
     -H "Authorization: Bearer ${TOKEN}" \
     "${GATEWAY_BASE}/v1/search" \
     --data-urlencode "q=${CHAOS_TOKEN}" \
-    --data-urlencode "limit=10" 2>/dev/null || echo "000"
+    --data-urlencode "limit=10" 2>/dev/null
 }
 
 # search_with_retry: fire one query with a bounded retry on 5xx/connection error
 # (the "within retries" budget). Prints "OK <code>" on eventual 2xx, else
 # "FAIL <lastcode>". 4xx is a hard failure (no retry: not a transient pod kill).
 search_with_retry() {
-  local attempt code
-  for attempt in $(seq 0 "$CLIENT_RETRIES"); do
+  local code
+  for _ in $(seq 0 "$CLIENT_RETRIES"); do
     code="$(search_once)"
     case "$code" in
       2*) echo "OK ${code}"; return 0 ;;
@@ -398,8 +416,8 @@ fi
 CHAOS_RESULTS="$(mktemp "${TMPDIR:-/tmp}/k8s-chaos-res.XXXXXX")"
 
 run_chaos_loop() {
-  local i res
-  for i in $(seq 1 "$CHAOS_REQUESTS"); do
+  local res
+  for _ in $(seq 1 "$CHAOS_REQUESTS"); do
     res="$(search_with_retry)"
     echo "$res" >>"$CHAOS_RESULTS"
     sleep "$REQUEST_INTERVAL"
@@ -427,7 +445,7 @@ kill_one_pod() {
 }
 
 CHAOS_RAN=0
-if [ "$FED" = "1" ] && [ -n "$TOKEN" ]; then
+if [ "$FED" = "1" ] && [ -n "$TOKEN" ] && [ "${base_ok:-0}" = 1 ]; then
   CHAOS_RAN=1
   echo
   echo "-- chaos: firing ${CHAOS_REQUESTS} queries (retry x${CLIENT_RETRIES}) while killing 1 query + 1 gateway pod --"

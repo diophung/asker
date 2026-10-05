@@ -354,11 +354,13 @@ function delay(ms: number): Promise<void> {
 export async function searchPersonalData(
   query: string,
   source: SourceFilter,
+  signal?: AbortSignal,
 ): Promise<SearchResult[]> {
   if (BACKEND_ENABLED) {
-    return searchBackend(query, source);
+    return searchBackend(query, source, signal);
   }
   await delay(ARTIFICIAL_DELAY_MS);
+  signal?.throwIfAborted();
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length === 0) {
     return [];
@@ -426,12 +428,13 @@ function hash(s: string): number {
 export function metaFor(
   query: string,
   shown: number,
-): { approx: string; seconds: string } {
+): { approx: string; seconds: string; degraded?: string } {
   if (BACKEND_ENABLED) {
     const real = backendMeta(query);
     if (real) {
       return real;
     }
+    return { approx: shown.toLocaleString(), seconds: "—" };
   }
   const h = hash(query);
   const approx = (200 + (h % 1900) + shown * 7).toLocaleString();

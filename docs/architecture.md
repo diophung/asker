@@ -118,6 +118,19 @@ dimension templated at deploy time per [ADR-005](adr/ADR-005-embedding-dim-deplo
 
 ## 5. Query path and latency budget
 
+For personalized relevance searches, the API's `score` is the utility that
+produced the returned order: combined personalized relevance, or the selected
+MMR utility after diversification. Scores descend in that order and can be
+negative; they are not probabilities. Calendar schedule lookups instead preserve
+chronological order and expose combined relevance as the score/tiebreak. With
+`debug=1`, `features.retrieval_score` preserves the score entering personalization
+(retrieval/fusion or an earlier model rerank), `combined_score` preserves the
+weighted relevance, and `ranking_score` records the published score. Diversified
+results also include normalized `mmr_relevance` and weighted `mmr_penalty`.
+Combined relevance sums exceeding the finite `float64` range saturate at the
+representable limit; overflow-safe normalization keeps scores and diagnostics
+serializable without changing profile settings.
+
 Hard SLO: **P90 ≤ 5000ms** end-to-end; design target **P50 ≤ 800ms**. Per-stage budget:
 
 | Stage | Budget |

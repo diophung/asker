@@ -1,11 +1,12 @@
 {{- /*
 ================================================================================
 minio — self-hosted StatefulSet (S3-compatible blob store for connector-hub).
-Compose: image minio/minio:RELEASE.2025-09-07T16-13-09Z, command
+Compose: source-built image asker-minio:RELEASE.2025-10-15T17-29-55Z, command
 `server /data --console-address :9001`, ports 9000 (S3 API) + 9001 (console),
 env MINIO_ROOT_USER/MINIO_ROOT_PASSWORD, volume minio-data:/data, healthcheck
-`mc ready local`. The image is shell-less for HTTP probes via mc, so we use the
-documented HTTP liveness/readiness endpoints instead (GET /minio/health/live and
+GET /minio/health/ready. Build deploy/minio/Dockerfile and load the image into
+your cluster or publish it and override stateful.minio.image. We use the
+documented HTTP liveness/readiness endpoints (GET /minio/health/live and
 /minio/health/ready on the S3 API port).
 
 Service "minio" (compose DNS) resolves config.minioEndpoint ("minio:9000")
@@ -20,7 +21,7 @@ config.minioEndpoint at managed S3 (endpoint change only, ADR-014 §4).
 {{- if eq (include "asker.stateful.enabled" (list . $dep)) "true" -}}
 {{- $sf := .Values.stateful | default dict -}}
 {{- $c := index $sf $dep | default dict -}}
-{{- $img := $c.image | default "minio/minio:RELEASE.2025-09-07T16-13-09Z" -}}
+{{- $img := $c.image | default "asker-minio:RELEASE.2025-10-15T17-29-55Z" -}}
 {{- $storage := ($c.storage | default dict).size | default "20Gi" -}}
 {{- $apiPort := 9000 -}}
 {{- $consolePort := 9001 -}}

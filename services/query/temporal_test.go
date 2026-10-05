@@ -135,6 +135,33 @@ func TestParseTemporalNoMatch(t *testing.T) {
 	}
 }
 
+func TestParseTemporalRequiresCompleteUnquotedWords(t *testing.T) {
+	now := time.Date(2026, 6, 10, 14, 0, 0, 0, time.UTC)
+	for _, text := range []string{
+		"Tomorrowland festival", "yesterdayish report", "todayreport", "prethis weeknotes",
+		"today_report", "report_today", "today42", "42tomorrow", "字today", "today字", "today\u0301",
+		`"tomorrow" festival`, `"last week report"`, `"in 3 days" report`, "字in 3 days",
+	} {
+		win, stripped, ok := parseTemporal(text, time.UTC, now)
+		if ok || !win.isZero() || stripped != text {
+			t.Errorf("embedded/quoted temporal content %q became window=%+v text=%q ok=%v", text, win, stripped, ok)
+		}
+	}
+	for _, tc := range []struct{ text, stripped string }{
+		{"Tomorrowland festival tomorrow", "Tomorrowland festival"},
+		{"yesterdayish report YESTERDAY", "yesterdayish report"},
+		{"todayreport (TODAY)", "todayreport ()"},
+		{"İskender today", "İskender"},
+		{"Ⱥgent in 3 days", "Ⱥgent"},
+		{`"tomorrow" festival today`, `"tomorrow" festival`},
+	} {
+		win, stripped, ok := parseTemporal(tc.text, time.UTC, now)
+		if !ok || win.isZero() || stripped != tc.stripped {
+			t.Errorf("standalone temporal expression %q became window=%+v text=%q ok=%v; want %q", tc.text, win, stripped, ok, tc.stripped)
+		}
+	}
+}
+
 func TestParseTemporalLongestPhraseWins(t *testing.T) {
 	// "next week" must win over the substring "week"/"this week".
 	now := time.Date(2026, 6, 10, 14, 0, 0, 0, time.UTC)

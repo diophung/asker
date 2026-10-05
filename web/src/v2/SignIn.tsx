@@ -27,7 +27,7 @@ function Wordmark() {
  * Prefilled with the dev-stack credentials; signing in runs the password grant
  * (see auth.ts) and reveals the search UI.
  */
-export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
+export function SignIn({ onSignedIn, notice = "" }: { onSignedIn: () => void; notice?: string }) {
   const [user, setUser] = useState(DEV_USER);
   const [pass, setPass] = useState(DEV_PASS);
   const [error, setError] = useState("");
@@ -54,6 +54,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
         <Wordmark />
         <h1 className="mt-5 text-[22px] font-normal text-gink">Sign in</h1>
         <p className="mt-1 text-[14px] text-gmuted">to search your own data</p>
+        {notice && <p role="status" className="mt-3 text-[14px] text-gink">{notice}</p>}
 
         <form onSubmit={handleSubmit} className="mt-7 space-y-3 text-left">
           <Field

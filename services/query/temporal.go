@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Query understanding — temporal scope (spec v3.2 §1.5). Natural-language time
@@ -148,9 +150,17 @@ func parseTemporal(text string, loc *time.Location, now time.Time) (timeWindow, 
 		loc = time.UTC
 	}
 	nowL := now.In(loc)
-	lower := strings.ToLower(text)
+	// The supported time expressions are ASCII. Fold only ASCII letters so
+	// matching offsets still address the original UTF-8 text (Unicode lowercase
+	// mappings can change byte lengths, e.g. the capital dotted I).
+	lower := strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, maskQuotedText(text))
 	for _, tp := range temporalPhrases {
-		idx := strings.Index(lower, tp.phrase)
+		idx := temporalPhraseIndex(lower, tp.phrase)
 		if idx < 0 {
 			continue
 		}
@@ -159,16 +169,70 @@ func parseTemporal(text string, loc *time.Location, now time.Time) (timeWindow, 
 		return win, normalizeSpaces(stripped), true
 	}
 	for _, tp := range temporalPatterns {
-		span := tp.re.FindStringIndex(lower)
-		if span == nil {
-			continue
+		for _, span := range tp.re.FindAllStringIndex(lower, -1) {
+			if !temporalWordBoundaries(lower, span[0], span[1]) {
+				continue
+			}
+			groups := tp.re.FindStringSubmatch(lower[span[0]:span[1]])
+			win := tp.window(groups, nowL, loc)
+			stripped := text[:span[0]] + text[span[1]:]
+			return win, normalizeSpaces(stripped), true
 		}
-		groups := tp.re.FindStringSubmatch(lower)
-		win := tp.window(groups, nowL, loc)
-		stripped := text[:span[0]] + text[span[1]:]
-		return win, normalizeSpaces(stripped), true
 	}
 	return timeWindow{}, text, false
+}
+
+// A temporal phrase must occupy complete words. A title such as Tomorrowland
+// or an identifier such as today_report must remain ordinary search content.
+func temporalPhraseIndex(text, phrase string) int {
+	for offset := 0; offset < len(text); {
+		idx := strings.Index(text[offset:], phrase)
+		if idx < 0 {
+			break
+		}
+		idx += offset
+		if temporalWordBoundaries(text, idx, idx+len(phrase)) {
+			return idx
+		}
+		offset = idx + len(phrase)
+	}
+	return -1
+}
+
+func temporalWordBoundaries(text string, start, end int) bool {
+	isWord := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) || r == '_'
+	}
+	if start > 0 {
+		r, _ := utf8.DecodeLastRuneInString(text[:start])
+		if isWord(r) {
+			return false
+		}
+	}
+	if end < len(text) {
+		r, _ := utf8.DecodeRuneInString(text[end:])
+		if isWord(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// Preserve titles and exact phrases such as "last week report" as content.
+// Byte positions stay unchanged so the selected unquoted span can be removed.
+func maskQuotedText(text string) string {
+	out := []byte(text)
+	quoted, escaped := false, false
+	for i, b := range out {
+		if b == '"' && !escaped {
+			quoted = !quoted
+			out[i] = ' '
+		} else if quoted {
+			out[i] = ' '
+		}
+		escaped = b == '\\' && !escaped
+	}
+	return string(out)
 }
 
 // startOfDay returns local midnight of now's calendar day in loc.

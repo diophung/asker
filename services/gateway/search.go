@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
@@ -18,15 +21,18 @@ import (
 // searchHitJSON is the pinned REST hit shape (web/src/api.ts Hit). Field
 // names and presence are contractual — every key is always emitted.
 type searchHitJSON struct {
-	DocID       string            `json:"doc_id"`
-	ConnectorID string            `json:"connector_id"`
-	Type        string            `json:"type"`
-	Title       string            `json:"title"`
-	Snippet     string            `json:"snippet"`
-	Score       float64           `json:"score"`
-	Created     string            `json:"created"`
-	Modified    string            `json:"modified"`
-	Metadata    map[string]string `json:"metadata"`
+	DocID       string `json:"doc_id"`
+	ConnectorID string `json:"connector_id"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	Snippet     string `json:"snippet"`
+	// Personalized relevance results expose combined relevance or the selected
+	// MMR utility, in descending order. Schedule lookups retain chronological
+	// order. Earlier scoring stages are available in features when debug=1.
+	Score    float64           `json:"score"`
+	Created  string            `json:"created"`
+	Modified string            `json:"modified"`
+	Metadata map[string]string `json:"metadata"`
 	// SourceURL is a browser-openable link to the original item at its source
 	// (the Gmail message in Gmail, the Drive file, the Slack permalink, ...),
 	// derived from the connector metadata. "" when the source has no web URL
@@ -46,11 +52,46 @@ type searchHitJSON struct {
 // searchResponseJSON is the pinned REST response shape (web/src/api.ts
 // SearchResponse).
 type searchResponseJSON struct {
-	Hits     []searchHitJSON `json:"hits"`
-	Total    int64           `json:"total"`
-	Degraded string          `json:"degraded"`
-	TookMs   int64           `json:"took_ms"`
-	Cached   bool            `json:"cached"`
+	Hits            []searchHitJSON     `json:"hits"`
+	Total           int64               `json:"total"`
+	Degraded        string              `json:"degraded"`
+	TookMs          int64               `json:"took_ms"`
+	Cached          bool                `json:"cached"`
+	RerankRequested bool                `json:"rerank_requested"`
+	RerankApplied   bool                `json:"rerank_applied"`
+	CandidateDebug  *candidateDebugJSON `json:"candidate_debug,omitempty"`
+}
+
+// Candidate IDs are authorized upstream evidence for explicitly requested
+// diagnostics. Missing or truncated telemetry never proves candidate recall.
+type candidateDebugJSON struct {
+	Scope    string   `json:"scope"`
+	DocIDs   []string `json:"doc_ids"`
+	Count    int      `json:"count"`
+	Depth    int      `json:"depth"`
+	Complete bool     `json:"complete"`
+}
+
+func candidateDebug(headers metadata.MD) *candidateDebugJSON {
+	values := headers.Get("x-asker-candidates-bin")
+	if len(values) != 1 || len(values[0]) > 4096 {
+		return nil
+	}
+	var value candidateDebugJSON
+	if json.Unmarshal([]byte(values[0]), &value) != nil ||
+		(value.Scope != "pre_rerank_head" && value.Scope != "retrieval_candidates") ||
+		value.Count < 0 || value.Depth < 0 || value.Depth > value.Count ||
+		len(value.DocIDs) > value.Depth || (value.Complete && len(value.DocIDs) != value.Depth) {
+		return nil
+	}
+	seen := make(map[string]bool, len(value.DocIDs))
+	for _, id := range value.DocIDs {
+		if id == "" || len(id) > 1024 || seen[id] {
+			return nil
+		}
+		seen[id] = true
+	}
+	return &value
 }
 
 // handleSearch proxies GET /v1/search (the "All" tab) to the QueryService. The
@@ -62,13 +103,13 @@ func (d *deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	resp, err := d.query.Search(r.Context(), req)
+	resp, headers, err := d.searchRPC(r, req)
 	if err != nil {
 		d.upstreamError(w, r, "QueryService.Search", err)
 		return
 	}
 	d.recordRecent(r.Context(), req.GetQuery())
-	writeJSON(w, http.StatusOK, restSearchResponse(resp))
+	d.writeSearchResponse(w, req, resp, headers)
 }
 
 // sourceDocTypes maps a /v1/search/{source} path segment to the DocType filter
@@ -106,13 +147,45 @@ func (d *deps) handleSourceSearch(w http.ResponseWriter, r *http.Request) {
 	// The endpoint defines the type filter; any types= param is overridden so a
 	// tab's results can never be widened past its source.
 	req.DocTypes = types
-	resp, err := d.query.Search(r.Context(), req)
+	resp, headers, err := d.searchRPC(r, req)
 	if err != nil {
 		d.upstreamError(w, r, "QueryService.Search", err)
 		return
 	}
 	d.recordRecent(r.Context(), req.GetQuery())
-	writeJSON(w, http.StatusOK, restSearchResponse(resp))
+	d.writeSearchResponse(w, req, resp, headers)
+}
+
+// Search cache control is separate from tenant identity. The gateway never
+// copies client-supplied tenant metadata; only this harmless cache hint is
+// forwarded, while tenancygrpc still derives identity from verified claims.
+func (d *deps) searchRPC(r *http.Request, req *queryv1.SearchRequest) (*queryv1.SearchResponse, metadata.MD, error) {
+	ctx := r.Context()
+	for _, header := range r.Header.Values("Cache-Control") {
+		for _, directive := range strings.Split(header, ",") {
+			name := strings.TrimSpace(strings.SplitN(directive, "=", 2)[0])
+			if strings.EqualFold(name, "no-cache") || strings.EqualFold(name, "no-store") {
+				ctx = metadata.AppendToOutgoingContext(ctx, "x-asker-cache-bypass", "true")
+			}
+		}
+	}
+	var headers metadata.MD
+	resp, err := d.query.Search(ctx, req, grpc.Header(&headers))
+	return resp, headers, err
+}
+
+func (d *deps) writeSearchResponse(w http.ResponseWriter, req *queryv1.SearchRequest, resp *queryv1.SearchResponse, headers metadata.MD) {
+	out := restSearchResponse(resp)
+	out.RerankRequested = req.GetRerank()
+	for _, value := range headers.Get("x-asker-rerank-applied") {
+		out.RerankApplied = out.RerankApplied || value == "true"
+	}
+	if req.GetDebug() {
+		out.CandidateDebug = candidateDebug(headers)
+	}
+	// Search responses contain private data and must not enter shared HTTP caches.
+	w.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(w, http.StatusOK, out)
 }
 
 // parseSearchRequest validates and maps the /v1/search query parameters onto

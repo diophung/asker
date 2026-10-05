@@ -38,6 +38,7 @@ POLL_INTERVAL="${M3_POLL_INTERVAL:-5}"
 
 RUN_ID="$(date +%s)-$$"
 TMP="$(mktemp -d)"
+mkdir -m 700 "$TMP/tokens"
 CURL=(curl -fsS --max-time 30)
 
 STEP=0
@@ -85,24 +86,75 @@ print("" if val is None else val)
 ' "$1"
 }
 
-# fetch_token USER: print an access token via the dev password grant.
+# A file cache survives command substitutions and local polling scopes. Check
+# wall-clock expiry at every request, allowing 30s for the HTTP request itself.
+cat >"$TMP/token.py" <<'PYEOF'
+import base64
+import json
+import os
+import sys
+import tempfile
+
+op, path, now = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    if op == "get":
+        with open(path, encoding="utf-8") as source:
+            cached = json.load(source)
+        token, expiry = cached["token"], cached["expires_at"]
+        if not isinstance(token, str) or not token or any(not "!" <= c <= "~" for c in token):
+            raise ValueError("invalid token")
+        if type(expiry) is not int or expiry <= now + 30:
+            raise ValueError("expired token")
+    elif op == "save":
+        grant = json.load(sys.stdin)
+        token, ttl = grant["access_token"], grant["expires_in"]
+        if not isinstance(token, str) or not token or any(not "!" <= c <= "~" for c in token):
+            raise ValueError("invalid token")
+        if type(ttl) is not int or not 1 <= ttl <= 86400:
+            raise ValueError("invalid token lifetime")
+        expiry = now + ttl
+        if len(token.split(".")) == 3:
+            payload = token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+            jwt_exp = claims.get("exp")
+            if type(jwt_exp) is not int:
+                raise ValueError("missing JWT expiry")
+            expiry = min(expiry, jwt_exp)
+        if expiry <= int(sys.argv[4]):
+            raise ValueError("grant expired during request")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(path),
+                                         delete=False) as target:
+            json.dump({"token": token, "expires_at": expiry}, target)
+        os.replace(target.name, path)
+    else:
+        raise ValueError("invalid token operation")
+    print(token)
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit(1)
+PYEOF
+
+# fetch_token USER [refresh]: print a currently valid dev access token.
 fetch_token() {
-  local body tok
+  local user="$1" cache now body
+  case "$user" in alice | bob) ;; *) return 1 ;; esac
+  cache="$TMP/tokens/$user.json"
+  now=$(date +%s)
+  if [ "${2:-}" != refresh ] && python3 "$TMP/token.py" get "$cache" "$now" 2>/dev/null; then
+    return 0
+  fi
   body="$("${CURL[@]}" -X POST "${KEYCLOAK_URL}/realms/asker/protocol/openid-connect/token" \
     -H 'Content-Type: application/x-www-form-urlencoded' \
     --data-urlencode "client_id=asker-web" \
     --data-urlencode "grant_type=password" \
-    --data-urlencode "username=$1" \
-    --data-urlencode "password=${2:-password123}" 2>&1)" || {
-    echo "token request failed for $1: ${body:0:200}" >&2
+    --data-urlencode "username=$user" \
+    --data-urlencode "password=password123" 2>/dev/null)" || {
+    echo "token request failed for $user" >&2
     return 1
   }
-  tok="$(json_field access_token <<<"$body" || true)"
-  if [ -z "$tok" ]; then
-    echo "no access_token for $1: ${body:0:200}" >&2
+  if ! python3 "$TMP/token.py" save "$cache" "$now" "$(date +%s)" <<<"$body"; then
+    echo "invalid or expired token response for $user" >&2
     return 1
   fi
-  printf '%s\n' "$tok"
 }
 
 # manifest FIELD: read a value from the fixtures manifest via a python path
@@ -150,18 +202,33 @@ upload() {
   json_field doc_id <"$TMP/upload.json"
 }
 
-# search_as TOKEN PARAM...: GET /v1/search; body to $TMP/search.json. Retries
-# on 429 (the per-tenant rate limit may be shared with concurrent suites).
+# search_as USER PARAM...: GET /v1/search; body to $TMP/search.json. Bypass
+# cached pre-index responses during polling and subsequent media assertions.
+# Retries on 429 (the per-tenant rate limit may be shared with concurrent suites).
 search_as() {
-  local token="$1" code attempt p
+  local user="$1" token code attempt p refreshed=0
   shift
   local args=()
   for p in "$@"; do args+=(--data-urlencode "$p"); done
-  for attempt in 1 2 3 4 5; do
+  for ((attempt = 1; attempt <= 5; attempt++)); do
+    token="$(fetch_token "$user")" || return 1
     code="$(curl -s -o "$TMP/search.json" -w '%{http_code}' --max-time 30 -G \
-      -H "Authorization: Bearer ${token}" "${GATEWAY_URL}/v1/search" "${args[@]}")" || code="000"
-    [ "$code" = "200" ] && return 0
+      -H "Authorization: Bearer ${token}" -H 'Cache-Control: no-cache' \
+      "${GATEWAY_URL}/v1/search" "${args[@]}")" || code="000"
+    if [ "$code" = "200" ]; then
+      # An error/fallback body cannot prove readiness or tenant isolation.
+      if python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,dict) and "error" not in d and isinstance(d.get("hits"),list) and d.get("degraded", "") == "" and all(isinstance(h,dict) and isinstance(h.get("doc_id"),str) and h["doc_id"].strip() for h in d["hits"]) else 1)' <"$TMP/search.json"; then
+        return 0
+      fi
+      echo "search returned malformed or degraded response" >&2
+      return 1
+    fi
     [ "$code" = "429" ] && { sleep 3; continue; }
+    if [ "$code" = "401" ] && [ "$refreshed" = 0 ]; then
+      fetch_token "$user" refresh >/dev/null || return 1
+      refreshed=1
+      continue
+    fi
     break
   done
   echo "search HTTP ${code}: $(head -c 200 "$TMP/search.json" 2>/dev/null || true)" >&2
@@ -231,17 +298,17 @@ PYEOF
 
 xt() { python3 "$TMP/extract.py" "$@" <"$TMP/search.json"; }
 
-# wait_for_doc TOKEN DOC_ID QUERY TIMEOUT LABEL: poll /v1/search for QUERY until
-# a hit with doc_id == DOC_ID appears (or TIMEOUT). The limit varies to bust the
-# 60s result cache without changing matches. Returns 0 once found, 1 on timeout.
+# wait_for_doc USER DOC_ID QUERY TIMEOUT LABEL: poll /v1/search for QUERY until
+# a hit with doc_id == DOC_ID appears (or TIMEOUT). search_as bypasses cached
+# pre-index responses. Returns 0 once found, 1 on timeout.
 wait_for_doc() {
-  local token="$1" doc_id="$2" query="$3" timeout="$4" label="$5"
+  local user="$1" doc_id="$2" query="$3" timeout="$4" label="$5"
   local start now elapsed=0 i=0 lim has
   start=$(date +%s)
   while :; do
     lim=$((20 + i % 50))
     has="0"
-    if search_as "$token" "q=${query}" "limit=${lim}" 2>/dev/null; then
+    if search_as "$user" "q=${query}" "limit=${lim}" 2>/dev/null; then
       has="$(xt has_doc "$doc_id" 2>/dev/null || echo 0)"
     fi
     [ "$has" = "1" ] && return 0
@@ -254,10 +321,6 @@ wait_for_doc() {
     i=$((i + 1))
     if [ $((i % 6)) -eq 0 ]; then
       printf '     .. %s: waiting %ss (q="%s")\n' "$label" "$elapsed" "$query"
-    fi
-    # Tokens expire after 300s; refresh on long ASR polls.
-    if [ $((i % 50)) -eq 49 ]; then
-      token="$(fetch_token alice 2>/dev/null || echo "$token")"
     fi
     sleep "$POLL_INTERVAL"
   done
@@ -328,7 +391,7 @@ fi
 begin "gateway: search arm reachable (q=preflight -> 200, hits array)"
 if [ -z "$ALICE_TOKEN" ]; then
   fail "skipped: no alice token"
-elif search_as "$ALICE_TOKEN" "q=preflight-${RUN_ID}" "limit=1" 2>/dev/null &&
+elif search_as alice "q=preflight-${RUN_ID}" "limit=1" 2>/dev/null &&
   c="$(xt count 2>/dev/null)" && [ -n "$c" ]; then
   pass
   note "query service answered (hits=${c}); enrich+clip exercised once media flows"
@@ -356,7 +419,7 @@ if [ -z "$VIDEO_DOC" ]; then
   fail "skipped: no video doc_id"
 else
   asr_start=$(date +%s)
-  if wait_for_doc "$ALICE_TOKEN" "$VIDEO_DOC" "$ASR_WORD" "$ASR_TIMEOUT" "asr"; then
+  if wait_for_doc alice "$VIDEO_DOC" "$ASR_WORD" "$ASR_TIMEOUT" "asr"; then
     ASR_FOUND=1
     asr_secs=$(( $(date +%s) - asr_start ))
     pass
@@ -427,8 +490,8 @@ begin "image: both images become searchable (<=${IMG_TIMEOUT}s)"
 IMG_READY=0
 if [ -z "$BLUE_DOC" ] || [ -z "$RED_DOC" ]; then
   fail "skipped: missing image doc id(s)"
-elif wait_for_doc "$ALICE_TOKEN" "$BLUE_DOC" "$BLUE_WORD" "$IMG_TIMEOUT" "blue-img" &&
-  wait_for_doc "$ALICE_TOKEN" "$RED_DOC" "$RED_WORD" "$IMG_TIMEOUT" "red-img"; then
+elif wait_for_doc alice "$BLUE_DOC" "$BLUE_WORD" "$IMG_TIMEOUT" "blue-img" &&
+  wait_for_doc alice "$RED_DOC" "$RED_WORD" "$IMG_TIMEOUT" "red-img"; then
   IMG_READY=1
   pass
 else
@@ -438,7 +501,7 @@ fi
 begin "clip text->image: \"a photo of the color blue\" ranks blue above red"
 if [ "$IMG_READY" != "1" ]; then
   fail "skipped: images not searchable"
-elif search_as "$ALICE_TOKEN" "q=a photo of the color blue" "limit=20" "mode=hybrid" 2>/dev/null; then
+elif search_as alice "q=a photo of the color blue" "limit=20" "mode=hybrid" 2>/dev/null; then
   rank="$(xt rank "$BLUE_DOC" "$RED_DOC")"
   case "$rank" in
     above | only_a)
@@ -461,7 +524,7 @@ if [ "$IMG_READY" != "1" ]; then
 else
   # Re-query by the blue image's OCR word so its hit is present, then read the
   # thumbnail_key off that hit.
-  if search_as "$ALICE_TOKEN" "q=${BLUE_WORD}" "limit=20" 2>/dev/null; then
+  if search_as alice "q=${BLUE_WORD}" "limit=20" 2>/dev/null; then
     htype="$(xt doc_hit "$BLUE_DOC" type)"
     THUMB_KEY="$(xt doc_hit "$BLUE_DOC" thumbnail_key)"
     if [ "$htype" = "IMAGE" ] && [ -n "$THUMB_KEY" ]; then
@@ -481,7 +544,7 @@ if [ -z "$THUMB_KEY" ]; then
   fail "skipped: no thumbnail_key"
 else
   code="$(curl -s -o "$TMP/thumb.bin" -w '%{http_code}' --max-time 30 \
-    -H "Authorization: Bearer ${ALICE_TOKEN}" \
+    -H "Authorization: Bearer $(fetch_token alice)" \
     -G "${GATEWAY_URL}/v1/media" --data-urlencode "key=${THUMB_KEY}")" || code="000"
   ct="$(file -b --mime-type "$TMP/thumb.bin" 2>/dev/null || echo unknown)"
   size="$(wc -c <"$TMP/thumb.bin" 2>/dev/null | tr -d ' ')"
@@ -510,7 +573,7 @@ fi
 begin "ocr: \"${BLUE_WORD}\" matches the blue image with modality \"ocr\""
 if [ "$IMG_READY" != "1" ]; then
   fail "skipped: images not searchable"
-elif search_as "$ALICE_TOKEN" "q=${BLUE_WORD}" "limit=20" "mode=hybrid" 2>/dev/null; then
+elif search_as alice "q=${BLUE_WORD}" "limit=20" "mode=hybrid" 2>/dev/null; then
   has="$(xt has_doc "$BLUE_DOC")"
   hmod="$(xt doc_hit "$BLUE_DOC" modality)"
   if [ "$has" = "1" ] && [ "$hmod" = "ocr" ]; then
@@ -530,7 +593,7 @@ BOB_TOKEN=""
 if BOB_TOKEN="$(fetch_token bob)"; then
   leaked=""
   for q in "$ASR_WORD" "$BLUE_WORD" "$RED_WORD"; do
-    if search_as "$BOB_TOKEN" "q=${q}" "limit=50" 2>/dev/null; then
+    if search_as bob "q=${q}" "limit=50" 2>/dev/null; then
       for doc in "$VIDEO_DOC" "$BLUE_DOC" "$RED_DOC"; do
         [ -n "$doc" ] || continue
         if [ "$(xt has_doc "$doc")" = "1" ]; then

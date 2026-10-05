@@ -390,6 +390,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("MAX_MEDIA_MB", "9")
 	t.Setenv("GATEWAY_PUBLIC_URL", "https://gw.test")
 	t.Setenv("WEB_APP_URL", "https://web.test")
+	t.Setenv("GATEWAY_SEARCH_TIMEOUT", "4s")
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -416,6 +417,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		MaxMediaMB:            9,
 		GatewayPublicURL:      "https://gw.test",
 		WebAppURL:             "https://web.test",
+		SearchTimeout:         4 * time.Second,
 	}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)

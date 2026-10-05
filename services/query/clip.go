@@ -63,6 +63,9 @@ func (e *clipHTTPEmbedder) EmbedText(ctx context.Context, text string) ([]float3
 		return nil, fmt.Errorf("clip: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := setRequestTimeoutHeader(req); err != nil {
+		return nil, fmt.Errorf("clip: %w", err)
+	}
 
 	resp, err := e.httpc.Do(req)
 	if err != nil {

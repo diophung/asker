@@ -40,6 +40,8 @@ const degradedClipUnavailable = "clip-unavailable"
 // cross-encoder rerank pass (reranker service error/timeout): the fused
 // retrieval order is served as-is. Never fails the search (Phase 1).
 const degradedRerankUnavailable = "rerank-unavailable"
+const degradedRerankNotEnabled = "rerank-not-enabled"
+const degradedRerankNotApplicable = "rerank-not-applicable"
 
 // addDegraded appends a degradation reason once (the same reason can be
 // reached via more than one rung). Order of first appearance is preserved so
@@ -76,12 +78,18 @@ func isDegradable(err error) bool {
 // degradable hybrid-profile failure is retried once as keyword. It returns
 // the result and whether the keyword fallback served it.
 func (s *server) searchWithDegradation(ctx context.Context, vq vespaQuery) (vespaResult, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return vespaResult{}, false, err
+	}
 	res, err := s.vespa.Search(ctx, vq)
 	if err == nil {
 		return res, false, nil
 	}
 	if vq.Kind != retrieveHybrid || !isDegradable(err) {
 		return vespaResult{}, false, err
+	}
+	if ctx.Err() != nil {
+		return vespaResult{}, false, ctx.Err()
 	}
 
 	s.logger.Warn("vespa hybrid retrieval failed; retrying keyword-only",

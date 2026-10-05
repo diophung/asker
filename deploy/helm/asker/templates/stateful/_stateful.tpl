@@ -8,7 +8,7 @@ image / env / ports / healthchecks):
 
   postgres  StatefulSet  postgres:17                pg_isready exec probes
   redis     StatefulSet  redis:7                    redis-cli ping exec probes
-  minio     StatefulSet  minio/minio:RELEASE...     GET /minio/health/live
+  minio     StatefulSet  asker-minio:RELEASE...     GET /minio/health/live
   keycloak  Deployment   quay.io/keycloak/keycloak  GET /health/ready on mgmt :9000
   tei       Deployment   text-embeddings-inference  GET /health  (+ model-cache PVC)
 

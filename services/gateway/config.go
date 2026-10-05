@@ -1,6 +1,11 @@
 package main
 
-import "github.com/asker/asker/platform/config"
+import (
+	"fmt"
+	"time"
+
+	"github.com/asker/asker/platform/config"
+)
 
 // gatewayConfig is loaded from the environment. Defaults match the M0 auth
 // contract: tokens are issued with the host-visible issuer (KC_HOSTNAME) while
@@ -35,7 +40,8 @@ type gatewayConfig struct {
 
 	// MaxQueryChars caps the /v1/search q= length so a giant query string
 	// cannot drive disproportionate downstream work. <= 0 disables the cap.
-	MaxQueryChars int `env:"MAX_QUERY_CHARS" envDefault:"1024"`
+	MaxQueryChars int           `env:"MAX_QUERY_CHARS" envDefault:"1024"`
+	SearchTimeout time.Duration `env:"GATEWAY_SEARCH_TIMEOUT" envDefault:"4.8s"`
 	// Comma-separated exact-match origins. Never "*": the allowed origin is
 	// echoed back verbatim.
 	CORSAllowedOrigins string `env:"CORS_ALLOWED_ORIGINS" envDefault:"http://localhost:3000"`
@@ -60,6 +66,9 @@ func loadConfig() (gatewayConfig, error) {
 	var cfg gatewayConfig
 	if err := config.Load("", &cfg); err != nil {
 		return gatewayConfig{}, err
+	}
+	if cfg.SearchTimeout <= 0 {
+		return gatewayConfig{}, fmt.Errorf("config: GATEWAY_SEARCH_TIMEOUT must be > 0")
 	}
 	return cfg, nil
 }

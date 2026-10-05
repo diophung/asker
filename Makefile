@@ -46,9 +46,9 @@ test: ## Run all tests with race detector and coverage
 coverage-gate: test ## Enforce coverage floors (platform/tenancy 100%, platform/* >= 75%)
 	bash tools/ci/coverage_gate.sh coverage.out
 
-# Built one at a time: parallel BuildKit builds of 9 images spike memory hard
+# Built one at a time: parallel BuildKit builds spike memory hard
 # enough to OOM-kill running containers on small Docker VMs (observed).
-BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query clip fake-gmail fake-oauth web
+BUILT_SERVICES := gateway control-plane connector-hub ingest enrich index-writer query clip fake-gmail fake-oauth web minio
 
 dev-build: ## Build all service images serially (low-memory friendly)
 	@for s in $(BUILT_SERVICES); do echo "== build $$s"; $(COMPOSE) build $$s || exit 1; done
@@ -174,6 +174,28 @@ soak: ## M5 soak (SOAK_DURATION default 2h; zero failed + zero data loss; needs 
 
 eval: ## Retrieval eval (Recall@k/nDCG/MRR + latency) vs tools/eval/golden/golden.jsonl; needs a running+seeded stack. Pass EVAL_ARGS="-k 10".
 	go run ./tools/eval $(EVAL_ARGS)
+
+# Standalone Mac text search; this project keeps its own volumes and ports.
+APPLE_PROFILE ?= apple48
+.PHONY: apple-setup apple-up apple-down apple-status apple-native-up apple-native-down
+
+apple-setup: ## Install native Apple inference dependencies (APPLE_PROFILE=apple48 or apple64)
+	tools/local/apple.sh setup $(APPLE_PROFILE)
+
+apple-up: ## Build and start isolated native/Docker Apple text search
+	tools/local/apple.sh up $(APPLE_PROFILE)
+
+apple-down: ## Stop only Apple search; retain its indexed data
+	tools/local/apple.sh down $(APPLE_PROFILE)
+
+apple-status: ## Show Apple search containers and native model identity
+	tools/local/apple.sh status $(APPLE_PROFILE)
+
+apple-native-up: ## Start resident Apple embeddings without the Docker stack
+	tools/local/apple.sh native-up $(APPLE_PROFILE)
+
+apple-native-down: ## Stop only native models managed by the Apple launcher
+	tools/local/apple.sh native-down $(APPLE_PROFILE)
 
 # --- Cross-encoder reranker (Phase 1, opt-in) ---------------------------------
 .PHONY: rerank-up rerank-down

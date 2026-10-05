@@ -508,7 +508,9 @@ services:
       start_period: 20m
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: asker-minio:RELEASE.2025-10-15T17-29-55Z
+    build:
+      context: ../minio
     command: ["server", "/data", "--console-address", ":9001"]
     ports:
       - "127.0.0.1:9000:9000" # S3 API
@@ -519,7 +521,7 @@ services:
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/minio/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 10

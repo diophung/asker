@@ -1,8 +1,11 @@
 package main
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
 	askerv1 "github.com/asker/asker/platform/proto/gen/go/asker/v1"
@@ -40,10 +43,15 @@ type parsedQuery struct {
 	To   time.Time
 	// Participant filters by participant token (sender/attendee).
 	Participant string
+	// TextClauses apply to every retrieval arm, including dense and CLIP.
+	TextClauses []textClause
+	Warnings    []string
+	SyntaxError string
+	ToExclusive bool
 
-	// --- v3 query understanding (set only on the personalized path, scope.go) ---
+	// --- Query understanding (scope.go, independent of preference ranking) ---
 	// Intent is the classified query intent (schedule_lookup / needs_attention /
-	// find_item / freeform); intentFreeform (zero) on the non-personalized path.
+	// find_item / freeform).
 	Intent intentClass
 	// EventFrom/EventTo bound event_start (occurrence time) for a schedule
 	// lookup — the correct date field for "what's on my calendar next week"
@@ -58,7 +66,7 @@ type parsedQuery struct {
 
 // hasFilters reports whether any filter dimension is set.
 func (p parsedQuery) hasFilters() bool {
-	return len(p.DocTypes) > 0 || !p.From.IsZero() || !p.To.IsZero() || p.Participant != ""
+	return len(p.DocTypes) > 0 || !p.From.IsZero() || !p.To.IsZero() || p.Participant != "" || len(p.TextClauses) > 0
 }
 
 // understand runs filter extraction over the normalized request and applies
@@ -88,12 +96,42 @@ func extractInlineFilters(raw string) parsedQuery {
 	var residual []string
 	seenTypes := make(map[askerv1.DocType]bool)
 
-	for _, tok := range strings.Fields(raw) {
+	tokens, syntaxErr := queryTokens(raw)
+	p.SyntaxError = syntaxErr
+	for _, tok := range tokens {
 		lower := strings.ToLower(tok)
+		if strings.HasPrefix(tok, "\"") || strings.HasPrefix(tok, "-\"") {
+			negative := strings.HasPrefix(tok, "-")
+			value, err := strconv.Unquote(strings.TrimPrefix(tok, "-"))
+			if err != nil || strings.TrimSpace(value) == "" {
+				p.SyntaxError = "invalid or empty quoted phrase"
+				residual = append(residual, tok)
+				continue
+			}
+			p.TextClauses = append(p.TextClauses, textClause{Text: value, Exclude: negative})
+			if !negative {
+				residual = append(residual, tok)
+			}
+			continue
+		}
+		if strings.HasPrefix(tok, "-") && len(tok) > 1 && !strings.Contains(tok[1:], ":") {
+			p.TextClauses = append(p.TextClauses, textClause{Text: tok[1:], Exclude: true})
+			continue
+		}
 		switch {
 		case strings.HasPrefix(lower, "from:"):
 			v := tok[len("from:"):]
+			if strings.HasPrefix(v, "\"") {
+				value, err := strconv.Unquote(v)
+				if err != nil {
+					p.SyntaxError = "invalid quoted participant"
+					residual = append(residual, tok)
+					continue
+				}
+				v = value
+			}
 			if v == "" {
+				p.Warnings = addDegraded(p.Warnings, "unsupported-filter-syntax")
 				residual = append(residual, tok)
 				continue
 			}
@@ -101,6 +139,7 @@ func extractInlineFilters(raw string) parsedQuery {
 		case strings.HasPrefix(lower, "type:"):
 			dt, ok := parseDocType(tok[len("type:"):])
 			if !ok {
+				p.Warnings = addDegraded(p.Warnings, "unsupported-filter-syntax")
 				residual = append(residual, tok)
 				continue
 			}
@@ -111,6 +150,7 @@ func extractInlineFilters(raw string) parsedQuery {
 		case strings.HasPrefix(lower, "before:"):
 			day, ok := parseDay(tok[len("before:"):])
 			if !ok {
+				p.Warnings = addDegraded(p.Warnings, "unsupported-filter-syntax")
 				residual = append(residual, tok)
 				continue
 			}
@@ -121,16 +161,69 @@ func extractInlineFilters(raw string) parsedQuery {
 		case strings.HasPrefix(lower, "after:"):
 			day, ok := parseDay(tok[len("after:"):])
 			if !ok {
+				p.Warnings = addDegraded(p.Warnings, "unsupported-filter-syntax")
 				residual = append(residual, tok)
 				continue
 			}
 			p.From = day
 		default:
+			if colon := strings.IndexByte(lower, ':'); colon > 0 {
+				switch lower[:colon] {
+				case "to", "subject", "has", "is", "label", "in":
+					p.Warnings = addDegraded(p.Warnings, "unsupported-filter-syntax")
+				}
+			}
 			residual = append(residual, tok)
 		}
 	}
 	p.Text = strings.Join(residual, " ")
+	// A standalone ticket/code identifier requests that literal. Dense recall
+	// must not fill its result set with documents that merely discuss the topic.
+	// Keep the rule narrow: letters + separator + digits, with no prose or dates.
+	if identifierLookup.MatchString(p.Text) {
+		p.TextClauses = append(p.TextClauses, textClause{Text: p.Text})
+	}
+	if len(p.TextClauses) > 32 {
+		p.SyntaxError = "at most 32 hard text clauses are supported"
+	}
 	return p
+}
+
+var identifierLookup = regexp.MustCompile(`^[A-Za-z]{2,16}[-_][0-9]{1,18}$`)
+
+type textClause struct {
+	Text    string
+	Exclude bool
+}
+
+// Keep quoted spans together; filters inside a quoted title remain content.
+func queryTokens(raw string) ([]string, string) {
+	var tokens []string
+	start := -1
+	quoted, escaped := false, false
+	for i, r := range raw {
+		if start < 0 {
+			if unicode.IsSpace(r) {
+				continue
+			}
+			start = i
+		}
+		if r == '"' && !escaped {
+			quoted = !quoted
+		}
+		if unicode.IsSpace(r) && !quoted {
+			tokens = append(tokens, raw[start:i])
+			start = -1
+		}
+		escaped = r == '\\' && !escaped
+	}
+	if start >= 0 {
+		tokens = append(tokens, raw[start:])
+	}
+	if quoted {
+		return tokens, "unterminated quoted phrase"
+	}
+	return tokens, ""
 }
 
 // parseDocType resolves a case-insensitive DocType enum name, tolerating a

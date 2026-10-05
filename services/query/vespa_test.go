@@ -103,7 +103,7 @@ func TestBuildYQL(t *testing.T) {
 				EventFrom: time.Unix(1718000000, 0).UTC(),
 				EventTo:   time.Unix(1718600000, 0).UTC(),
 			},
-			want: `select * from sources * where true and type contains "CALENDAR_EVENT" and event_start >= 1718000000 and event_start < 1718600000 order by event_start asc`,
+			want: `select * from sources * where true and type contains "CALENDAR_EVENT" and (event_start >= 1718000000 or (!(event_start = 0) and event_end > 1718000000)) and event_start < 1718600000 order by event_start asc`,
 		},
 		{
 			name: "unbounded upcoming lookup orders ascending",
@@ -112,7 +112,7 @@ func TestBuildYQL(t *testing.T) {
 				DocTypes:  []askerv1.DocType{askerv1.DocType_CALENDAR_EVENT},
 				EventFrom: time.Unix(1718000000, 0).UTC(),
 			},
-			want: `select * from sources * where true and type contains "CALENDAR_EVENT" and event_start >= 1718000000 order by event_start asc`,
+			want: `select * from sources * where true and type contains "CALENDAR_EVENT" and (event_start >= 1718000000 or (!(event_start = 0) and event_end > 1718000000)) order by event_start asc`,
 		},
 		{
 			name: "keyword schedule search is NOT date-ordered",
@@ -121,7 +121,7 @@ func TestBuildYQL(t *testing.T) {
 				DocTypes:  []askerv1.DocType{askerv1.DocType_CALENDAR_EVENT},
 				EventFrom: time.Unix(1718000000, 0).UTC(),
 			},
-			want: `select * from sources * where userQuery() and type contains "CALENDAR_EVENT" and event_start >= 1718000000`,
+			want: `select * from sources * where userQuery() and type contains "CALENDAR_EVENT" and (event_start >= 1718000000 or (!(event_start = 0) and event_end > 1718000000))`,
 		},
 		{
 			name: "all filters combined",

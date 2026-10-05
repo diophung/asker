@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"maps"
@@ -17,7 +18,7 @@ const readyzProbeTimeout = 2 * time.Second
 
 // newHandler assembles the middleware chain. Outermost to innermost:
 // security headers (outermost so EVERY response carries them, including
-// errors, 404s and preflights) -> CORS (answers preflights pre-auth) ->
+// errors, 404s and preflights) -> search deadline -> CORS (answers preflights pre-auth) ->
 // pre-auth throttle (per-IP + global, IN FRONT of auth so unauth floods can't
 // hammer JWKS/crypto) -> telemetry -> mux -> auth -> per-tenant rate limit ->
 // handler. Admin routes add a distinct admin-claim authorization check after
@@ -123,7 +124,24 @@ func newHandler(cfg gatewayConfig, auth *authenticator, d *deps) http.Handler {
 	})))
 
 	mux.HandleFunc("/", handleNotFound)
-	return securityHeadersMiddleware(cors.middleware(preAuth.middleware(telemetry.HTTPMiddleware("gateway")(mux))))
+	return securityHeadersMiddleware(searchDeadline(cfg.SearchTimeout, cors.middleware(preAuth.middleware(telemetry.HTTPMiddleware("gateway")(mux)))))
+}
+
+// Bound the entire search path, including authentication, rate limiting and
+// history persistence. An earlier browser/client deadline still takes priority.
+func searchDeadline(timeout time.Duration, next http.Handler) http.Handler {
+	if timeout <= 0 {
+		timeout = 4800 * time.Millisecond
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/search" && !strings.HasPrefix(r.URL.Path, "/v1/search/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // methods dispatches by HTTP method with a JSON 405 (and Allow header) for

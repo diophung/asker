@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/asker/asker/platform/personalization"
 	queryv1 "github.com/asker/asker/platform/proto/gen/go/asker/query/v1"
 	"github.com/asker/asker/platform/tenancy"
 )
@@ -76,6 +78,46 @@ func cacheKey(tenant tenancy.TenantID, req *queryv1.SearchRequest, clipArm bool,
 	return "q:" + string(tenant) + ":" + hex.EncodeToString(sum[:])
 }
 
+// boundCacheKey hashes the deployment revision, ranking recipe and resolved
+// scope into the request key. Profile versions alone do not identify learned
+// weights; their values are included so feedback updates invalidate stale orders.
+// JSON encodes map keys deterministically, and no profile values leave this hash.
+func (s *server) boundCacheKey(base string, plan parsedQuery, personalizing, rerankActive, debug bool, profile personalization.Profile, model personalization.LearnedModel) (string, error) {
+	binding := struct {
+		TextClauses                                  []textClause
+		Recipe, Namespace                            string
+		Personalizing, RRF, Rerank, Debug            bool
+		CandidateCap                                 int32
+		RRFK, RerankCandidates, RerankDocChars       int
+		RecencyWeight                                float64
+		RecencyHalfLife                              time.Duration
+		Intent                                       intentClass
+		From, To, EventFrom, EventTo, WinFrom, WinTo time.Time
+		ToExclusive                                  bool
+		Profile                                      personalization.Profile
+		Model                                        personalization.LearnedModel
+	}{
+		Recipe: "search-v9-final-personalized-score", Namespace: s.cacheNamespace,
+		Personalizing: personalizing, RRF: s.rrfEnabled, Rerank: rerankActive, Debug: debug,
+		CandidateCap: s.candidateCap, RRFK: rrfK,
+		RerankCandidates: s.rerankCandidates, RerankDocChars: s.rerankDocChars,
+		RecencyWeight: s.recencyWeight, RecencyHalfLife: s.recencyHalfLife,
+		Intent: plan.Intent, From: plan.From, To: plan.To,
+		EventFrom: plan.EventFrom, EventTo: plan.EventTo, WinFrom: plan.WinFrom, WinTo: plan.WinTo,
+		ToExclusive: plan.ToExclusive,
+		TextClauses: plan.TextClauses,
+	}
+	if personalizing {
+		binding.Profile, binding.Model = profile, model
+	}
+	data, err := json.Marshal(binding)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append(append([]byte(base), 0x1f), data...))
+	return base[:strings.LastIndexByte(base, ':')+1] + hex.EncodeToString(sum[:]), nil
+}
+
 // redisOpTimeout bounds each phase of a cache operation so a sick Redis
 // cannot eat the query latency budget (cache check is a 5ms line item).
 const redisOpTimeout = 250 * time.Millisecond
@@ -88,10 +130,11 @@ type redisCache struct {
 
 func newRedisCache(addr string) *redisCache {
 	return &redisCache{client: redis.NewClient(&redis.Options{
-		Addr:         addr,
-		DialTimeout:  redisOpTimeout,
-		ReadTimeout:  redisOpTimeout,
-		WriteTimeout: redisOpTimeout,
+		Addr:                  addr,
+		DialTimeout:           redisOpTimeout,
+		ReadTimeout:           redisOpTimeout,
+		WriteTimeout:          redisOpTimeout,
+		ContextTimeoutEnabled: true,
 		// No retries: a failed cache op degrades to "no cache" at the caller;
 		// retry backoff would only burn the search latency budget.
 		MaxRetries: -1,

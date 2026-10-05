@@ -944,7 +944,8 @@ stateful:
     resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: "1", memory: 512Mi } }
   minio:
     deploy: true
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # Build deploy/minio/Dockerfile, then load or publish to your registry.
+    image: asker-minio:RELEASE.2025-10-15T17-29-55Z
     storage: { size: 20Gi, className: "" }
     console: { enabled: true }
     resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "2", memory: 1Gi } }

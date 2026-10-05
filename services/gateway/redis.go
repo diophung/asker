@@ -26,10 +26,11 @@ func newRedisCounter(addr string) *redisCounter {
 			Addr: addr,
 			// A slow Redis must not stall requests; the limiter fails open
 			// fast on error, so cap every network op and never retry.
-			DialTimeout:  2 * time.Second,
-			ReadTimeout:  2 * time.Second,
-			WriteTimeout: 2 * time.Second,
-			MaxRetries:   -1,
+			DialTimeout:           2 * time.Second,
+			ReadTimeout:           2 * time.Second,
+			WriteTimeout:          2 * time.Second,
+			MaxRetries:            -1,
+			ContextTimeoutEnabled: true,
 		}),
 	}
 }
