@@ -13,6 +13,10 @@ awk '/^search_as\(\) \{$/ {emit=1} emit {print} emit && /^\}$/ {exit}' \
 [[ -s "$TMP/helper.sh" ]]
 # shellcheck disable=SC1091
 source "$TMP/helper.sh"
+fetch_token() {
+  [[ "$1" = alice ]] || return 1
+  printf '%s' synthetic-token
+}
 
 EMPTY='{"hits":[]}'
 READY='{"hits":[{"doc_id":"synthetic-image","type":"IMAGE","thumbnail_key":"synthetic/thumb.jpg","modality":"ocr"}]}'
@@ -77,12 +81,12 @@ echo 'PASS: control reproduces stale cold-poll response after successful indexin
 # the cold empty result, then obtain the image's OCR and thumbnail fields on
 # both the ready poll and the original-limit post-index assertion.
 rm "$TMP/indexed"
-search_as synthetic-token q=TESTOCR limit=20
+search_as alice q=TESTOCR limit=20
 [[ "$(cat "$TMP/search.json")" = "$EMPTY" ]]
 touch "$TMP/indexed"
-search_as synthetic-token q=TESTOCR limit=21
+search_as alice q=TESTOCR limit=21
 [[ "$(cat "$TMP/search.json")" = "$READY" ]]
-search_as synthetic-token q=TESTOCR limit=20
+search_as alice q=TESTOCR limit=20
 [[ "$(cat "$TMP/search.json")" = "$READY" ]]
 # Bypassing lookup must also avoid overwriting the existing empty cache entry.
 [[ "$(cat "$TMP/cache-20")" = "$EMPTY" ]]

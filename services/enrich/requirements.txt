@@ -14,6 +14,10 @@ protobuf==7.35.1
 # it lives in the separate `clip` model service, called over HTTP. 1.2.1 declares
 # its deps cleanly (1.1.1 imports `requests` without declaring it).
 faster-whisper==1.2.1
+# PyAV 19 removed metadata_errors, which faster-whisper 1.2.1 still passes.
+# 18.1.0 retains that API and its wheels bundle FFmpeg 8.1.2.
+# https://github.com/PyAV-Org/PyAV/releases/tag/v18.1.0
+av==18.1.0
 # Pillow opens/resizes images for OCR input and thumbnails; pytesseract drives
 # the `tesseract-ocr` binary (installed in the Dockerfile).
 pillow==12.3.0
