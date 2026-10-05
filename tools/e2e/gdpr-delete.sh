@@ -125,6 +125,8 @@ dek_count() {
 # blob_count TENANT: number of MinIO objects under the tenant's prefix, via the
 # minio client baked into the minio image. Returns "?" if mc is unavailable.
 blob_count() {
+  # Credentials expand inside the container, rather than on the host.
+  # shellcheck disable=SC2016
   "${COMPOSE[@]}" exec -T minio sh -c '
     mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 || exit 3
     mc ls --recursive "local/'"${BLOB_BUCKET}"'/'"$1"'/" 2>/dev/null | wc -l
@@ -174,14 +176,18 @@ if code="$(http_code "${GATEWAY_URL}/healthz")" && [ "$code" = "200" ]; then pas
 
 # === Phase 1: setup alice + bob ==============================================
 begin "alice: connector + token + upload seeded"
-if out="$(setup_tenant alice ALICE_TOKEN ALICE_TENANT ALICE_IID ALICE_DOC "$TOKEN_ALICE" 2>&1)"; then
+# Run setup in this shell: command substitution discards its printf -v outputs,
+# leaving later assertions with empty tokens, tenant IDs and connector IDs.
+setup_log="$(mktemp /tmp/asker-gdpr-setup.XXXXXX)"
+trap 'rm -f "$setup_log"' EXIT
+if setup_tenant alice ALICE_TOKEN ALICE_TENANT ALICE_IID ALICE_DOC "$TOKEN_ALICE" >"$setup_log" 2>&1; then
   pass; note "alice tenant=${ALICE_TENANT} iid=${ALICE_IID} doc=${ALICE_DOC}"
-else fail "$out"; fi
+else fail "$(cat "$setup_log")"; fi
 
 begin "bob: connector + token + upload seeded"
-if out="$(setup_tenant bob BOB_TOKEN BOB_TENANT BOB_IID BOB_DOC "$TOKEN_BOB" 2>&1)"; then
+if setup_tenant bob BOB_TOKEN BOB_TENANT BOB_IID BOB_DOC "$TOKEN_BOB" >"$setup_log" 2>&1; then
   pass; note "bob tenant=${BOB_TENANT} iid=${BOB_IID} doc=${BOB_DOC}"
-else fail "$out"; fi
+else fail "$(cat "$setup_log")"; fi
 
 begin "tenant ids are distinct"
 if [ -n "$ALICE_TENANT" ] && [ -n "$BOB_TENANT" ] && [ "$ALICE_TENANT" != "$BOB_TENANT" ]; then
