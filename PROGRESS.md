@@ -35,6 +35,12 @@ Newest entries go first.
 - Done: wired harness regressions into CI and made media, GDPR and Kubernetes
   acceptance jobs blocking. The existing local checkout and running stacks were
   preserved while fixes were reviewed in the publication worktree.
+- Verified: the hosted Go vulnerability check now passes. Its following npm
+  audit exposed two vulnerable transitive brace-expansion resolutions; updated
+  only their lockfile entries within existing dependency ranges. With the hosted
+  Node/npm versions, clean install, 170 web tests, build, lint and npm audit pass
+  with zero reported vulnerabilities. The hosted Go build/image scan, race tests,
+  lint, Python contracts and web jobs also passed on the initial remediation head.
 - Next: verify the full hosted Compose and kind suites on the repaired PR head.
 - Known issues: source-built MinIO is based on archived upstream community
   releases; registry distribution remains an operator step. Offline harness
